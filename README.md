@@ -1,7 +1,10 @@
 # README #
 
 This README would normally document whatever steps are necessary to get your application up and running.
-
+## Este es el repositorio de la gestion stock.
+```
+npm install
+```
 ### What is this repository for? ###
 
 * Quick summary
