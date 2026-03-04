@@ -1,32 +1,84 @@
-# README #
+# GestiónStock Farmacia
 
-This README would normally document whatever steps are necessary to get your application up and running.
-## Este es el repositorio de la gestion stock.
+App web PWA para control de inventario y vencimientos en farmacias.
+
+## Stack
+
+- **Frontend/Backend**: Next.js 16 (App Router) + TypeScript + Tailwind CSS v4
+- **Base de datos propia**: Supabase (Postgres)
+- **Autenticación**: Supabase Auth
+- **Escáner**: Input USB/PDA + cámara opcional (@zxing/browser)
+
+## Setup
+
+### 1. Variables de entorno
+
+```bash
+cp .env.local.example .env.local
+# Completar con tus claves de Supabase
 ```
+
+### 2. Base de datos Supabase
+
+Ejecutar en el SQL Editor de tu proyecto Supabase:
+
+```sql
+-- 1. Crear schema
+\i supabase/schema.sql
+
+-- 2. Datos de prueba (opcional)
+\i supabase/seed.sql
+```
+
+### 3. Instalar y correr
+
+```bash
 npm install
+npm run dev
 ```
-### What is this repository for? ###
 
-* Quick summary
-* Version
-* [Learn Markdown](https://bitbucket.org/tutorials/markdowndemo)
+Abrir [http://localhost:3000](http://localhost:3000)
 
-### How do I get set up? ###
+## Estructura principal
 
-* Summary of set up
-* Configuration
-* Dependencies
-* Database configuration
-* How to run tests
-* Deployment instructions
+```
+src/
+  app/
+    (auth)/login/       ← Pantalla de login
+    (app)/
+      sucursal/         ← Selección de sucursal
+      dashboard/        ← Dashboard con KPIs
+      inventario/[id]/  ← Control de inventario (escaneo + detalles)
+      vencimientos/[id]/← Control de vencimientos (escaneo + fechas)
+    api/                ← API routes (auth, sucursales, productos, inventario, vencimientos, dashboard)
+  lib/
+    supabase/           ← Clientes browser/server
+    legacy-db/          ← Integración con base del sistema actual (mock/mssql/postgres)
+  components/
+    BarcodeScanner.tsx  ← Escáner (input USB + cámara)
+    Navbar.tsx
+    ui/                 ← Componentes UI base
+  types/                ← Tipos TypeScript
+supabase/
+  schema.sql            ← Esquema completo de la base
+  seed.sql              ← Datos de prueba
+```
 
-### Contribution guidelines ###
+## Conexión a base legacy
 
-* Writing tests
-* Code review
-* Other guidelines
+Configurar en `.env.local`:
 
-### Who do I talk to? ###
+```
+LEGACY_DB_TYPE=mock       # 'mock' para pruebas, 'mssql' para SQL Server, 'postgres' para Postgres
+LEGACY_DB_HOST=...
+LEGACY_DB_PORT=1433
+LEGACY_DB_NAME=...
+LEGACY_DB_USER=...
+LEGACY_DB_PASSWORD=...
+```
 
-* Repo owner or admin
-* Other community or team contact
+Adaptar las queries SQL en `src/lib/legacy-db/productos.ts` según el esquema de tu sistema.
+
+## Deploy
+
+Configurado para Vercel. Agregar las variables de entorno en el panel de Vercel.
