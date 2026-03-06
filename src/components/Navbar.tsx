@@ -1,6 +1,5 @@
 'use client';
 
-import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { LogOut, Package, LayoutDashboard, Menu, X, ChevronRight } from 'lucide-react';
@@ -19,9 +18,6 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
 
   async function handleLogout() {
     setLoggingOut(true);
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    // Limpiar cookie de sucursal
     await fetch('/api/auth/signout', { method: 'POST' });
     router.push('/login');
     router.refresh();

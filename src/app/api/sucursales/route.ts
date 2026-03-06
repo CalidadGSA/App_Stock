@@ -1,24 +1,27 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/server';
+import { getOperadorSession } from '@/lib/auth/session';
 import { NextResponse } from 'next/server';
 
 /** GET /api/sucursales - todas las sucursales activas */
 export async function GET() {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) {
-    return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  }
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
   const admin = await createAdminClient();
   const { data, error } = await admin
     .from('sucursales')
-    .select('id, nombre, codigo_interno, ubicacion, activa')
+    .select('sucursal, nombrefantasia, domicilio, activa')
     .eq('activa', true)
-    .order('nombre');
+    .order('nombrefantasia');
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ data: data ?? [] });
+  const dataMapped = (data ?? []).map((r: { sucursal: number; nombrefantasia: string; domicilio: string | null; activa: boolean }) => ({
+    id: String(r.sucursal),
+    nombre: r.nombrefantasia,
+    codigo_interno: String(r.sucursal),
+    ubicacion: r.domicilio,
+    activa: r.activa,
+  }));
+  return NextResponse.json({ data: dataMapped });
 }

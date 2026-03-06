@@ -1,11 +1,11 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/server';
+import { getOperadorSession } from '@/lib/auth/session';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
 export async function GET() {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
@@ -41,12 +41,12 @@ export async function GET() {
         .gte('fecha_vencimiento', hoyStr)
         .lte('fecha_vencimiento', en60dias),
       admin.from('controles_inventario')
-        .select('id, fecha_inicio, estado, sucursales(nombre, codigo_interno)')
+        .select('id, fecha_inicio, estado, sucursales(nombrefantasia)')
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),
       admin.from('controles_vencimientos')
-        .select('id, fecha_inicio, estado, sucursales(nombre, codigo_interno)')
+        .select('id, fecha_inicio, estado, sucursales(nombrefantasia)')
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),

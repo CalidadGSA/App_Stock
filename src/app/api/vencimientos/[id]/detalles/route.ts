@@ -1,4 +1,5 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/server';
+import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -16,11 +17,10 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id: controlId } = await params;
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
+  const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
 
@@ -32,7 +32,7 @@ export async function POST(
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
-  if (control.sucursal_id !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'Control cerrado' }, { status: 400 });
 
   const body = await request.json() as VencimientoDetalleBody;
@@ -63,11 +63,10 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id: controlId } = await params;
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
+  const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
   const detalleId = new URL(request.url).searchParams.get('detalle_id');
@@ -80,7 +79,7 @@ export async function DELETE(
     .eq('id', controlId)
     .single();
 
-  if (!control || control.sucursal_id !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  if (!control || String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'Control cerrado' }, { status: 400 });
 
   const { error } = await admin.from('controles_vencimientos_detalle').delete().eq('id', detalleId);

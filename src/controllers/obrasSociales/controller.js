@@ -1,83 +1,77 @@
-require('dotenv').config();
+/**
+ * API: listado desde Supabase y disparo de sync legacy → Supabase.
+ * Mantiene rutas /api/datos por compatibilidad.
+ */
+const { getSupabaseAdmin } = require('../../lib/supabaseAdmin');
+const { syncLegacyToSupabase, syncState } = require('./syncdatos');
 
-const dbInterna = require('../../dbInterna');
-const { syncObrasSociales, syncState } = require('./syncobrasSociales');
-
-/* ======================================================
-   📡 GET /api/obrasSociales
-   👉 SOLO LECTURA + estado de sync
-====================================================== */
-exports.getobrasSociales = async (req, res) => {
+/** GET /api/datos — listado de sucursales desde Supabase + estado de sync */
+exports.getdatos = async (req, res) => {
   const page = parseInt(req.query.page || '1', 10);
-  const limit = parseInt(req.query.limit || '50', 10);
-  const search = req.query.search || '';
+  const limit = Math.min(parseInt(req.query.limit || '50', 10), 100);
+  const search = (req.query.search || '').trim();
   const offset = (page - 1) * limit;
 
   try {
-    const where = search
-      ? `
-        WHERE
-          descripcio ILIKE $1
-      `
-      : '';
+    const supabase = getSupabaseAdmin();
 
-    const params = search ? [`%${search}%`] : [];
+    let query = supabase.from('sucursales').select('*', { count: 'exact', head: true });
+    if (search) {
+      query = query.or(`nombrefantasia.ilike.%${search}%,domicilio.ilike.%${search}%`);
+    }
+    const { count, error: countError } = await query;
 
-    const { rows: countRows } = await dbInterna.query(
-      `
-        SELECT COUNT(*)::int AS total
-        FROM obsociales
-        ${where}
-      `,
-      params
-    );
+    if (countError) {
+      return res.status(500).json({ message: 'Error al contar sucursales', error: countError.message });
+    }
 
-    const { rows } = await dbInterna.query(
-      `
-        SELECT *
-        FROM obsociales
-        ${where}
-        ORDER BY codobsoc DESC
-        LIMIT $${params.length + 1}
-        OFFSET $${params.length + 2}
-      `,
-      [...params, limit, offset]
-    );
+    let dataQuery = supabase
+      .from('sucursales')
+      .select('*')
+      .order('sucursal', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (search) {
+      dataQuery = dataQuery.or(`nombrefantasia.ilike.%${search}%,domicilio.ilike.%${search}%`);
+    }
+    const { data: rows, error } = await dataQuery;
+
+    if (error) {
+      return res.status(500).json({ message: 'Error al obtener sucursales', error: error.message });
+    }
 
     res.json({
       page,
       limit,
-      total: countRows[0].total,
-      data: rows,
+      total: count ?? 0,
+      data: rows ?? [],
       sync: {
         inProgress: syncState.inProgress,
         completed: syncState.completed,
         total: syncState.total,
         processed: syncState.processed,
+        entity: syncState.entity,
+        error: syncState.error,
         percent:
           syncState.total > 0
             ? Math.round((syncState.processed / syncState.total) * 100)
             : 0,
       },
     });
-  } catch (error) {
-    console.error('💥 Error leyendo obras sociales:', error);
-    res.status(500).json({ message: 'Error al obtener obras sociales' });
+  } catch (e) {
+    console.error('Error leyendo sucursales:', e);
+    res.status(500).json({ message: 'Error al obtener sucursales' });
   }
 };
 
-/* ======================================================
-   🔄 POST /api/obrasSociales/sync
-   👉 DISPARO MANUAL DE SYNC (background)
-====================================================== */
-exports.syncobrasSocialesManual = (req, res) => {
-  const mode = req.body.mode || undefined;
+/** POST /api/datos/sync — disparo manual de sync legacy → Supabase (en background) */
+exports.syncdatos = (req, res) => {
+  const mode = req.body?.mode || 'ALL';
   const limit =
-    typeof req.body.limit === 'number'
+    typeof req.body?.limit === 'number'
       ? req.body.limit
-      : req.body.limit
-      ? parseInt(req.body.limit, 10)
-      : undefined;
+      : req.body?.limit
+        ? parseInt(req.body.limit, 10)
+        : undefined;
 
   if (syncState.inProgress) {
     return res.status(409).json({
@@ -88,17 +82,16 @@ exports.syncobrasSocialesManual = (req, res) => {
 
   setImmediate(async () => {
     try {
-      await syncObrasSociales({ mode, limit });
+      await syncLegacyToSupabase({ mode, limit });
     } catch (e) {
-      console.error('❌ Error sync background obras sociales:', e);
+      console.error('Error sync legacy→Supabase:', e);
     }
   });
 
   res.json({
     success: true,
-    message: 'Sync obras sociales iniciado',
-    syncMode: mode || 'ALL',
-    limit: limit || null,
+    message: 'Sync legacy → Supabase iniciado',
+    syncMode: mode,
+    limit: limit ?? null,
   });
 };
-

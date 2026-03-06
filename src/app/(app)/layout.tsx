@@ -1,31 +1,26 @@
-import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import Navbar from '@/components/Navbar';
+import { getOperadorSession } from '@/lib/auth/session';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const operador = await getOperadorSession();
+  if (!operador) redirect('/login');
 
-  if (!user) redirect('/login');
-
-  const cookieStore = await cookies();
-  const sucursalNombre = cookieStore.get('sucursal_nombre')?.value ?? '';
-  const sucursalCodigo = cookieStore.get('sucursal_codigo')?.value ?? '';
-
-  // Obtener nombre del usuario
-  const { createAdminClient } = await import('@/lib/supabase/server');
-  const admin = await createAdminClient();
-  const { data: usuario } = await admin
-    .from('usuarios')
-    .select('nombre')
-    .eq('id', user.id)
-    .single();
+  let sucursalNombre = '';
+  let sucursalCodigo = '';
+  try {
+    const cookieStore = await cookies();
+    sucursalNombre = cookieStore.get('sucursal_nombre')?.value ?? '';
+    sucursalCodigo = cookieStore.get('sucursal_codigo')?.value ?? '';
+  } catch {
+    // Ignorar si cookies fallan
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
       <Navbar
-        nombreUsuario={usuario?.nombre ?? user.email ?? ''}
+        nombreUsuario={operador.nombrecompleto}
         nombreSucursal={sucursalNombre}
         codigoSucursal={sucursalCodigo}
       />

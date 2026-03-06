@@ -1,19 +1,34 @@
 'use client';
 
-import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Package, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
+type SucursalOption = { id: string; nombre: string };
+
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
+  const [operador, setOperador] = useState('');
+  const [codigo, setCodigo] = useState('');
+  const [sucursalId, setSucursalId] = useState('');
+  const [sucursalPassword, setSucursalPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/auth/sucursales')
+      .then((r) => r.json())
+      .then((res) => {
+        const list = res.data ?? [];
+        setSucursales(list);
+        if (list.length === 1) setSucursalId(list[0].id);
+      })
+      .catch(() => {});
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,15 +36,29 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const supabase = createClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operador: operador.trim(),
+          codigo: codigo.trim() ? parseInt(codigo, 10) : undefined,
+          sucursal_id: sucursalId || undefined,
+          sucursal_password: sucursalPassword || undefined,
+        }),
+      });
 
-      if (signInError) {
-        setError('Email o contraseña incorrectos');
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setError(data.error || 'Operador o código incorrectos');
         return;
       }
 
-      router.push('/sucursal');
+      if (data.sucursal_set) {
+        router.push('/dashboard');
+      } else {
+        router.push('/sucursal');
+      }
       router.refresh();
     } catch {
       setError('Error inesperado. Intentá de nuevo.');
@@ -40,7 +69,6 @@ export default function LoginPage() {
 
   return (
     <div className="w-full max-w-sm">
-      {/* Logo / Header */}
       <div className="mb-8 text-center">
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 shadow-lg">
           <Package className="h-8 w-8 text-white" />
@@ -49,31 +77,57 @@ export default function LoginPage() {
         <p className="mt-1 text-sm text-gray-500">Control de inventario y vencimientos</p>
       </div>
 
-      {/* Formulario */}
       <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
         <h2 className="mb-6 text-lg font-semibold text-gray-800">Iniciar sesión</h2>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Input
-            label="Email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="usuario@farmacia.com"
-            autoComplete="email"
+            label="Operador"
+            type="text"
+            value={operador}
+            onChange={(e) => setOperador(e.target.value)}
+            placeholder="Usuario"
+            autoComplete="username"
             required
           />
 
+          <Input
+            label="Código"
+            type="number"
+            value={codigo}
+            onChange={(e) => setCodigo(e.target.value)}
+            placeholder="Código numérico"
+            autoComplete="off"
+            required
+            min={1}
+          />
+
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-gray-700">Contraseña</label>
+            <label className="text-sm font-medium text-gray-700">Sucursal</label>
+            <select
+              value={sucursalId}
+              onChange={(e) => setSucursalId(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-gray-900
+                focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            >
+              <option value="">Seleccionar sucursal</option>
+              {sucursales.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.nombre}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-gray-700">Contraseña de sucursal</label>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                value={sucursalPassword}
+                onChange={(e) => setSucursalPassword(e.target.value)}
                 placeholder="••••••••"
-                autoComplete="current-password"
-                required
+                autoComplete="off"
                 className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 pr-10 text-gray-900
                   placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               />
