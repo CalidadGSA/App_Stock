@@ -15,6 +15,9 @@ create table sucursales (
   nombre        text not null,
   codigo_interno text unique not null,
   ubicacion     text,
+  telefono      text,
+  email         text,
+  cod_postal    text,
   password_hash text not null,
   activa        boolean not null default true,
   created_at    timestamptz not null default now(),
@@ -35,15 +38,6 @@ create table usuarios (
 );
 
 -- ------------------------------------------------------------
--- USUARIOS <-> SUCURSALES  (muchos a muchos)
--- ------------------------------------------------------------
-create table usuarios_sucursales (
-  usuario_id  uuid references usuarios(id) on delete cascade,
-  sucursal_id uuid references sucursales(id) on delete cascade,
-  primary key (usuario_id, sucursal_id)
-);
-
--- ------------------------------------------------------------
 -- CACHE DE PRODUCTOS  (sincronizado desde base legacy)
 -- ------------------------------------------------------------
 create table productos_cache (
@@ -53,6 +47,9 @@ create table productos_cache (
   descripcion          text not null,
   presentacion         text,
   laboratorio          text,
+  troquel              text,
+  cod_rubro            text,
+  refrigeracion        boolean,
   updated_at           timestamptz not null default now()
 );
 create index idx_productos_cache_barras on productos_cache(codigo_barras);
@@ -132,7 +129,6 @@ create index idx_cvd_vencimiento on controles_vencimientos_detalle(fecha_vencimi
 -- ------------------------------------------------------------
 alter table sucursales                   enable row level security;
 alter table usuarios                     enable row level security;
-alter table usuarios_sucursales          enable row level security;
 alter table productos_cache              enable row level security;
 alter table controles_inventario         enable row level security;
 alter table controles_inventario_detalle enable row level security;
@@ -143,9 +139,6 @@ alter table controles_vencimientos_detalle enable row level security;
 -- Las siguientes políticas permiten a usuarios autenticados leer sus propios datos.
 create policy "usuarios ven su propio perfil"
   on usuarios for select using (auth.uid() = id);
-
-create policy "usuarios ven sus sucursales"
-  on usuarios_sucursales for select using (auth.uid() = usuario_id);
 
 -- ------------------------------------------------------------
 -- FUNCIÓN: auto-crear perfil de usuario al registrarse

@@ -22,18 +22,6 @@ export async function POST(
 
   const admin = await createAdminClient();
 
-  // Verificar que el usuario tiene acceso a esta sucursal
-  const { data: asignacion } = await admin
-    .from('usuarios_sucursales')
-    .select('sucursal_id')
-    .eq('usuario_id', user.id)
-    .eq('sucursal_id', sucursalId)
-    .single();
-
-  if (!asignacion) {
-    return NextResponse.json({ error: 'Sin acceso a esta sucursal' }, { status: 403 });
-  }
-
   // Obtener hash de la sucursal
   const { data: sucursal, error: sucError } = await admin
     .from('sucursales')

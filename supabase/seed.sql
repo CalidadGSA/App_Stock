@@ -23,7 +23,5 @@ insert into productos_cache (producto_id_sistema, codigo_barras, descripcion, pr
   ('PRD008', '7791519003018', 'OMEPRAZOL 20MG',        'CAJA x 14 CAPS',  'MONTPELLIER');
 
 -- Nota: los usuarios se crean a través de Supabase Auth + trigger automático.
--- Para asignar un usuario a una sucursal, ejecutar después de crear el usuario:
--- insert into usuarios_sucursales (usuario_id, sucursal_id) values ('<user_uuid>', '<sucursal_uuid>');
 -- Para hacer admin a un usuario:
 -- update usuarios set rol = 'admin' where email = 'admin@farmacia.com';
