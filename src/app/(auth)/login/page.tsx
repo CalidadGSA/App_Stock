@@ -1,6 +1,5 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { Package, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,7 +8,6 @@ import { Input } from '@/components/ui/input';
 type SucursalOption = { id: string; nombre: string };
 
 export default function LoginPage() {
-  const router = useRouter();
   const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
   const [operador, setOperador] = useState('');
   const [codigo, setCodigo] = useState('');
@@ -29,6 +27,12 @@ export default function LoginPage() {
       })
       .catch(() => {});
   }, []);
+
+  const formComplete =
+    operador.trim() !== '' &&
+    codigo.trim() !== '' &&
+    sucursalId !== '' &&
+    sucursalPassword.trim() !== '';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -54,12 +58,13 @@ export default function LoginPage() {
         return;
       }
 
+      // Redirección con recarga completa para que el navegador envíe las cookies en la siguiente petición
       if (data.sucursal_set) {
-        router.push('/dashboard');
+        window.location.href = '/dashboard';
       } else {
-        router.push('/sucursal');
+        window.location.href = '/sucursal';
       }
-      router.refresh();
+      return;
     } catch {
       setError('Error inesperado. Intentá de nuevo.');
     } finally {
@@ -103,10 +108,11 @@ export default function LoginPage() {
           />
 
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-gray-700">Sucursal</label>
+            <label className="text-sm font-medium text-gray-700">Sucursal <span className="text-red-500">*</span></label>
             <select
               value={sucursalId}
               onChange={(e) => setSucursalId(e.target.value)}
+              required
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-gray-900
                 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             >
@@ -120,7 +126,7 @@ export default function LoginPage() {
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-gray-700">Contraseña de sucursal</label>
+            <label className="text-sm font-medium text-gray-700">Contraseña de sucursal <span className="text-red-500">*</span></label>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -128,6 +134,7 @@ export default function LoginPage() {
                 onChange={(e) => setSucursalPassword(e.target.value)}
                 placeholder="••••••••"
                 autoComplete="off"
+                required
                 className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 pr-10 text-gray-900
                   placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               />
@@ -147,7 +154,13 @@ export default function LoginPage() {
             </div>
           )}
 
-          <Button type="submit" size="lg" loading={loading} className="mt-2 w-full">
+          <Button
+            type="submit"
+            size="lg"
+            loading={loading}
+            disabled={!formComplete}
+            className="mt-2 w-full"
+          >
             Ingresar
           </Button>
         </form>

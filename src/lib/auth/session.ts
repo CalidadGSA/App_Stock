@@ -65,10 +65,21 @@ export async function getOperadorSession(): Promise<OperadorSession | null> {
   return verifyAndDecode(cookie);
 }
 
-/** Verifica el valor de la cookie (para middleware que recibe request). */
+/** Verifica el valor de la cookie (para middleware que recibe request). Solo usar en entorno Node (API/layout). */
 export function getOperadorSessionFromCookieValue(cookieValue: string | undefined): OperadorSession | null {
   if (!cookieValue) return null;
   return verifyAndDecode(cookieValue);
+}
+
+/**
+ * Comprueba solo el formato de la cookie de sesión (sin verificar firma).
+ * Usar en middleware (Edge), donde Node crypto no está disponible.
+ * La verificación real se hace en layout/API con getOperadorSession.
+ */
+export function hasValidSessionFormat(cookieValue: string | undefined): boolean {
+  if (!cookieValue || typeof cookieValue !== 'string') return false;
+  const parts = cookieValue.split('.');
+  return parts.length === 2 && parts[0].length > 0 && parts[1].length > 0;
 }
 
 export const OPERADOR_COOKIE_NAME = COOKIE_NAME;

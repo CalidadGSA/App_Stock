@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { getOperadorSessionFromCookieValue, OPERADOR_COOKIE_NAME } from '@/lib/auth/session';
+import { hasValidSessionFormat, OPERADOR_COOKIE_NAME } from '@/lib/auth/session';
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -12,26 +12,26 @@ export async function middleware(request: NextRequest) {
   }
 
   const operadorCookie = request.cookies.get(OPERADOR_COOKIE_NAME)?.value;
-  const operador = getOperadorSessionFromCookieValue(operadorCookie);
+  const hasSession = hasValidSessionFormat(operadorCookie);
 
   // Sin sesión operador → redirigir al login
-  if (!operador && !isAuthRoute) {
+  if (!hasSession && !isAuthRoute) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);
   }
 
-  // Con sesión → no mostrar login
-  if (operador && isAuthRoute) {
+  // Con sesión → no mostrar login; si ya tiene sucursal, ir al dashboard
+  if (hasSession && isAuthRoute) {
     const url = request.nextUrl.clone();
-    url.pathname = '/sucursal';
+    url.pathname = request.cookies.get('sucursal_id')?.value ? '/dashboard' : '/sucursal';
     return NextResponse.redirect(url);
   }
 
   // Con sesión pero sin sucursal seleccionada → redirigir a selección
-  if (operador && pathname !== '/sucursal') {
+  if (hasSession && pathname !== '/sucursal') {
     const sucursalId = request.cookies.get('sucursal_id');
-    if (!sucursalId) {
+    if (!sucursalId?.value) {
       const url = request.nextUrl.clone();
       url.pathname = '/sucursal';
       return NextResponse.redirect(url);
