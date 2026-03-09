@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ClipboardList, AlertTriangle, CalendarClock, TrendingDown,
-  Plus, ChevronRight, CheckCircle2, Clock
+  ChevronRight, CheckCircle2, Clock
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -63,33 +63,7 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Acciones principales */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Link href="/inventario/nuevo">
-          <div className="group flex items-center justify-between rounded-2xl bg-blue-600 px-6 py-5 text-white shadow-md hover:bg-blue-700 transition-colors">
-            <div>
-              <p className="text-lg font-bold">Nuevo inventario</p>
-              <p className="text-sm text-blue-200">Registrar desvíos de stock</p>
-            </div>
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 group-hover:bg-white/30 transition-colors">
-              <Plus className="h-6 w-6" />
-            </div>
-          </div>
-        </Link>
-        <Link href="/vencimientos/nuevo">
-          <div className="group flex items-center justify-between rounded-2xl bg-indigo-600 px-6 py-5 text-white shadow-md hover:bg-indigo-700 transition-colors">
-            <div>
-              <p className="text-lg font-bold">Control de vencimientos</p>
-              <p className="text-sm text-indigo-200">Registrar fechas de vencimiento</p>
-            </div>
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 group-hover:bg-white/30 transition-colors">
-              <Plus className="h-6 w-6" />
-            </div>
-          </div>
-        </Link>
-      </div>
-
-      {/* KPIs */}
+      {/* KPIs — cuadros que luego podremos definir/ajustar */}
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">Resumen</h2>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">

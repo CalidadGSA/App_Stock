@@ -1,12 +1,12 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/server';
+import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
 /** GET /api/inventario - listar controles de inventario de la sucursal */
 export async function GET() {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
@@ -15,7 +15,7 @@ export async function GET() {
   const admin = await createAdminClient();
   const { data, error } = await admin
     .from('controles_inventario')
-    .select('*, sucursales(nombre, codigo_interno), usuarios(nombre)')
+    .select('*, sucursales(nombrefantasia), operadores(nombrecompleto)')
     .eq('sucursal_id', sucursalId)
     .order('created_at', { ascending: false })
     .limit(50);
@@ -26,9 +26,8 @@ export async function GET() {
 
 /** POST /api/inventario - crear nuevo control de inventario */
 export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
@@ -39,7 +38,7 @@ export async function POST(request: NextRequest) {
   const admin = await createAdminClient();
   const { data, error } = await admin
     .from('controles_inventario')
-    .insert({ sucursal_id: sucursalId, usuario_id: user.id, observaciones: body.observaciones ?? null })
+    .insert({ sucursal_id: parseInt(sucursalId, 10), usuario_id: operador.idoperador, observaciones: body.observaciones ?? null })
     .select()
     .single();
 

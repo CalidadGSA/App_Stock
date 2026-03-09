@@ -3,64 +3,106 @@
 -- Base: Supabase (Postgres)
 -- ============================================================
 
--- Tipos enumerados
-create type rol_usuario as enum ('admin', 'operador_sucursal');
-create type estado_control as enum ('en_progreso', 'cerrado');
+-- Tipos enumerados (idempotente: no falla si ya existen)
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'rol_usuario') then
+    create type rol_usuario as enum ('admin', 'operador_sucursal');
+  end if;
+  if not exists (select 1 from pg_type where typname = 'estado_control') then
+    create type estado_control as enum ('en_progreso', 'cerrado');
+  end if;
+end
+$$;
 
 -- ------------------------------------------------------------
 -- SUCURSALES
 -- ------------------------------------------------------------
 create table sucursales (
-  id            uuid primary key default gen_random_uuid(),
-  nombre        text not null,
-  codigo_interno text unique not null,
-  ubicacion     text,
-  telefono      text,
-  email         text,
-  cod_postal    text,
-  password_hash text not null,
+  Sucursal           integer primary key,
+  NombreFantasia        text not null,
+  Domicilio     text,
+  Telefono      text,
+  Email         text,
+  _CodPostal    text,
+  contraseña text not null,
   activa        boolean not null default true,
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
+  creada    timestamptz not null default now(),
+  actualizada    timestamptz not null default now()
 );
 
 -- ------------------------------------------------------------
--- USUARIOS  (extiende auth.users de Supabase)
+-- USUARIOS  (extiende auth.users de Supabase; para login app)
 -- ------------------------------------------------------------
-create table usuarios (
-  id         uuid primary key references auth.users(id) on delete cascade,
-  nombre     text not null,
-  email      text not null unique,
+-- Operadores (sincronizado desde base legacy)
+create table operadores (
+  IDOperador         integer primary key,
+  Operador     text not null unique,
+  NombreCompleto      text not null ,
+  Codigo       integer not null,
   rol        rol_usuario not null default 'operador_sucursal',
-  activo     boolean not null default true,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  Activo     char(1) not null,
+  creado timestamptz not null default now(),
+  actualizado timestamptz not null default now()
 );
 
 -- ------------------------------------------------------------
 -- CACHE DE PRODUCTOS  (sincronizado desde base legacy)
 -- ------------------------------------------------------------
-create table productos_cache (
-  id                   uuid primary key default gen_random_uuid(),
-  producto_id_sistema  text not null unique,
-  codigo_barras        text not null,
-  descripcion          text not null,
-  presentacion         text,
-  laboratorio          text,
-  troquel              text,
-  cod_rubro            text,
-  refrigeracion        boolean,
-  updated_at           timestamptz not null default now()
+create table medicamentos (
+  CodPlex       integer primary key,
+  Troquel        integer,
+  CodLab        integer,
+  codebar          text ,
+  Producto         text,
+  Presentaci          text,
+  Precio              double precision,
+  Costo              double precision,
+  Activo             char(1),
+  cod_rubro            integer not null,
+  IDSubrubro            integer,
+  IDPsicofarmaco        text,
+  visible                smallint,
+  Refrigeracion        char(1),
+  actualizado           timestamptz not null default now()
 );
-create index idx_productos_cache_barras on productos_cache(codigo_barras);
+create index idx_medicamentos_codebar on medicamentos(codebar);
+create index idx_medicamentos_cod_rubro on medicamentos(cod_rubro);
+create index idx_medicamentos_id_subrubro on medicamentos(IDSubrubro);
+
+create table rubros (
+  CodRubro        integer primary key,
+  Rubro           text
+);
+
+create table subrubros (
+  IDSubRubro        integer primary key,
+  Nombre            text,
+  IDRubro           integer not null,
+  IDCategoria       integer
+);
+create index idx_subrubros_id_rubro on subrubros(IDRubro);
+create index idx_subrubros_id_categoria on subrubros(IDCategoria);
+
+create table categorias (
+  IDCategoria        integer primary key not null,
+  Nombre             text 
+);
+
+
+create table psicofarmacos (
+  IDPsicofarmaco        text primary key not null,
+  Nombre                text 
+);
+
 
 -- ------------------------------------------------------------
 -- CONTROLES DE INVENTARIO  (cabecera)
 -- ------------------------------------------------------------
 create table controles_inventario (
   id           uuid primary key default gen_random_uuid(),
-  sucursal_id  uuid not null references sucursales(id),
-  usuario_id   uuid not null references usuarios(id),
+  sucursal_id  integer not null references sucursales(Sucursal),
+  usuario_id   integer not null references operadores(IDOperador),
   fecha_inicio timestamptz not null default now(),
   fecha_fin    timestamptz,
   estado       estado_control not null default 'en_progreso',
@@ -70,6 +112,8 @@ create table controles_inventario (
 );
 create index idx_ci_sucursal on controles_inventario(sucursal_id);
 create index idx_ci_estado   on controles_inventario(estado);
+create index idx_ci_usuario on controles_inventario(usuario_id);
+create index idx_ci_fecha_inicio on controles_inventario(fecha_inicio);
 
 -- ------------------------------------------------------------
 -- CONTROLES DE INVENTARIO  (detalle)
@@ -88,14 +132,15 @@ create table controles_inventario_detalle (
   fecha_registro      timestamptz not null default now()
 );
 create index idx_cid_control on controles_inventario_detalle(control_id);
+create index idx_cid_producto_sistema on controles_inventario_detalle(producto_id_sistema);
 
 -- ------------------------------------------------------------
 -- CONTROLES DE VENCIMIENTOS  (cabecera)
 -- ------------------------------------------------------------
 create table controles_vencimientos (
   id           uuid primary key default gen_random_uuid(),
-  sucursal_id  uuid not null references sucursales(id),
-  usuario_id   uuid not null references usuarios(id),
+  sucursal_id  integer not null references sucursales(Sucursal),
+  usuario_id   integer not null references operadores(IDOperador),
   fecha_inicio timestamptz not null default now(),
   fecha_fin    timestamptz,
   estado       estado_control not null default 'en_progreso',
@@ -105,6 +150,8 @@ create table controles_vencimientos (
 );
 create index idx_cv_sucursal on controles_vencimientos(sucursal_id);
 create index idx_cv_estado   on controles_vencimientos(estado);
+create index idx_cv_usuario on controles_vencimientos(usuario_id);
+create index idx_cv_fecha_inicio on controles_vencimientos(fecha_inicio);
 
 -- ------------------------------------------------------------
 -- CONTROLES DE VENCIMIENTOS  (detalle)
@@ -123,40 +170,40 @@ create table controles_vencimientos_detalle (
 );
 create index idx_cvd_control    on controles_vencimientos_detalle(control_id);
 create index idx_cvd_vencimiento on controles_vencimientos_detalle(fecha_vencimiento);
+create index idx_cvd_producto_sistema on controles_vencimientos_detalle(producto_id_sistema);
+
+-- ------------------------------------------------------------
+-- SYNC LEGACY → SUPABASE  (estado y auditoría)
+-- ------------------------------------------------------------
+create table if not exists sync_status (
+  key         text primary key,
+  completed   boolean not null default false,
+  updated_at  timestamptz not null default now()
+);
+
+create table if not exists audit_log (
+  id         serial primary key,
+  entity     text not null,
+  action     text not null,
+  status     text not null,
+  message    text,
+  created_at timestamptz not null default now()
+);
 
 -- ------------------------------------------------------------
 -- ROW LEVEL SECURITY  (habilitado; acceso via service_role desde backend)
 -- ------------------------------------------------------------
 alter table sucursales                   enable row level security;
-alter table usuarios                     enable row level security;
-alter table productos_cache              enable row level security;
+alter table operadores                   enable row level security;
+alter table medicamentos                 enable row level security;
+alter table rubros                      enable row level security;
+alter table subrubros                   enable row level security;
+alter table categorias                  enable row level security;
+alter table psicofarmacos               enable row level security;
 alter table controles_inventario         enable row level security;
 alter table controles_inventario_detalle enable row level security;
 alter table controles_vencimientos       enable row level security;
 alter table controles_vencimientos_detalle enable row level security;
 
 -- Políticas: el service_role bypassa RLS automáticamente.
--- Las siguientes políticas permiten a usuarios autenticados leer sus propios datos.
-create policy "usuarios ven su propio perfil"
-  on usuarios for select using (auth.uid() = id);
-
--- ------------------------------------------------------------
--- FUNCIÓN: auto-crear perfil de usuario al registrarse
--- ------------------------------------------------------------
-create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer set search_path = ''
-as $$
-begin
-  insert into public.usuarios (id, nombre, email)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data ->> 'nombre', split_part(new.email, '@', 1)),
-    new.email
-  );
-  return new;
-end;
-$$;
-
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
+-- (Operadores se gestiona por sync legacy; sin tabla usuarios no hay política por auth.uid.)

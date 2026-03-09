@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { getOperadorSession } from '@/lib/auth/session';
 import { buscarProductoPorBarras } from '@/lib/legacy-db/productos';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
@@ -7,13 +7,10 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ barcode: string }> }
 ) {
-  const { barcode } = await params;
-  const supabase = await createClient();
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) {
-    return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  }
+  const { barcode } = await params;
 
   const cookieStore = await cookies();
   const codigoSucursal = cookieStore.get('sucursal_codigo')?.value ?? '';
