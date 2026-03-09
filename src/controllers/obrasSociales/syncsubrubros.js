@@ -4,15 +4,13 @@ const { pool, dbType } = require('../../db'); // MySQL (base externa)
 const { getSupabaseAdmin } = require('../../lib/supabaseAdmin'); // Supabase (interna)
 
 const SYNC_LIMIT = parseInt(process.env.SYNC_LIMIT || '0', 10);
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_SUCURSALES || '5000', 10);
-const DEFAULT_SUCURSAL_PASSWORD =
-  process.env.DEFAULT_SUCURSAL_PASSWORD || 'changeme';
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_SUBRUBROS || '5000', 10);
 
 /* ======================================================
-   🧠 ESTADO GLOBAL SYNC sucursales
+   🧠 ESTADO GLOBAL SYNC subrubros
 ====================================================== */
-let syncState = {
-  entity: 'sucursales',
+let syncSubrubrosState = {
+  entity: 'subrubros',
   inProgress: false,
   completed: false,
   total: 0,
@@ -22,14 +20,14 @@ let syncState = {
 };
 
 /**
- * Sincroniza sucursales desde la base externa (MySQL) hacia Supabase.
+ * Sincroniza subrubros desde la base externa (MySQL) hacia Supabase.
  * Soporta modos:
  *  - ALL  → todos los registros
- *  - LAST → últimos N registros según Sucursal
+ *  - LAST → últimos N registros según IDSubRubro
  */
-async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
+async function syncSubrubrosLegacyToSupabase({ mode, limit: limitParam } = {}) {
   if (dbType !== 'mysql') {
-    console.warn('⚠️ syncLegacyToSupabase llamado con dbType !== mysql, se omite.');
+    console.warn('⚠️ syncSubrubrosLegacyToSupabase llamado con dbType !== mysql, se omite.');
     return { processed: 0, total: 0, duration: 0 };
   }
 
@@ -47,23 +45,26 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     SYNC_MODE_LOCAL = 'ALL';
   }
 
-  if (syncState.inProgress) {
-    console.log('⏸️ Sync sucursales ya en progreso');
-    return { processed: syncState.processed, total: syncState.total };
+  if (syncSubrubrosState.inProgress) {
+    console.log('⏸️ Sync subrubros ya en progreso');
+    return {
+      processed: syncSubrubrosState.processed,
+      total: syncSubrubrosState.total,
+    };
   }
 
-  syncState.entity = 'sucursales';
-  syncState.inProgress = true;
-  syncState.completed = false;
-  syncState.total = 0;
-  syncState.processed = 0;
-  syncState.startedAt = new Date();
-  syncState.batchNumber = 0;
+  syncSubrubrosState.entity = 'subrubros';
+  syncSubrubrosState.inProgress = true;
+  syncSubrubrosState.completed = false;
+  syncSubrubrosState.total = 0;
+  syncSubrubrosState.processed = 0;
+  syncSubrubrosState.startedAt = new Date();
+  syncSubrubrosState.batchNumber = 0;
 
   const startTime = Date.now();
 
   try {
-    console.log('🚀 Sync sucursales → START');
+    console.log('🚀 Sync subrubros → START');
     console.log(
       `🔧 Modo: ${SYNC_MODE_LOCAL}, SYNC_LIMIT: ${SYNC_LIMIT}, limit param: ${limitParam}`
     );
@@ -72,10 +73,7 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     {
       const { error } = await supabase
         .from('sync_status')
-        .upsert(
-          { key: 'sucursales', completed: false },
-          { onConflict: 'key' }
-        );
+        .upsert({ key: 'subrubros', completed: false }, { onConflict: 'key' });
       if (error) {
         throw error;
       }
@@ -83,10 +81,10 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     {
       const { error } = await supabase.from('audit_log').insert({
-        entity: 'sucursales',
+        entity: 'subrubros',
         action: 'sync',
         status: 'START',
-        message: 'Inicio sincronización sucursales',
+        message: 'Inicio sincronización subrubros',
       });
       if (error) {
         throw error;
@@ -94,32 +92,32 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     }
 
     const [countRows] = await pool.query(
-      'SELECT COUNT(*) AS total FROM sucursales'
+      'SELECT COUNT(*) AS total FROM subrubros'
     );
     const totalExterno = Number(countRows[0].total) || 0;
 
     // Para LAST respetamos el límite; para ALL ignoramos SYNC_LIMIT y vamos por todos.
     if (SYNC_MODE_LOCAL === 'LAST' && effectiveLimit > 0) {
-      syncState.total = Math.min(effectiveLimit, totalExterno);
+      syncSubrubrosState.total = Math.min(effectiveLimit, totalExterno);
     } else if (SYNC_MODE_LOCAL === 'ALL') {
-      syncState.total = totalExterno;
+      syncSubrubrosState.total = totalExterno;
     } else {
-      syncState.total =
+      syncSubrubrosState.total =
         effectiveLimit > 0
           ? Math.min(effectiveLimit, totalExterno)
           : totalExterno;
     }
 
-    let lastSucursal = 0;
+    let lastIdSubRubro = 0;
 
     if (SYNC_MODE_LOCAL === 'LAST' && effectiveLimit > 0) {
       const [rowsMin] = await pool.query(
         `
-          SELECT MIN(Sucursal) AS min_id
+          SELECT MIN(IDSubRubro) AS min_id
           FROM (
-            SELECT Sucursal
-            FROM sucursales
-            ORDER BY Sucursal DESC
+            SELECT IDSubRubro
+            FROM subrubros
+            ORDER BY IDSubRubro DESC
             LIMIT ?
           ) t
         `,
@@ -129,9 +127,9 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       const minId = rowsMin[0]?.min_id;
 
       if (minId != null) {
-        lastSucursal = Number(minId) - 1;
+        lastIdSubRubro = Number(minId) - 1;
       } else {
-        lastSucursal = 0;
+        lastIdSubRubro = 0;
       }
     }
 
@@ -142,29 +140,27 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       if (
         SYNC_MODE_LOCAL === 'LAST' &&
         effectiveLimit > 0 &&
-        syncState.processed >= syncState.total
+        syncSubrubrosState.processed >= syncSubrubrosState.total
       ) {
         break;
       }
 
       batchNumber++;
-      syncState.batchNumber = batchNumber;
+      syncSubrubrosState.batchNumber = batchNumber;
 
       const [rows] = await pool.query(
         `
           SELECT
-            Sucursal      AS sucursal,
-            NombreFantasia AS nombrefantasia,
-            Domicilio     AS domicilio,
-            Telefono      AS telefono,
-            Email         AS email,
-            _CodPostal    AS _codpostal
-          FROM sucursales
-          WHERE Sucursal > ?
-          ORDER BY Sucursal
+            IDSubRubro AS idsubrubro,
+            Nombre     AS nombre,
+            IDRubro    AS idrubro,
+            IDCategoria AS idcategoria
+          FROM subrubros
+          WHERE IDSubRubro > ?
+          ORDER BY IDSubRubro
           LIMIT ?
         `,
-        [lastSucursal, BATCH_SIZE]
+        [lastIdSubRubro, BATCH_SIZE]
       );
 
       if (!rows.length) {
@@ -173,35 +169,32 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
       try {
         console.log(
-          `📦 Lote sucursales #${batchNumber} → ${rows.length} registros (desde Sucursal > ${lastSucursal})`
+          `📦 Lote subrubros #${batchNumber} → ${rows.length} registros (desde IDSubRubro > ${lastIdSubRubro})`
         );
 
         const batchToInsert = [];
         let processedInBatch = 0;
-        let lastSucursalInBatch = lastSucursal;
+        let lastIdSubRubroInBatch = lastIdSubRubro;
 
         for (const r of rows) {
           if (
             SYNC_MODE_LOCAL === 'LAST' &&
             effectiveLimit > 0 &&
-            syncState.processed + processedInBatch >= syncState.total
+            syncSubrubrosState.processed + processedInBatch >=
+              syncSubrubrosState.total
           ) {
             break;
           }
 
           batchToInsert.push({
-            sucursal: r.sucursal,
-            nombrefantasia: r.nombrefantasia,
-            domicilio: r.domicilio,
-            telefono: r.telefono,
-            email: r.email,
-            _codpostal: r._codpostal,
-            // Campo obligatorio en Supabase; usamos un valor por defecto
-            contraseña: DEFAULT_SUCURSAL_PASSWORD,
+            idsubrubro: r.idsubrubro,
+            nombre: r.nombre,
+            idrubro: r.idrubro,
+            idcategoria: r.idcategoria,
           });
 
           processedInBatch++;
-          lastSucursalInBatch = r.sucursal;
+          lastIdSubRubroInBatch = r.idsubrubro;
         }
 
         if (!processedInBatch) {
@@ -210,21 +203,21 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
         }
 
         const { error: upsertError } = await supabase
-          .from('sucursales')
-          .upsert(batchToInsert, { onConflict: 'sucursal' });
+          .from('subrubros')
+          .upsert(batchToInsert, { onConflict: 'idsubrubro' });
 
         if (upsertError) {
           throw upsertError;
         }
 
-        lastSucursal = lastSucursalInBatch;
-        syncState.processed += processedInBatch;
+        lastIdSubRubro = lastIdSubRubroInBatch;
+        syncSubrubrosState.processed += processedInBatch;
 
         console.log(
-          `✅ Lote sucursales #${batchNumber} confirmado — procesados: ${syncState.processed}/${syncState.total}`
+          `✅ Lote subrubros #${batchNumber} confirmado — procesados: ${syncSubrubrosState.processed}/${syncSubrubrosState.total}`
         );
       } catch (err) {
-        console.error('❌ Error en lote sucursales:', err);
+        console.error('❌ Error en lote subrubros:', err);
         throw err;
       }
     }
@@ -232,23 +225,20 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     {
       const { error } = await supabase
         .from('sync_status')
-        .upsert(
-          { key: 'sucursales', completed: true },
-          { onConflict: 'key' }
-        );
+        .upsert({ key: 'subrubros', completed: true }, { onConflict: 'key' });
       if (error) {
         throw error;
       }
     }
 
-    syncState.completed = true;
+    syncSubrubrosState.completed = true;
 
     {
       const { error } = await supabase.from('audit_log').insert({
-        entity: 'sucursales',
+        entity: 'subrubros',
         action: 'sync',
         status: 'SUCCESS',
-        message: `Sync sucursales completado — ${syncState.processed} registros sincronizados`,
+        message: `Sync subrubros completado — ${syncSubrubrosState.processed} registros sincronizados`,
       });
       if (error) {
         throw error;
@@ -257,28 +247,25 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(
-      `🏁 Sync sucursales FINALIZADO → ${syncState.processed} registros en ${duration}s`
+      `🏁 Sync subrubros FINALIZADO → ${syncSubrubrosState.processed} registros en ${duration}s`
     );
 
     return {
-      processed: syncState.processed,
-      total: syncState.total,
+      processed: syncSubrubrosState.processed,
+      total: syncSubrubrosState.total,
       duration,
     };
   } catch (e) {
-    console.error('🔥 Error sync sucursales:', e);
+    console.error('🔥 Error sync subrubros:', e);
 
     const supabase = getSupabaseAdmin();
 
     await supabase
       .from('sync_status')
-      .upsert(
-        { key: 'sucursales', completed: false },
-        { onConflict: 'key' }
-      );
+      .upsert({ key: 'subrubros', completed: false }, { onConflict: 'key' });
 
     await supabase.from('audit_log').insert({
-      entity: 'sucursales',
+      entity: 'subrubros',
       action: 'sync',
       status: 'ERROR',
       message: e.message || String(e),
@@ -286,8 +273,9 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     throw e;
   } finally {
-    syncState.inProgress = false;
+    syncSubrubrosState.inProgress = false;
   }
 }
 
-module.exports = { syncLegacyToSupabase, syncState };
+module.exports = { syncSubrubrosLegacyToSupabase, syncSubrubrosState };
+

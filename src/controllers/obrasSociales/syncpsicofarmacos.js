@@ -4,15 +4,13 @@ const { pool, dbType } = require('../../db'); // MySQL (base externa)
 const { getSupabaseAdmin } = require('../../lib/supabaseAdmin'); // Supabase (interna)
 
 const SYNC_LIMIT = parseInt(process.env.SYNC_LIMIT || '0', 10);
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_SUCURSALES || '5000', 10);
-const DEFAULT_SUCURSAL_PASSWORD =
-  process.env.DEFAULT_SUCURSAL_PASSWORD || 'changeme';
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_PSICOFARMACOS || '5000', 10);
 
 /* ======================================================
-   🧠 ESTADO GLOBAL SYNC sucursales
+   🧠 ESTADO GLOBAL SYNC psicofarmacos
 ====================================================== */
-let syncState = {
-  entity: 'sucursales',
+let syncPsicofarmacosState = {
+  entity: 'psicofarmacos',
   inProgress: false,
   completed: false,
   total: 0,
@@ -22,14 +20,16 @@ let syncState = {
 };
 
 /**
- * Sincroniza sucursales desde la base externa (MySQL) hacia Supabase.
+ * Sincroniza psicofarmacos desde la base externa (MySQL) hacia Supabase.
  * Soporta modos:
  *  - ALL  → todos los registros
- *  - LAST → últimos N registros según Sucursal
+ *  - LAST → últimos N registros según IDPsicofarmaco
  */
-async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
+async function syncPsicofarmacosLegacyToSupabase({ mode, limit: limitParam } = {}) {
   if (dbType !== 'mysql') {
-    console.warn('⚠️ syncLegacyToSupabase llamado con dbType !== mysql, se omite.');
+    console.warn(
+      '⚠️ syncPsicofarmacosLegacyToSupabase llamado con dbType !== mysql, se omite.'
+    );
     return { processed: 0, total: 0, duration: 0 };
   }
 
@@ -47,23 +47,26 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     SYNC_MODE_LOCAL = 'ALL';
   }
 
-  if (syncState.inProgress) {
-    console.log('⏸️ Sync sucursales ya en progreso');
-    return { processed: syncState.processed, total: syncState.total };
+  if (syncPsicofarmacosState.inProgress) {
+    console.log('⏸️ Sync psicofarmacos ya en progreso');
+    return {
+      processed: syncPsicofarmacosState.processed,
+      total: syncPsicofarmacosState.total,
+    };
   }
 
-  syncState.entity = 'sucursales';
-  syncState.inProgress = true;
-  syncState.completed = false;
-  syncState.total = 0;
-  syncState.processed = 0;
-  syncState.startedAt = new Date();
-  syncState.batchNumber = 0;
+  syncPsicofarmacosState.entity = 'psicofarmacos';
+  syncPsicofarmacosState.inProgress = true;
+  syncPsicofarmacosState.completed = false;
+  syncPsicofarmacosState.total = 0;
+  syncPsicofarmacosState.processed = 0;
+  syncPsicofarmacosState.startedAt = new Date();
+  syncPsicofarmacosState.batchNumber = 0;
 
   const startTime = Date.now();
 
   try {
-    console.log('🚀 Sync sucursales → START');
+    console.log('🚀 Sync psicofarmacos → START');
     console.log(
       `🔧 Modo: ${SYNC_MODE_LOCAL}, SYNC_LIMIT: ${SYNC_LIMIT}, limit param: ${limitParam}`
     );
@@ -73,7 +76,7 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       const { error } = await supabase
         .from('sync_status')
         .upsert(
-          { key: 'sucursales', completed: false },
+          { key: 'psicofarmacos', completed: false },
           { onConflict: 'key' }
         );
       if (error) {
@@ -83,10 +86,10 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     {
       const { error } = await supabase.from('audit_log').insert({
-        entity: 'sucursales',
+        entity: 'psicofarmacos',
         action: 'sync',
         status: 'START',
-        message: 'Inicio sincronización sucursales',
+        message: 'Inicio sincronización psicofarmacos',
       });
       if (error) {
         throw error;
@@ -94,32 +97,32 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     }
 
     const [countRows] = await pool.query(
-      'SELECT COUNT(*) AS total FROM sucursales'
+      'SELECT COUNT(*) AS total FROM psicofarmacos'
     );
     const totalExterno = Number(countRows[0].total) || 0;
 
     // Para LAST respetamos el límite; para ALL ignoramos SYNC_LIMIT y vamos por todos.
     if (SYNC_MODE_LOCAL === 'LAST' && effectiveLimit > 0) {
-      syncState.total = Math.min(effectiveLimit, totalExterno);
+      syncPsicofarmacosState.total = Math.min(effectiveLimit, totalExterno);
     } else if (SYNC_MODE_LOCAL === 'ALL') {
-      syncState.total = totalExterno;
+      syncPsicofarmacosState.total = totalExterno;
     } else {
-      syncState.total =
+      syncPsicofarmacosState.total =
         effectiveLimit > 0
           ? Math.min(effectiveLimit, totalExterno)
           : totalExterno;
     }
 
-    let lastSucursal = 0;
+    let lastIdPsico = '';
 
     if (SYNC_MODE_LOCAL === 'LAST' && effectiveLimit > 0) {
       const [rowsMin] = await pool.query(
         `
-          SELECT MIN(Sucursal) AS min_id
+          SELECT MIN(IDPsicofarmaco) AS min_id
           FROM (
-            SELECT Sucursal
-            FROM sucursales
-            ORDER BY Sucursal DESC
+            SELECT IDPsicofarmaco
+            FROM psicofarmacos
+            ORDER BY IDPsicofarmaco DESC
             LIMIT ?
           ) t
         `,
@@ -129,9 +132,10 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       const minId = rowsMin[0]?.min_id;
 
       if (minId != null) {
-        lastSucursal = Number(minId) - 1;
+        // Para cadenas, usamos comparación lexicográfica; no restamos 1.
+        lastIdPsico = '';
       } else {
-        lastSucursal = 0;
+        lastIdPsico = '';
       }
     }
 
@@ -142,29 +146,25 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       if (
         SYNC_MODE_LOCAL === 'LAST' &&
         effectiveLimit > 0 &&
-        syncState.processed >= syncState.total
+        syncPsicofarmacosState.processed >= syncPsicofarmacosState.total
       ) {
         break;
       }
 
       batchNumber++;
-      syncState.batchNumber = batchNumber;
+      syncPsicofarmacosState.batchNumber = batchNumber;
 
       const [rows] = await pool.query(
         `
           SELECT
-            Sucursal      AS sucursal,
-            NombreFantasia AS nombrefantasia,
-            Domicilio     AS domicilio,
-            Telefono      AS telefono,
-            Email         AS email,
-            _CodPostal    AS _codpostal
-          FROM sucursales
-          WHERE Sucursal > ?
-          ORDER BY Sucursal
+            IDPsicofarmaco AS idpsicofarmaco,
+            Nombre         AS nombre
+          FROM psicofarmacos
+          WHERE (? = '' OR IDPsicofarmaco > ?)
+          ORDER BY IDPsicofarmaco
           LIMIT ?
         `,
-        [lastSucursal, BATCH_SIZE]
+        [lastIdPsico, lastIdPsico, BATCH_SIZE]
       );
 
       if (!rows.length) {
@@ -173,35 +173,30 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
       try {
         console.log(
-          `📦 Lote sucursales #${batchNumber} → ${rows.length} registros (desde Sucursal > ${lastSucursal})`
+          `📦 Lote psicofarmacos #${batchNumber} → ${rows.length} registros (desde IDPsicofarmaco > ${lastIdPsico || '[inicio]'})`
         );
 
         const batchToInsert = [];
         let processedInBatch = 0;
-        let lastSucursalInBatch = lastSucursal;
+        let lastIdPsicoInBatch = lastIdPsico;
 
         for (const r of rows) {
           if (
             SYNC_MODE_LOCAL === 'LAST' &&
             effectiveLimit > 0 &&
-            syncState.processed + processedInBatch >= syncState.total
+            syncPsicofarmacosState.processed + processedInBatch >=
+              syncPsicofarmacosState.total
           ) {
             break;
           }
 
           batchToInsert.push({
-            sucursal: r.sucursal,
-            nombrefantasia: r.nombrefantasia,
-            domicilio: r.domicilio,
-            telefono: r.telefono,
-            email: r.email,
-            _codpostal: r._codpostal,
-            // Campo obligatorio en Supabase; usamos un valor por defecto
-            contraseña: DEFAULT_SUCURSAL_PASSWORD,
+            idpsicofarmaco: r.idpsicofarmaco,
+            nombre: r.nombre,
           });
 
           processedInBatch++;
-          lastSucursalInBatch = r.sucursal;
+          lastIdPsicoInBatch = r.idpsicofarmaco;
         }
 
         if (!processedInBatch) {
@@ -210,21 +205,21 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
         }
 
         const { error: upsertError } = await supabase
-          .from('sucursales')
-          .upsert(batchToInsert, { onConflict: 'sucursal' });
+          .from('psicofarmacos')
+          .upsert(batchToInsert, { onConflict: 'idpsicofarmaco' });
 
         if (upsertError) {
           throw upsertError;
         }
 
-        lastSucursal = lastSucursalInBatch;
-        syncState.processed += processedInBatch;
+        lastIdPsico = lastIdPsicoInBatch;
+        syncPsicofarmacosState.processed += processedInBatch;
 
         console.log(
-          `✅ Lote sucursales #${batchNumber} confirmado — procesados: ${syncState.processed}/${syncState.total}`
+          `✅ Lote psicofarmacos #${batchNumber} confirmado — procesados: ${syncPsicofarmacosState.processed}/${syncPsicofarmacosState.total}`
         );
       } catch (err) {
-        console.error('❌ Error en lote sucursales:', err);
+        console.error('❌ Error en lote psicofarmacos:', err);
         throw err;
       }
     }
@@ -233,7 +228,7 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       const { error } = await supabase
         .from('sync_status')
         .upsert(
-          { key: 'sucursales', completed: true },
+          { key: 'psicofarmacos', completed: true },
           { onConflict: 'key' }
         );
       if (error) {
@@ -241,14 +236,14 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       }
     }
 
-    syncState.completed = true;
+    syncPsicofarmacosState.completed = true;
 
     {
       const { error } = await supabase.from('audit_log').insert({
-        entity: 'sucursales',
+        entity: 'psicofarmacos',
         action: 'sync',
         status: 'SUCCESS',
-        message: `Sync sucursales completado — ${syncState.processed} registros sincronizados`,
+        message: `Sync psicofarmacos completado — ${syncPsicofarmacosState.processed} registros sincronizados`,
       });
       if (error) {
         throw error;
@@ -257,28 +252,28 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(
-      `🏁 Sync sucursales FINALIZADO → ${syncState.processed} registros en ${duration}s`
+      `🏁 Sync psicofarmacos FINALIZADO → ${syncPsicofarmacosState.processed} registros en ${duration}s`
     );
 
     return {
-      processed: syncState.processed,
-      total: syncState.total,
+      processed: syncPsicofarmacosState.processed,
+      total: syncPsicofarmacosState.total,
       duration,
     };
   } catch (e) {
-    console.error('🔥 Error sync sucursales:', e);
+    console.error('🔥 Error sync psicofarmacos:', e);
 
     const supabase = getSupabaseAdmin();
 
     await supabase
       .from('sync_status')
       .upsert(
-        { key: 'sucursales', completed: false },
+        { key: 'psicofarmacos', completed: false },
         { onConflict: 'key' }
       );
 
     await supabase.from('audit_log').insert({
-      entity: 'sucursales',
+      entity: 'psicofarmacos',
       action: 'sync',
       status: 'ERROR',
       message: e.message || String(e),
@@ -286,8 +281,9 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     throw e;
   } finally {
-    syncState.inProgress = false;
+    syncPsicofarmacosState.inProgress = false;
   }
 }
 
-module.exports = { syncLegacyToSupabase, syncState };
+module.exports = { syncPsicofarmacosLegacyToSupabase, syncPsicofarmacosState };
+
