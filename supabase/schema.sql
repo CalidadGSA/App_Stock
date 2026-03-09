@@ -190,6 +190,18 @@ create table if not exists audit_log (
   created_at timestamptz not null default now()
 );
 
+create table if not exists auth_log (
+  id              serial primary key,
+  username        text,
+  sucursal_nombre text,
+  ip_address      text,
+  action          text,
+  session_id      text,
+  user_agent      text,
+  success         boolean,
+  created_at      timestamptz not null default now()
+);
+
 -- ------------------------------------------------------------
 -- ROW LEVEL SECURITY  (habilitado; acceso via service_role desde backend)
 -- ------------------------------------------------------------

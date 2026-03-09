@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { LogOut, Package, ClipboardList, CalendarClock, Menu, X } from 'lucide-react';
+import { LogOut, ClipboardList, CalendarClock, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 
@@ -34,11 +34,11 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
       <div className="flex h-14 items-center justify-between gap-4 px-4">
         {/* Logo + app name */}
         <div className="flex items-center gap-3 shrink-0">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-            <Package className="h-4 w-4 text-white" />
+          <div className="flex h-8 w-8 items-center justify-center shrink-0">
+            <img src="/logogsa800.png" alt="Logo" className="h-8 w-8 object-contain rounded-lg" />
           </div>
           <Link href="/dashboard" className="hidden sm:block">
-            <p className="text-sm font-semibold text-gray-900 leading-tight">GestiónStock</p>
+            <p className="text-sm font-semibold text-gray-900 leading-tight">Gestión Stock</p>
           </Link>
         </div>
 
