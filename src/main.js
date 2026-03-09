@@ -4,7 +4,8 @@ const express = require('express');
 const cors = require('cors');
 
 const datosRouter = require('./routes/obrasSociales/routes');
-const { ensureDatos } = require('./controllers/obrasSociales/ensureDatos');
+const { ensureDatos } = require('./controllers/obrasSociales/ensureSucursales');
+require('./jobs/obrasSocialesSync.job');
 
 const app = express();
 

@@ -1,5 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { hasValidSessionFormat, OPERADOR_COOKIE_NAME } from '@/lib/auth/session';
+import {
+  hasValidSessionFormat,
+  OPERADOR_COOKIE_NAME,
+} from '@/lib/auth/sessionFormat';
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;

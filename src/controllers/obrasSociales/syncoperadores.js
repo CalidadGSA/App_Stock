@@ -4,15 +4,13 @@ const { pool, dbType } = require('../../db'); // MySQL (base externa)
 const { getSupabaseAdmin } = require('../../lib/supabaseAdmin'); // Supabase (interna)
 
 const SYNC_LIMIT = parseInt(process.env.SYNC_LIMIT || '0', 10);
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_SUCURSALES || '5000', 10);
-const DEFAULT_SUCURSAL_PASSWORD =
-  process.env.DEFAULT_SUCURSAL_PASSWORD || 'changeme';
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_OPERADORES || '5000', 10);
 
 /* ======================================================
-   🧠 ESTADO GLOBAL SYNC sucursales
+   🧠 ESTADO GLOBAL SYNC operadores
 ====================================================== */
-let syncState = {
-  entity: 'sucursales',
+let syncOperadoresState = {
+  entity: 'operadores',
   inProgress: false,
   completed: false,
   total: 0,
@@ -22,14 +20,14 @@ let syncState = {
 };
 
 /**
- * Sincroniza sucursales desde la base externa (MySQL) hacia Supabase.
+ * Sincroniza operadores desde la base externa (MySQL) hacia Supabase.
  * Soporta modos:
  *  - ALL  → todos los registros
- *  - LAST → últimos N registros según Sucursal
+ *  - LAST → últimos N registros según IDOperador
  */
-async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
+async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) {
   if (dbType !== 'mysql') {
-    console.warn('⚠️ syncLegacyToSupabase llamado con dbType !== mysql, se omite.');
+    console.warn('⚠️ syncOperadoresLegacyToSupabase llamado con dbType !== mysql, se omite.');
     return { processed: 0, total: 0, duration: 0 };
   }
 
@@ -47,23 +45,26 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     SYNC_MODE_LOCAL = 'ALL';
   }
 
-  if (syncState.inProgress) {
-    console.log('⏸️ Sync sucursales ya en progreso');
-    return { processed: syncState.processed, total: syncState.total };
+  if (syncOperadoresState.inProgress) {
+    console.log('⏸️ Sync operadores ya en progreso');
+    return {
+      processed: syncOperadoresState.processed,
+      total: syncOperadoresState.total,
+    };
   }
 
-  syncState.entity = 'sucursales';
-  syncState.inProgress = true;
-  syncState.completed = false;
-  syncState.total = 0;
-  syncState.processed = 0;
-  syncState.startedAt = new Date();
-  syncState.batchNumber = 0;
+  syncOperadoresState.entity = 'operadores';
+  syncOperadoresState.inProgress = true;
+  syncOperadoresState.completed = false;
+  syncOperadoresState.total = 0;
+  syncOperadoresState.processed = 0;
+  syncOperadoresState.startedAt = new Date();
+  syncOperadoresState.batchNumber = 0;
 
   const startTime = Date.now();
 
   try {
-    console.log('🚀 Sync sucursales → START');
+    console.log('🚀 Sync operadores → START');
     console.log(
       `🔧 Modo: ${SYNC_MODE_LOCAL}, SYNC_LIMIT: ${SYNC_LIMIT}, limit param: ${limitParam}`
     );
@@ -72,10 +73,7 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     {
       const { error } = await supabase
         .from('sync_status')
-        .upsert(
-          { key: 'sucursales', completed: false },
-          { onConflict: 'key' }
-        );
+        .upsert({ key: 'operadores', completed: false }, { onConflict: 'key' });
       if (error) {
         throw error;
       }
@@ -83,10 +81,10 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     {
       const { error } = await supabase.from('audit_log').insert({
-        entity: 'sucursales',
+        entity: 'operadores',
         action: 'sync',
         status: 'START',
-        message: 'Inicio sincronización sucursales',
+        message: 'Inicio sincronización operadores',
       });
       if (error) {
         throw error;
@@ -94,32 +92,32 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     }
 
     const [countRows] = await pool.query(
-      'SELECT COUNT(*) AS total FROM sucursales'
+      'SELECT COUNT(*) AS total FROM operadores'
     );
     const totalExterno = Number(countRows[0].total) || 0;
 
     // Para LAST respetamos el límite; para ALL ignoramos SYNC_LIMIT y vamos por todos.
     if (SYNC_MODE_LOCAL === 'LAST' && effectiveLimit > 0) {
-      syncState.total = Math.min(effectiveLimit, totalExterno);
+      syncOperadoresState.total = Math.min(effectiveLimit, totalExterno);
     } else if (SYNC_MODE_LOCAL === 'ALL') {
-      syncState.total = totalExterno;
+      syncOperadoresState.total = totalExterno;
     } else {
-      syncState.total =
+      syncOperadoresState.total =
         effectiveLimit > 0
           ? Math.min(effectiveLimit, totalExterno)
           : totalExterno;
     }
 
-    let lastSucursal = 0;
+    let lastIdOperador = 0;
 
     if (SYNC_MODE_LOCAL === 'LAST' && effectiveLimit > 0) {
       const [rowsMin] = await pool.query(
         `
-          SELECT MIN(Sucursal) AS min_id
+          SELECT MIN(IDOperador) AS min_id
           FROM (
-            SELECT Sucursal
-            FROM sucursales
-            ORDER BY Sucursal DESC
+            SELECT IDOperador
+            FROM operadores
+            ORDER BY IDOperador DESC
             LIMIT ?
           ) t
         `,
@@ -129,9 +127,9 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       const minId = rowsMin[0]?.min_id;
 
       if (minId != null) {
-        lastSucursal = Number(minId) - 1;
+        lastIdOperador = Number(minId) - 1;
       } else {
-        lastSucursal = 0;
+        lastIdOperador = 0;
       }
     }
 
@@ -142,29 +140,28 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
       if (
         SYNC_MODE_LOCAL === 'LAST' &&
         effectiveLimit > 0 &&
-        syncState.processed >= syncState.total
+        syncOperadoresState.processed >= syncOperadoresState.total
       ) {
         break;
       }
 
       batchNumber++;
-      syncState.batchNumber = batchNumber;
+      syncOperadoresState.batchNumber = batchNumber;
 
       const [rows] = await pool.query(
         `
           SELECT
-            Sucursal      AS sucursal,
-            NombreFantasia AS nombrefantasia,
-            Domicilio     AS domicilio,
-            Telefono      AS telefono,
-            Email         AS email,
-            _CodPostal    AS _codpostal
-          FROM sucursales
-          WHERE Sucursal > ?
-          ORDER BY Sucursal
+            IDOperador     AS idoperador,
+            Operador       AS operador,
+            NombreCompleto AS nombrecompleto,
+            Codigo         AS codigo,
+            Activo         AS activo
+          FROM operadores
+          WHERE IDOperador > ?
+          ORDER BY IDOperador
           LIMIT ?
         `,
-        [lastSucursal, BATCH_SIZE]
+        [lastIdOperador, BATCH_SIZE]
       );
 
       if (!rows.length) {
@@ -173,35 +170,33 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
       try {
         console.log(
-          `📦 Lote sucursales #${batchNumber} → ${rows.length} registros (desde Sucursal > ${lastSucursal})`
+          `📦 Lote operadores #${batchNumber} → ${rows.length} registros (desde IDOperador > ${lastIdOperador})`
         );
 
         const batchToInsert = [];
         let processedInBatch = 0;
-        let lastSucursalInBatch = lastSucursal;
+        let lastIdOperadorInBatch = lastIdOperador;
 
         for (const r of rows) {
           if (
             SYNC_MODE_LOCAL === 'LAST' &&
             effectiveLimit > 0 &&
-            syncState.processed + processedInBatch >= syncState.total
+            syncOperadoresState.processed + processedInBatch >=
+              syncOperadoresState.total
           ) {
             break;
           }
 
           batchToInsert.push({
-            sucursal: r.sucursal,
-            nombrefantasia: r.nombrefantasia,
-            domicilio: r.domicilio,
-            telefono: r.telefono,
-            email: r.email,
-            _codpostal: r._codpostal,
-            // Campo obligatorio en Supabase; usamos un valor por defecto
-            contraseña: DEFAULT_SUCURSAL_PASSWORD,
+            idoperador: r.idoperador,
+            operador: r.operador,
+            nombrecompleto: r.nombrecompleto,
+            codigo: r.codigo,
+            activo: r.activo,
           });
 
           processedInBatch++;
-          lastSucursalInBatch = r.sucursal;
+          lastIdOperadorInBatch = r.idoperador;
         }
 
         if (!processedInBatch) {
@@ -210,21 +205,22 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
         }
 
         const { error: upsertError } = await supabase
-          .from('sucursales')
-          .upsert(batchToInsert, { onConflict: 'sucursal' });
+          .from('operadores')
+          // Usamos operador como clave de conflicto porque tiene unique constraint
+          .upsert(batchToInsert, { onConflict: 'operador' });
 
         if (upsertError) {
           throw upsertError;
         }
 
-        lastSucursal = lastSucursalInBatch;
-        syncState.processed += processedInBatch;
+        lastIdOperador = lastIdOperadorInBatch;
+        syncOperadoresState.processed += processedInBatch;
 
         console.log(
-          `✅ Lote sucursales #${batchNumber} confirmado — procesados: ${syncState.processed}/${syncState.total}`
+          `✅ Lote operadores #${batchNumber} confirmado — procesados: ${syncOperadoresState.processed}/${syncOperadoresState.total}`
         );
       } catch (err) {
-        console.error('❌ Error en lote sucursales:', err);
+        console.error('❌ Error en lote operadores:', err);
         throw err;
       }
     }
@@ -232,23 +228,20 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
     {
       const { error } = await supabase
         .from('sync_status')
-        .upsert(
-          { key: 'sucursales', completed: true },
-          { onConflict: 'key' }
-        );
+        .upsert({ key: 'operadores', completed: true }, { onConflict: 'key' });
       if (error) {
         throw error;
       }
     }
 
-    syncState.completed = true;
+    syncOperadoresState.completed = true;
 
     {
       const { error } = await supabase.from('audit_log').insert({
-        entity: 'sucursales',
+        entity: 'operadores',
         action: 'sync',
         status: 'SUCCESS',
-        message: `Sync sucursales completado — ${syncState.processed} registros sincronizados`,
+        message: `Sync operadores completado — ${syncOperadoresState.processed} registros sincronizados`,
       });
       if (error) {
         throw error;
@@ -257,28 +250,25 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(
-      `🏁 Sync sucursales FINALIZADO → ${syncState.processed} registros en ${duration}s`
+      `🏁 Sync operadores FINALIZADO → ${syncOperadoresState.processed} registros en ${duration}s`
     );
 
     return {
-      processed: syncState.processed,
-      total: syncState.total,
+      processed: syncOperadoresState.processed,
+      total: syncOperadoresState.total,
       duration,
     };
   } catch (e) {
-    console.error('🔥 Error sync sucursales:', e);
+    console.error('🔥 Error sync operadores:', e);
 
     const supabase = getSupabaseAdmin();
 
     await supabase
       .from('sync_status')
-      .upsert(
-        { key: 'sucursales', completed: false },
-        { onConflict: 'key' }
-      );
+      .upsert({ key: 'operadores', completed: false }, { onConflict: 'key' });
 
     await supabase.from('audit_log').insert({
-      entity: 'sucursales',
+      entity: 'operadores',
       action: 'sync',
       status: 'ERROR',
       message: e.message || String(e),
@@ -286,8 +276,9 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
 
     throw e;
   } finally {
-    syncState.inProgress = false;
+    syncOperadoresState.inProgress = false;
   }
 }
 
-module.exports = { syncLegacyToSupabase, syncState };
+module.exports = { syncOperadoresLegacyToSupabase, syncOperadoresState };
+
