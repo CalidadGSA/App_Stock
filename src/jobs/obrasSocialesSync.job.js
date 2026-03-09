@@ -27,7 +27,7 @@ const SYNC_CRON_DATOS =
   process.env.SYNC_CRON_DATOS ||
   process.env.SYNC_CRON_SUCURSALES ||
   process.env.SYNC_CRON_sucursales ||
-  '37 11 * * *';
+  '45 3 * * *';
 
 const TZ = process.env.TZ || 'America/Argentina/Buenos_Aires';
 

@@ -174,6 +174,7 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
         );
 
         const batchToInsert = [];
+        const seenOperadores = new Set();
         let processedInBatch = 0;
         let lastIdOperadorInBatch = lastIdOperador;
 
@@ -186,6 +187,12 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
           ) {
             break;
           }
+
+          // Evitar duplicados por nombre de operador (constraint unique en Supabase)
+          if (seenOperadores.has(r.operador)) {
+            continue;
+          }
+          seenOperadores.add(r.operador);
 
           batchToInsert.push({
             idoperador: r.idoperador,
@@ -206,8 +213,8 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
 
         const { error: upsertError } = await supabase
           .from('operadores')
-          // Usamos operador como clave de conflicto porque tiene unique constraint
-          .upsert(batchToInsert, { onConflict: 'operador' });
+          // Usamos la PK (idoperador) como clave de conflicto
+          .upsert(batchToInsert, { onConflict: 'idoperador' });
 
         if (upsertError) {
           throw upsertError;

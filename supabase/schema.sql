@@ -50,8 +50,8 @@ create table operadores (
 -- CACHE DE PRODUCTOS  (sincronizado desde base legacy)
 -- ------------------------------------------------------------
 create table medicamentos (
-  CodPlex       integer primary key,
-  Troquel        integer,
+  CodPlex       bigint primary key,
+  Troquel       bigint,
   CodLab        integer,
   codebar          text ,
   Producto         text,

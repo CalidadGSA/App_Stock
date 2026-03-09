@@ -813,7 +813,7 @@ exports.getSyncDebug = async (_req, res) => {
         process.env.SYNC_CRON_DATOS ||
         process.env.SYNC_CRON_SUCURSALES ||
         process.env.SYNC_CRON_sucursales ||
-        '37 11 * * *',
+        '45 3 * * *',
       timezone: process.env.TZ || 'America/Argentina/Buenos_Aires',
       syncState,
       syncStatusRow: statusRow || null,
