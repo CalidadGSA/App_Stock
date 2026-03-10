@@ -64,6 +64,7 @@ create table medicamentos (
   IDPsicofarmaco        text,
   visible                smallint,
   Refrigeracion        char(1),
+  Fraccionable         smallint,
   actualizado           timestamptz not null default now()
 );
 create index idx_medicamentos_codebar on medicamentos(codebar);

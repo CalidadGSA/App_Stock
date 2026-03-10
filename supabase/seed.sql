@@ -58,16 +58,16 @@ on conflict (idoperador) do nothing;
 -- 7. Medicamentos (dependen de rubros, subrubros, psicofarmacos)
 insert into medicamentos (
   codplex, troquel, codlab, codebar, producto, presentaci, precio, costo,
-  activo, cod_rubro, idsubrubro, idpsicofarmaco, visible, refrigeracion
+  activo, cod_rubro, idsubrubro, idpsicofarmaco, visible, refrigeracion, fraccionable
 ) values
-  (1, 12345, 10, '7790040005088', 'TAFIROL 500MG', 'CAJA x 20 COMP', 850.00, 420.00, 'S', 1, 1, 'N', 1, 'N'),
-  (2, 12346, 11, '7798040805053', 'IBUPROFENO 400MG', 'CAJA x 20 COMP', 720.50, 350.00, 'S', 1, 1, 'N', 1, 'N'),
-  (3, 12347, 12, '7793640007060', 'AMOXICILINA 500MG', 'CAJA x 15 CAPS', 1200.00, 600.00, 'S', 3, 3, 'N', 1, 'N'),
-  (4, 12348, 13, '7790040900116', 'PARACETAMOL 500MG', 'CAJA x 24 COMP', 650.00, 320.00, 'S', 1, 1, 'N', 1, 'N'),
-  (5, 12349, 14, '7702001005075', 'LOSARTAN 50MG', 'CAJA x 30 COMP', 980.00, 490.00, 'S', 2, 2, 'N', 1, 'N'),
-  (6, 12350, 15, '7798010360015', 'ENALAPRIL 10MG', 'CAJA x 40 COMP', 550.00, 280.00, 'S', 2, 2, 'N', 1, 'N'),
-  (7, 12351, 16, '7792397002091', 'METFORMINA 850MG', 'CAJA x 60 COMP', 890.00, 445.00, 'S', 4, 4, 'N', 1, 'N'),
-  (8, 12352, 17, '7791519003018', 'OMEPRAZOL 20MG', 'CAJA x 14 CAPS', 1100.00, 550.00, 'S', 5, 5, 'N', 1, 'N')
+  (1, 12345, 10, '7790040005088', 'TAFIROL 500MG', 'CAJA x 20 COMP', 850.00, 420.00, 'S', 1, 1, 'N', 1, 'N', 0),
+  (2, 12346, 11, '7798040805053', 'IBUPROFENO 400MG', 'CAJA x 20 COMP', 720.50, 350.00, 'S', 1, 1, 'N', 1, 'N', 0),
+  (3, 12347, 12, '7793640007060', 'AMOXICILINA 500MG', 'CAJA x 15 CAPS', 1200.00, 600.00, 'S', 3, 3, 'N', 1, 'N', 0),
+  (4, 12348, 13, '7790040900116', 'PARACETAMOL 500MG', 'CAJA x 24 COMP', 650.00, 320.00, 'S', 1, 1, 'N', 1, 'N', 0),
+  (5, 12349, 14, '7702001005075', 'LOSARTAN 50MG', 'CAJA x 30 COMP', 980.00, 490.00, 'S', 2, 2, 'N', 1, 'N', 0),
+  (6, 12350, 15, '7798010360015', 'ENALAPRIL 10MG', 'CAJA x 40 COMP', 550.00, 280.00, 'S', 2, 2, 'N', 1, 'N', 0),
+  (7, 12351, 16, '7792397002091', 'METFORMINA 850MG', 'CAJA x 60 COMP', 890.00, 445.00, 'S', 4, 4, 'N', 1, 'N', 0),
+  (8, 12352, 17, '7791519003018', 'OMEPRAZOL 20MG', 'CAJA x 14 CAPS', 1100.00, 550.00, 'S', 5, 5, 'N', 1, 'N', 0)
 on conflict (codplex) do nothing;
 
 -- 8. Sync status (opcional, para que la API de sync vea estado)

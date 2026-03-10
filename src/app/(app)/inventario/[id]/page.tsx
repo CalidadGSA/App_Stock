@@ -89,12 +89,22 @@ export default function InventarioDetailPage() {
       setErrorProducto('Ingresá una cantidad válida de unidades (>= 0)');
       return;
     }
+    const noFraccionableSinUnidades =
+      productoEscaneado.fraccionable !== 1 &&
+      (productoEscaneado.stock_unidades ?? 0) === 0;
+    if (noFraccionableSinUnidades && unidadesNum !== 0) {
+      setErrorProducto(
+        'Este producto no es fraccionable y el stock de unidades es 0; no se pueden cargar unidades sueltas.'
+      );
+      return;
+    }
+    const unidadesFinal = noFraccionableSinUnidades ? 0 : unidadesNum;
 
     // Si tenemos unidades_por_caja desde el backend, podríamos usarla; por ahora asumimos 1 unidad por caja.
     const unidadesPorCaja = productoEscaneado.unidades_por_caja && !isNaN(productoEscaneado.unidades_por_caja)
       ? productoEscaneado.unidades_por_caja
       : 1;
-    const totalUnidades = cajasNum * unidadesPorCaja + unidadesNum;
+    const totalUnidades = cajasNum * unidadesPorCaja + unidadesFinal;
 
     setGuardando(true);
     try {
@@ -111,7 +121,7 @@ export default function InventarioDetailPage() {
           stock_sist_cajas: productoEscaneado.stock_cajas ?? undefined,
           stock_sist_unidades: productoEscaneado.stock_unidades ?? undefined,
           stock_real_cajas: cajasNum || undefined,
-          stock_real_unidades: unidadesNum || undefined,
+          stock_real_unidades: unidadesFinal || undefined,
           stock_real: totalUnidades,
         }),
       });
@@ -274,16 +284,25 @@ export default function InventarioDetailPage() {
                       autoFocus
                       className="text-xl font-bold"
                     />
-                    <Input
-                      label="Stock real (unidades)"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={stockRealUnidades}
-                      onChange={e => setStockRealUnidades(e.target.value)}
-                      placeholder="0"
-                      className="text-xl font-bold"
-                    />
+                    {(() => {
+                      const noPermitirUnidades =
+                        productoEscaneado.fraccionable !== 1 &&
+                        (productoEscaneado.stock_unidades ?? 0) === 0;
+                      return (
+                        <Input
+                          label="Stock real (unidades)"
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={noPermitirUnidades ? '0' : stockRealUnidades}
+                          onChange={e => !noPermitirUnidades && setStockRealUnidades(e.target.value)}
+                          placeholder="0"
+                          className="text-xl font-bold"
+                          disabled={noPermitirUnidades}
+                          title={noPermitirUnidades ? 'Producto no fraccionable sin unidades en sistema' : undefined}
+                        />
+                      );
+                    })()}
                   </div>
                 </div>
 

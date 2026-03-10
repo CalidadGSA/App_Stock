@@ -50,6 +50,8 @@ export interface ProductoLegacy {
   stock_unidades?: number;
   /** Unidades por caja según ficha de producto/stock (si se conoce) */
   unidades_por_caja?: number;
+  /** Si el producto admite venta por unidades sueltas (1) o no (0). Base externa: tinyint. */
+  fraccionable?: number;
 }
 
 // ------------------------------------------------------------

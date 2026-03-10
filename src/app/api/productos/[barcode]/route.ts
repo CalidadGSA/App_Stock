@@ -17,7 +17,7 @@ export async function GET(
   // Buscar primero en la tabla sincronizada de medicamentos (Supabase)
   const { data: med, error } = await admin
     .from('medicamentos')
-    .select('codplex, codebar, producto, presentaci, codlab')
+    .select('codplex, codebar, producto, presentaci, codlab, fraccionable')
     .eq('codebar', barcode)
     .maybeSingle();
 
@@ -47,7 +47,7 @@ export async function GET(
     }
   }
 
-  // Intentar obtener stock en tiempo real desde la tabla `stock` de la sucursal actual
+  // Stock en tiempo real desde la base MySQL externa (Onze Center)
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
 
@@ -58,22 +58,15 @@ export async function GET(
 
   if (sucursalId) {
     const sucursalNum = parseInt(sucursalId, 10);
-    if (!Number.isNaN(sucursalNum)) {
-      const { data: stockRow, error: stockError } = await admin
-        .from('stock')
-        .select('sucursal, idproducto, cantidad, unidades, unidadesprod')
-        .eq('sucursal', sucursalNum)
-        .eq('idproducto', med.codplex)
-        .maybeSingle();
-
-      if (stockError) {
-        console.error('Error leyendo stock para producto:', stockError);
-      }
+    const idProducto = Number(med.codplex);
+    if (!Number.isNaN(sucursalNum) && !Number.isNaN(idProducto)) {
+      const { getStockFromLegacy } = await import('@/lib/legacy-db/mysql-stock');
+      const stockRow = await getStockFromLegacy(sucursalNum, idProducto);
 
       if (stockRow) {
-        const cajas = Number((stockRow as any).cantidad ?? 0);
-        const unidadesSueltas = Number((stockRow as any).unidades ?? 0);
-        const unidadesProd = Number((stockRow as any).unidadesprod ?? 0) || 1;
+        const cajas = Number(stockRow.cantidad ?? 0);
+        const unidadesSueltas = Number(stockRow.unidades ?? 0);
+        const unidadesProd = Number(stockRow.unidadesprod ?? 0) || 1;
 
         stock_cajas = cajas;
         stock_unidades = unidadesSueltas;
@@ -93,6 +86,7 @@ export async function GET(
     stock_cajas,
     stock_unidades,
     unidades_por_caja,
+    fraccionable: med.fraccionable != null ? Number(med.fraccionable) : undefined,
   };
 
   return NextResponse.json({ data: producto });
