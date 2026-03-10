@@ -10,6 +10,14 @@ interface DetalleBody {
   presentacion?: string;
   laboratorio?: string;
   stock_sistema: number;
+  /** Stock de sistema desglosado, si el frontend lo conoce */
+  stock_sist_cajas?: number;
+  stock_sist_unidades?: number;
+  /** Cantidad contada en cajas (opcional) */
+  stock_real_cajas?: number;
+  /** Cantidad contada en unidades sueltas (opcional) */
+  stock_real_unidades?: number;
+  /** Total contado en unidades (si el frontend lo calculó) */
   stock_real: number;
 }
 
@@ -41,6 +49,15 @@ export async function POST(
 
   const body = await request.json() as DetalleBody;
 
+  const cajas =
+    typeof body.stock_real_cajas === 'number' && !Number.isNaN(body.stock_real_cajas)
+      ? body.stock_real_cajas
+      : null;
+  const unidadesSueltas =
+    typeof body.stock_real_unidades === 'number' && !Number.isNaN(body.stock_real_unidades)
+      ? body.stock_real_unidades
+      : null;
+
   const { data, error } = await admin
     .from('controles_inventario_detalle')
     .insert({
@@ -51,6 +68,16 @@ export async function POST(
       presentacion: body.presentacion ?? null,
       laboratorio: body.laboratorio ?? null,
       stock_sistema: body.stock_sistema,
+      stock_sist_cajas:
+        typeof body.stock_sist_cajas === 'number' && !Number.isNaN(body.stock_sist_cajas)
+          ? body.stock_sist_cajas
+          : null,
+      stock_sist_unidades:
+        typeof body.stock_sist_unidades === 'number' && !Number.isNaN(body.stock_sist_unidades)
+          ? body.stock_sist_unidades
+          : null,
+      stock_real_cajas: cajas,
+      stock_real_unidades: unidadesSueltas,
       stock_real: body.stock_real,
     })
     .select()

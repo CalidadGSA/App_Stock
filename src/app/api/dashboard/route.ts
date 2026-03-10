@@ -41,7 +41,7 @@ export async function GET() {
         .gte('fecha_vencimiento', hoyStr)
         .lte('fecha_vencimiento', en60dias),
       admin.from('controles_inventario')
-        .select('id, fecha_inicio, estado, sucursales(nombrefantasia)')
+        .select('id, fecha_inicio, estado, descripcion, sucursales(nombrefantasia)')
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),

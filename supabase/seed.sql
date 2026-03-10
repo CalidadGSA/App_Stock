@@ -77,7 +77,7 @@ on conflict (key) do nothing;
 
 -- 9. Un control de inventario de prueba (opcional)
 -- Solo se inserta si existen sucursal 1 y operador 1. Re-ejecutar el seed agrega más controles.
-insert into controles_inventario (sucursal_id, usuario_id, estado, observaciones)
+insert into controles_inventario (sucursal_id, usuario_id, estado, descripcion)
 select 1, 1, 'en_progreso', 'Control de prueba seed'
 where exists (select 1 from sucursales where sucursal = 1)
   and exists (select 1 from operadores where idoperador = 1);

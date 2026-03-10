@@ -50,6 +50,20 @@ const {
 const {
   syncPsicofarmacosState,
 } = require('../../controllers/obrasSociales/syncpsicofarmacos');
+const {
+  getlaboratorios,
+  synclaboratorios,
+} = require('../../controllers/obrasSociales/controller');
+const {
+  syncLaboratoriosState,
+} = require('../../controllers/obrasSociales/synclaboratorios');
+const {
+  getstock,
+  syncstock,
+} = require('../../controllers/obrasSociales/controller');
+const {
+  syncStockState,
+} = require('../../controllers/obrasSociales/syncstock');
 
 router.get('/', getdatos);
 router.post('/sync', syncdatos);
@@ -132,6 +146,30 @@ router.get('/psicofarmacos', getpsicofarmacos);
 router.post('/psicofarmacos/sync', syncpsicofarmacos);
 router.get('/psicofarmacos/sync/progress', (req, res) => {
   const { processed, total, entity } = syncPsicofarmacosState;
+  res.json({
+    processed,
+    total,
+    entity: entity || null,
+  });
+});
+
+// Stock
+router.get('/stock', getstock);
+router.post('/stock/sync', syncstock);
+router.get('/stock/sync/progress', (req, res) => {
+  const { processed, total, entity } = syncStockState;
+  res.json({
+    processed,
+    total,
+    entity: entity || null,
+  });
+});
+
+// Laboratorios
+router.get('/laboratorios', getlaboratorios);
+router.post('/laboratorios/sync', synclaboratorios);
+router.get('/laboratorios/sync/progress', (req, res) => {
+  const { processed, total, entity } = syncLaboratoriosState;
   res.json({
     processed,
     total,

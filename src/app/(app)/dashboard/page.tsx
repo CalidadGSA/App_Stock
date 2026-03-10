@@ -126,6 +126,11 @@ export default function DashboardPage() {
                         }
                         <div>
                           <p className="text-sm font-medium text-gray-800">{formatDateTime(inv.fecha_inicio)}</p>
+                          {inv.descripcion && (
+                            <p className="text-xs text-gray-500 truncate max-w-[220px]">
+                              {inv.descripcion}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
