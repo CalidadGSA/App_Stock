@@ -33,12 +33,16 @@ export async function POST(request: NextRequest) {
   const sucursalId = cookieStore.get('sucursal_id')?.value;
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
-  const body = await request.json() as { observaciones?: string };
+  const body = await request.json() as { descripcion?: string };
 
   const admin = await createAdminClient();
   const { data, error } = await admin
     .from('controles_inventario')
-    .insert({ sucursal_id: parseInt(sucursalId, 10), usuario_id: operador.idoperador, observaciones: body.observaciones ?? null })
+    .insert({
+      sucursal_id: parseInt(sucursalId, 10),
+      usuario_id: operador.idoperador,
+      descripcion: body.descripcion ?? null,
+    })
     .select()
     .single();
 

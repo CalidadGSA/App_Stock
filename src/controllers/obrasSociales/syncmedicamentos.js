@@ -164,7 +164,8 @@ async function syncMedicamentosLegacyToSupabase({ mode, limit: limitParam } = {}
             IDSubRubro     AS idsubrubro,
             IDPsicofarmaco AS idpsicofarmaco,
             visible        AS visible,
-            Refrigeracion  AS refrigeracion
+            Refrigeracion  AS refrigeracion,
+            Fraccionable   AS fraccionable
           FROM medicamentos
           WHERE CodPlex > ?
           ORDER BY CodPlex
@@ -211,6 +212,7 @@ async function syncMedicamentosLegacyToSupabase({ mode, limit: limitParam } = {}
             idpsicofarmaco: r.idpsicofarmaco,
             visible: r.visible,
             refrigeracion: r.refrigeracion,
+            fraccionable: r.fraccionable,
           });
 
           processedInBatch++;

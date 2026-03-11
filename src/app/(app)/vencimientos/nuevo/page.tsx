@@ -66,11 +66,11 @@ export default function NuevoVencimientoPage() {
         <CardContent>
           <form onSubmit={handleCrear} className="flex flex-col gap-4">
             <Input
-              label="Observaciones (opcional)"
+              label="Descripción (opcional)"
               value={observaciones}
               onChange={e => setObservaciones(e.target.value)}
-              placeholder="Ej: Heladera, sector antibióticos..."
-              hint="Podés agregar una nota para identificar este control"
+              placeholder="Ej: Medicamentos, Perfumeria..."
+              hint="Podés agregar una descripción para identificar este control"
             />
 
             {error && (

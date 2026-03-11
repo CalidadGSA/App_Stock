@@ -19,6 +19,12 @@ const {
 const {
   syncPsicofarmacosLegacyToSupabase,
 } = require('../controllers/obrasSociales/syncpsicofarmacos');
+const {
+  syncStockLegacyToSupabase,
+} = require('../controllers/obrasSociales/syncstock');
+const {
+  syncLaboratoriosLegacyToSupabase,
+} = require('../controllers/obrasSociales/synclaboratorios');
 
 /* ======================================================
    ⚙️ CONFIG
@@ -40,7 +46,7 @@ cron.schedule(
   SYNC_CRON_DATOS,
   async () => {
     console.log(
-      '\n⏰ Cron → Sync sucursales + operadores + medicamentos (legacy → interna)',
+      '\n⏰ Cron → Sync sucursales + operadores + medicamentos + catálogos + laboratorios + stock (legacy → interna)',
       new Date().toLocaleString('es-AR', { timeZone: TZ })
     );
 
@@ -52,6 +58,8 @@ cron.schedule(
       await syncSubrubrosLegacyToSupabase({ mode: 'ALL' });
       await syncCategoriasLegacyToSupabase({ mode: 'ALL' });
       await syncPsicofarmacosLegacyToSupabase({ mode: 'ALL' });
+      await syncLaboratoriosLegacyToSupabase({ mode: 'ALL' });
+      await syncStockLegacyToSupabase({}); // stock respeta SYNC_LIMIT si se define
     } catch (e) {
       console.error(
         '❌ Error cron sync datos (sucursales/operadores/medicamentos/rubros/subrubros/categorias/psicofarmacos):',

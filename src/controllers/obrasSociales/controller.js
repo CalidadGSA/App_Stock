@@ -27,6 +27,20 @@ const {
   syncPsicofarmacosLegacyToSupabase,
   syncPsicofarmacosState,
 } = require('./syncpsicofarmacos');
+const {
+  syncStockLegacyToSupabase,
+  syncStockState,
+} = require('./syncstock');
+const {
+  syncLaboratoriosLegacyToSupabase,
+  syncLaboratoriosState,
+} = require('./synclaboratorios');
+const {
+  syncProductosCodebarsFromQuantio,
+} = require('./syncproductoscodebars');
+const {
+  syncMedicamentosCodebars,
+} = require('./syncmedicamentosCodebars');
 
 /* ======================================================
    📡 GET /api/datos  (sucursales en Supabase)
@@ -85,6 +99,35 @@ exports.getdatos = async (req, res) => {
   } catch (error) {
     console.error('💥 Error leyendo sucursales desde Supabase:', error);
     res.status(500).json({ message: 'Error al obtener sucursales' });
+  }
+};
+
+/* ======================================================
+   🔄 POST /api/sync/productoscodebars (Quantio → Supabase)
+   👉 Copia IDProducto + codebar desde Quantio a la tabla productoscodebars
+====================================================== */
+exports.syncproductoscodebars = async (req, res) => {
+  try {
+    const result = await syncProductosCodebarsFromQuantio();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('💥 Error sync productoscodebars:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+};
+
+/* ======================================================
+   🔄 POST /api/datos/medicamentos/codebars/sync
+   👉 Cruza medicamentos.codplex con productoscodebars.idproducto y
+      rellena codebar2, codebar3 y codebar4
+====================================================== */
+exports.syncmedicamentoscodebars = async (req, res) => {
+  try {
+    const result = await syncMedicamentosCodebars();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('💥 Error sync medicamentos codebars:', e);
+    res.status(500).json({ ok: false, error: e.message });
   }
 };
 
@@ -289,6 +332,166 @@ exports.getmedicamentos = async (req, res) => {
   } catch (error) {
     console.error('💥 Error leyendo medicamentos desde Supabase:', error);
     res.status(500).json({ message: 'Error al obtener medicamentos' });
+  }
+};
+
+/* ======================================================
+   📡 GET /api/datos/laboratorios  (laboratorios en Supabase)
+   👉 SOLO LECTURA + estado de sync
+====================================================== */
+exports.getlaboratorios = async (req, res) => {
+  const page = parseInt(req.query.page || '1', 10);
+  const limit = parseInt(req.query.limit || '50', 10);
+  const search = req.query.search || '';
+  const offset = (page - 1) * limit;
+
+  try {
+    const supabase = getSupabaseAdmin();
+
+    const hasSearch = !!search;
+    let query = supabase
+      .from('laboratorios')
+      .select('codlab, laborato', {
+        count: 'exact',
+      });
+
+    if (hasSearch) {
+      query = query.or(
+        [
+          `laborato.ilike.%${search}%`,
+          `codlab::text.ilike.%${search}%`,
+        ].join(',')
+      );
+    }
+
+    query = query
+      .order('codlab', { ascending: true })
+      .range(offset, offset + limit - 1);
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    res.json({
+      page,
+      limit,
+      total: count || 0,
+      data: data || [],
+      sync: {
+        inProgress: syncLaboratoriosState.inProgress,
+        completed: syncLaboratoriosState.completed,
+        total: syncLaboratoriosState.total,
+        processed: syncLaboratoriosState.processed,
+        percent:
+          syncLaboratoriosState.total > 0
+            ? Math.round(
+                (syncLaboratoriosState.processed / syncLaboratoriosState.total) *
+                  100
+              )
+            : 0,
+      },
+    });
+  } catch (error) {
+    console.error('💥 Error leyendo laboratorios desde Supabase:', error);
+    res.status(500).json({ message: 'Error al obtener laboratorios' });
+  }
+};
+
+/* ======================================================
+   🔄 POST /api/sync/laboratorios  (dispara sync legacy → Supabase)
+====================================================== */
+exports.synclaboratorios = async (req, res) => {
+  const limit = req.body?.limit ? Number(req.body.limit) : undefined;
+  const mode =
+    typeof req.body?.mode === 'string' ? req.body.mode : process.env.SYNC_MODE || 'ALL';
+
+  try {
+    const result = await syncLaboratoriosLegacyToSupabase({ mode, limit });
+    res.json({
+      message: 'Sync laboratorios iniciado/completado',
+      result,
+      state: syncLaboratoriosState,
+    });
+  } catch (error) {
+    console.error('💥 Error disparando sync laboratorios:', error);
+    res.status(500).json({ message: 'Error al sincronizar laboratorios' });
+  }
+};
+
+/* ======================================================
+   📡 GET /api/datos/stock  (stock en Supabase)
+   👉 SOLO LECTURA + estado de sync
+====================================================== */
+exports.getstock = async (req, res) => {
+  const page = parseInt(req.query.page || '1', 10);
+  const limit = parseInt(req.query.limit || '50', 10);
+  const search = req.query.search || '';
+  const offset = (page - 1) * limit;
+
+  try {
+    const supabase = getSupabaseAdmin();
+
+    const hasSearch = !!search;
+    let query = supabase
+      .from('stock')
+      .select('Sucursal, IDProducto, Cantidad, Unidades, UnidadesProd', {
+        count: 'exact',
+      });
+
+    if (hasSearch) {
+      query = query.or(
+        [
+          `Sucursal::text.ilike.%${search}%`,
+          `IDProducto::text.ilike.%${search}%`,
+        ].join(',')
+      );
+    }
+
+    query = query
+      .order('Sucursal', { ascending: true })
+      .order('IDProducto', { ascending: true })
+      .range(offset, offset + limit - 1);
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    res.json({
+      page,
+      limit,
+      total: count || 0,
+      data: data || [],
+      sync: {
+        inProgress: syncStockState.inProgress,
+        completed: syncStockState.completed,
+        total: syncStockState.total,
+        processed: syncStockState.processed,
+        percent:
+          syncStockState.total > 0
+            ? Math.round((syncStockState.processed / syncStockState.total) * 100)
+            : 0,
+      },
+    });
+  } catch (error) {
+    console.error('💥 Error leyendo stock desde Supabase:', error);
+    res.status(500).json({ message: 'Error al obtener stock' });
+  }
+};
+
+/* ======================================================
+   🔄 POST /api/sync/stock  (dispara sync legacy → Supabase)
+====================================================== */
+exports.syncstock = async (req, res) => {
+  const limit = req.body?.limit ? Number(req.body.limit) : undefined;
+
+  try {
+    const result = await syncStockLegacyToSupabase({ limit });
+    res.json({
+      message: 'Sync stock iniciado/completado',
+      result,
+      state: syncStockState,
+    });
+  } catch (error) {
+    console.error('💥 Error disparando sync stock:', error);
+    res.status(500).json({ message: 'Error al sincronizar stock' });
   }
 };
 

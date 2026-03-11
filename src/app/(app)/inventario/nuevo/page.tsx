@@ -10,7 +10,7 @@ import Link from 'next/link';
 
 export default function NuevoInventarioPage() {
   const router = useRouter();
-  const [observaciones, setObservaciones] = useState('');
+  const [descripcion, setDescripcion] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
@@ -23,7 +23,7 @@ export default function NuevoInventarioPage() {
       const res = await fetch('/api/inventario', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ observaciones: observaciones.trim() || undefined }),
+        body: JSON.stringify({ descripcion: descripcion.trim() || undefined }),
       });
       const json = await res.json() as { data?: { id: string }; error?: string };
 
@@ -66,11 +66,11 @@ export default function NuevoInventarioPage() {
         <CardContent>
           <form onSubmit={handleCrear} className="flex flex-col gap-4">
             <Input
-              label="Observaciones (opcional)"
-              value={observaciones}
-              onChange={e => setObservaciones(e.target.value)}
-              placeholder="Ej: Sector de analgésicos, góndola 3..."
-              hint="Podés agregar una nota para identificar este control"
+              label="Descripción (opcional)"
+              value={descripcion}
+              onChange={e => setDescripcion(e.target.value)}
+              placeholder="Ej: Medicamentos, Perfumeria..."
+              hint="Podés agregar una descripción para identificar este inventario"
             />
 
             {error && (

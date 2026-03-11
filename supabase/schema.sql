@@ -54,6 +54,9 @@ create table medicamentos (
   Troquel       bigint,
   CodLab        integer,
   codebar          text ,
+  codebar2         text,
+  codebar3         text,
+  codebar4         text,
   Producto         text,
   Presentaci          text,
   Precio              double precision,
@@ -64,6 +67,7 @@ create table medicamentos (
   IDPsicofarmaco        text,
   visible                smallint,
   Refrigeracion        char(1),
+  Fraccionable         smallint,
   actualizado           timestamptz not null default now()
 );
 create index idx_medicamentos_codebar on medicamentos(codebar);
@@ -97,6 +101,41 @@ create table psicofarmacos (
 
 
 -- ------------------------------------------------------------
+-- LABORATORIOS
+-- ------------------------------------------------------------
+create table laboratorios (
+  CodLab   integer primary key,
+  Laborato text
+);
+
+
+-- ------------------------------------------------------------
+-- STOCK ACTUAL POR SUCURSAL Y PRODUCTO (sincronizado desde base legacy)
+-- ------------------------------------------------------------
+create table stock (
+  Sucursal      integer not null references sucursales(Sucursal),
+  IDProducto    bigint  not null,
+  Cantidad      numeric(14,3) not null default 0,
+  Unidades      integer       not null default 0,
+  UnidadesProd  integer       not null default 1,
+  actualizado   timestamptz   not null default now(),
+  primary key (Sucursal, IDProducto)
+);
+create index idx_stock_idproducto on stock(IDProducto);
+
+
+-- ------------------------------------------------------------
+-- PRODUCTOS ↔ CODEBARS (múltiples códigos por producto, desde Quantio)
+-- ------------------------------------------------------------
+create table productoscodebars (
+  IDProducto  bigint not null,
+  codebar     text   not null,
+  primary key (IDProducto, codebar)
+);
+create index idx_productoscodebars_codebar on productoscodebars(codebar);
+
+
+-- ------------------------------------------------------------
 -- CONTROLES DE INVENTARIO  (cabecera)
 -- ------------------------------------------------------------
 create table controles_inventario (
@@ -106,7 +145,7 @@ create table controles_inventario (
   fecha_inicio timestamptz not null default now(),
   fecha_fin    timestamptz,
   estado       estado_control not null default 'en_progreso',
-  observaciones text,
+  descripcion  text,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
@@ -127,6 +166,14 @@ create table controles_inventario_detalle (
   presentacion        text,
   laboratorio         text,
   stock_sistema       numeric(12,2) not null default 0,
+  -- stock de sistema expresado en cajas/unidades (si se disponía al momento del conteo)
+  stock_sist_cajas    numeric(12,2),
+  stock_sist_unidades numeric(12,2),
+  -- Cantidad contada en cajas (opcional, para que el usuario ingrese en cajas)
+  stock_real_cajas    numeric(12,2),
+  -- Cantidad contada en unidades sueltas (opcional)
+  stock_real_unidades numeric(12,2),
+  -- Total contado en unidades (cajas*unidades_por_caja + unidades_sueltas)
   stock_real          numeric(12,2) not null default 0,
   diferencia          numeric(12,2) generated always as (stock_real - stock_sistema) stored,
   fecha_registro      timestamptz not null default now()
@@ -190,12 +237,25 @@ create table if not exists audit_log (
   created_at timestamptz not null default now()
 );
 
+create table if not exists auth_log (
+  id              serial primary key,
+  username        text,
+  sucursal_nombre text,
+  ip_address      text,
+  action          text,
+  session_id      text,
+  user_agent      text,
+  success         boolean,
+  created_at      timestamptz not null default now()
+);
+
 -- ------------------------------------------------------------
 -- ROW LEVEL SECURITY  (habilitado; acceso via service_role desde backend)
 -- ------------------------------------------------------------
 alter table sucursales                   enable row level security;
 alter table operadores                   enable row level security;
 alter table medicamentos                 enable row level security;
+alter table stock                        enable row level security;
 alter table rubros                      enable row level security;
 alter table subrubros                   enable row level security;
 alter table categorias                  enable row level security;

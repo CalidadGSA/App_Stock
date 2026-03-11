@@ -91,9 +91,26 @@ export default function VencimientoDetailPage() {
   async function handleGuardarLotes() {
     if (!productoEscaneado) return;
 
-    const lotesValidos = lotes.filter(l => l.fecha_vencimiento && parseFloat(l.cantidad) > 0);
+    // Cada lote debe tener fecha y cantidad > 0, sin huecos
+    const hayIncompletos = lotes.some(l => {
+      const tieneFecha = !!l.fecha_vencimiento;
+      const cantNum = parseFloat(l.cantidad);
+      const tieneCantidad = !isNaN(cantNum) && cantNum > 0;
+      return (tieneFecha && !tieneCantidad) || (!tieneFecha && (l.cantidad || '').trim() !== '');
+    });
+
+    if (hayIncompletos) {
+      setErrorProducto('Completá fecha y cantidad en todos los lotes o eliminá los que no uses.');
+      return;
+    }
+
+    const lotesValidos = lotes.filter(l => {
+      const cantNum = parseFloat(l.cantidad);
+      return l.fecha_vencimiento && !isNaN(cantNum) && cantNum > 0;
+    });
+
     if (lotesValidos.length === 0) {
-      setErrorProducto('Ingresá al menos una fecha de vencimiento y cantidad válida');
+      setErrorProducto('Ingresá al menos una fecha de vencimiento y cantidad válida.');
       return;
     }
 
@@ -196,8 +213,10 @@ export default function VencimientoDetailPage() {
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
               onScan={handleScan}
-              disabled={buscandoProducto || guardando}
+              // Mientras hay un producto cargado o se están guardando lotes, desactivamos el escáner
+              disabled={buscandoProducto || guardando || !!productoEscaneado}
               placeholder="Escanear o ingresar código de barras..."
+              autoFocusInput={!productoEscaneado}
             />
 
             {buscandoProducto && (
@@ -293,6 +312,7 @@ export default function VencimientoDetailPage() {
                     size="md"
                     loading={guardando}
                     onClick={handleGuardarLotes}
+                    disabled={lotes.every(l => !l.fecha_vencimiento && (l.cantidad || '').trim() === '')}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-700"
                   >
                     Confirmar
