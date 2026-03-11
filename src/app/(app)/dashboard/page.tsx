@@ -105,7 +105,12 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos inventarios</h3>
-              {/* Acciones principales están en el Navbar; acá solo listamos. */}
+              <Link
+                href="/inventario"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Ver todos
+              </Link>
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -152,11 +157,12 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos controles de vencimientos</h3>
-              {stats?.rol !== 'admin' && (
-                <Link href="/vencimientos/nuevo" className="text-xs text-blue-600 hover:underline">
-                  Nuevo control
-                </Link>
-              )}
+              <Link
+                href="/vencimientos"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Ver todos
+              </Link>
             </div>
           </CardHeader>
           <CardContent className="p-0">
