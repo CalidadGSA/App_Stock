@@ -399,7 +399,12 @@ export default function InventarioDetailPage() {
                       <tr key={det.id} className="hover:bg-gray-50">
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-900">{det.descripcion}</p>
-                          <p className="text-xs text-gray-400">{det.presentacion} · {det.laboratorio}</p>
+                          <p className="text-xs text-gray-400">
+                            {det.presentacion} · {det.laboratorio}
+                          </p>
+                          <p className="mt-0.5 font-mono text-sm text-gray-700">
+                            {det.codigo_barras}
+                          </p>
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">
                           <div className="flex flex-col items-end gap-0.5">

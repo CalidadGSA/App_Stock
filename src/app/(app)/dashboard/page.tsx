@@ -98,6 +98,20 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Ajustes (solo admin) */}
+      {stats?.rol === 'admin' && (
+        <div className="flex justify-end">
+          <Button
+            size="lg"
+            variant="secondary"
+            className="border border-gray-300 text-gray-800 px-6 shadow-sm"
+            onClick={() => (window.location.href = '/ajustes')}
+          >
+            Ajustes
+          </Button>
+        </div>
+      )}
+
       {/* Últimas actividades */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Últimos inventarios */}
