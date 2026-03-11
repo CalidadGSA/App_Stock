@@ -105,7 +105,7 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos inventarios</h3>
-              <Link href="/inventario/nuevo" className="text-xs text-blue-600 hover:underline">Ver todos</Link>
+              {/* Acciones principales están en el Navbar; acá solo listamos. */}
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -152,7 +152,11 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos controles de vencimientos</h3>
-              <Link href="/vencimientos/nuevo" className="text-xs text-blue-600 hover:underline">Ver todos</Link>
+              {stats?.rol !== 'admin' && (
+                <Link href="/vencimientos/nuevo" className="text-xs text-blue-600 hover:underline">
+                  Nuevo control
+                </Link>
+              )}
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -201,11 +205,7 @@ export default function DashboardPage() {
                 <p className="text-sm text-orange-600">Vencen en los próximos 30 días</p>
               </div>
             </div>
-            <Link href="/vencimientos/nuevo">
-              <Button variant="outline" size="sm" className="border-orange-300 text-orange-700 hover:bg-orange-100">
-                Controlar
-              </Button>
-            </Link>
+            {/* Acción principal para vencimientos también está accesible desde el Navbar */}
           </CardContent>
         </Card>
       )}

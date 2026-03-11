@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LogOut, ClipboardList, CalendarClock, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,22 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [rol, setRol] = useState<'admin' | 'operador_sucursal'>('operador_sucursal');
+
+  useEffect(() => {
+    async function cargarRol() {
+      try {
+        const res = await fetch('/api/dashboard');
+        const json = await res.json();
+        if (json?.data?.rol === 'admin') {
+          setRol('admin');
+        }
+      } catch {
+        // Ignorar errores: se mantiene rol por defecto
+      }
+    }
+    void cargarRol();
+  }, []);
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -53,25 +69,56 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
             </span>
           </div>
           <div className="hidden md:flex items-center gap-2">
-            <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700">
-              <Link href="/inventario/nuevo" className="flex items-center gap-1.5">
-                <ClipboardList className="h-4 w-4" />
-                Iniciar inventario
-              </Link>
-            </Button>
-            <Button asChild size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-50">
-              <Link href="/vencimientos/nuevo" className="flex items-center gap-1.5">
-                <CalendarClock className="h-4 w-4" />
-                Control de vencimientos
-              </Link>
-            </Button>
+            {rol === 'admin' ? (
+              <>
+                <Button
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={() => router.push('/inventario/auditoria')}
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Auditoría
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                  onClick={() => router.push('/inventario/ocasional')}
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Inventario ocasional
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={() => router.push('/inventario/nuevo')}
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Iniciar inventario
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                  onClick={() => router.push('/vencimientos/nuevo')}
+                >
+                  <CalendarClock className="h-4 w-4" />
+                  Control de vencimientos
+                </Button>
+              </>
+            )}
           </div>
-          <button
-            onClick={handleCambiarSucursal}
-            className="hidden md:flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
-          >
-            Cambiar sucursal
-          </button>
+          {rol === 'admin' && (
+            <button
+              onClick={handleCambiarSucursal}
+              className="hidden md:flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
+            >
+              Cambiar sucursal
+            </button>
+          )}
           <button
             onClick={handleLogout}
             disabled={loggingOut}
@@ -97,22 +144,63 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
             <p className="text-xs text-gray-500">{nombreUsuario}</p>
           </div>
           <nav className="flex flex-col gap-1">
-            <Button asChild size="sm" className="w-full justify-start bg-blue-600 hover:bg-blue-700">
-              <Link href="/inventario/nuevo" onClick={() => setMenuOpen(false)} className="flex items-center gap-2">
-                <ClipboardList className="h-4 w-4" /> Iniciar inventario
-              </Link>
-            </Button>
-            <Button asChild size="sm" variant="outline" className="w-full justify-start">
-              <Link href="/vencimientos/nuevo" onClick={() => setMenuOpen(false)} className="flex items-center gap-2">
-                <CalendarClock className="h-4 w-4" /> Control de vencimientos
-              </Link>
-            </Button>
-            <button
-              onClick={handleCambiarSucursal}
-              className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 text-left w-full"
-            >
-              Cambiar sucursal
-            </button>
+            {rol === 'admin' ? (
+              <>
+                <Button
+                  size="sm"
+                  className="w-full justify-start bg-blue-600 hover:bg-blue-700"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    router.push('/inventario/auditoria');
+                  }}
+                >
+                  <ClipboardList className="h-4 w-4" /> Auditoría
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    router.push('/inventario/ocasional');
+                  }}
+                >
+                  <ClipboardList className="h-4 w-4" /> Inventario ocasional
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  className="w-full justify-start bg-blue-600 hover:bg-blue-700"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    router.push('/inventario/nuevo');
+                  }}
+                >
+                  <ClipboardList className="h-4 w-4" /> Iniciar inventario
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    router.push('/vencimientos/nuevo');
+                  }}
+                >
+                  <CalendarClock className="h-4 w-4" /> Control de vencimientos
+                </Button>
+              </>
+            )}
+            {rol === 'admin' && (
+              <button
+                onClick={handleCambiarSucursal}
+                className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 text-left w-full"
+              >
+                Cambiar sucursal
+              </button>
+            )}
             <button
               onClick={handleLogout}
               disabled={loggingOut}

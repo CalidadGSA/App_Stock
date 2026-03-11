@@ -129,6 +129,7 @@ export interface ControlVencimientoDetalle {
 // ------------------------------------------------------------
 
 export interface DashboardStats {
+  rol: RolUsuario;
   inventarios_total: number;
   inventarios_mes: number;
   items_con_diferencia: number;
