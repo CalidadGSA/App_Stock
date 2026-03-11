@@ -42,7 +42,16 @@ export interface ProductoLegacy {
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
+  /** Stock del sistema en unidades totales (cajas*unidades_por_caja + unidades_sueltas) */
   stock_sistema: number;
+  /** Stock del sistema expresado en cajas (si se conoce) */
+  stock_cajas?: number;
+  /** Stock del sistema expresado en unidades sueltas (si se conoce) */
+  stock_unidades?: number;
+  /** Unidades por caja según ficha de producto/stock (si se conoce) */
+  unidades_por_caja?: number;
+  /** Si el producto admite venta por unidades sueltas (1) o no (0). Base externa: tinyint. */
+  fraccionable?: number;
 }
 
 // ------------------------------------------------------------
@@ -56,7 +65,7 @@ export interface ControlInventario {
   fecha_inicio: string;
   fecha_fin: string | null;
   estado: EstadoControl;
-  observaciones: string | null;
+  descripcion: string | null;
   created_at: string;
   updated_at: string;
   sucursales?: Pick<Sucursal, 'nombre' | 'codigo_interno'>;
@@ -72,6 +81,13 @@ export interface ControlInventarioDetalle {
   presentacion: string | null;
   laboratorio: string | null;
   stock_sistema: number;
+  stock_sist_cajas?: number | null;
+  stock_sist_unidades?: number | null;
+   /** Cantidad contada en cajas (si se registró en cajas/unidades) */
+  stock_real_cajas?: number | null;
+  /** Cantidad contada en unidades sueltas (si se registró en cajas/unidades) */
+  stock_real_unidades?: number | null;
+  /** Total contado en unidades (cajas*unidades_por_caja + unidades_sueltas) */
   stock_real: number;
   diferencia: number;
   fecha_registro: string;
@@ -113,6 +129,7 @@ export interface ControlVencimientoDetalle {
 // ------------------------------------------------------------
 
 export interface DashboardStats {
+  rol: RolUsuario;
   inventarios_total: number;
   inventarios_mes: number;
   items_con_diferencia: number;
@@ -120,7 +137,7 @@ export interface DashboardStats {
   productos_vencidos: number;
   productos_por_vencer_30: number;
   productos_por_vencer_60: number;
-  ultimos_inventarios: Pick<ControlInventario, 'id' | 'fecha_inicio' | 'estado' | 'sucursales'>[];
+  ultimos_inventarios: Pick<ControlInventario, 'id' | 'fecha_inicio' | 'estado' | 'descripcion' | 'sucursales'>[];
   ultimos_vencimientos: Pick<ControlVencimiento, 'id' | 'fecha_inicio' | 'estado' | 'sucursales'>[];
 }
 

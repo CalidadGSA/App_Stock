@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Package, Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -69,14 +69,15 @@ export default function LoginPage() {
       setError('Error inesperado. Intentá de nuevo.');
     } finally {
       setLoading(false);
+      
     }
   }
 
   return (
     <div className="w-full max-w-sm">
       <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 shadow-lg">
-          <Package className="h-8 w-8 text-white" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center">
+          <img src="/logogsa800.png" alt="Logo" className="h-16 w-16 object-contain" />
         </div>
         <h1 className="text-2xl font-bold text-gray-900">GestiónStock</h1>
         <p className="mt-1 text-sm text-gray-500">Control de inventario y vencimientos</p>

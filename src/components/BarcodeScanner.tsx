@@ -17,9 +17,16 @@ interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  /** Si true, mantiene el foco en el input del escáner (ideal para lector USB). */
+  autoFocusInput?: boolean;
 }
 
-export default function BarcodeScanner({ onScan, disabled, placeholder = 'Escanear código de barras...' }: BarcodeScannerProps) {
+export default function BarcodeScanner({
+  onScan,
+  disabled,
+  placeholder = 'Escanear código de barras...',
+  autoFocusInput = true,
+}: BarcodeScannerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [inputValue, setInputValue] = useState('');
@@ -29,10 +36,11 @@ export default function BarcodeScanner({ onScan, disabled, placeholder = 'Escane
 
   // Mantener el input enfocado (para lector USB / PDA)
   const refocus = useCallback(() => {
+    if (!autoFocusInput) return;
     if (!cameraActive && inputRef.current && !disabled) {
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [cameraActive, disabled]);
+  }, [autoFocusInput, cameraActive, disabled]);
 
   useEffect(() => {
     refocus();
@@ -100,13 +108,13 @@ export default function BarcodeScanner({ onScan, disabled, placeholder = 'Escane
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            onBlur={refocus}
+            onBlur={autoFocusInput ? refocus : undefined}
             disabled={disabled || cameraActive}
             placeholder={placeholder}
             className="w-full rounded-xl border-2 border-blue-200 bg-blue-50 pl-10 pr-4 py-4 text-lg font-mono
               focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20
               disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-gray-400"
-            autoFocus
+            autoFocus={autoFocusInput}
             autoComplete="off"
             inputMode="none"
           />

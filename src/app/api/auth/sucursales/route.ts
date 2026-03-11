@@ -8,6 +8,7 @@ export async function GET() {
     .from('sucursales')
     .select('sucursal, nombrefantasia')
     .eq('activa', true)
+    .not('sucursal', 'in', '(9,10,15,18)')
     .order('nombrefantasia');
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
