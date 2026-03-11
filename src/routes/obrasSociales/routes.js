@@ -64,6 +64,12 @@ const {
 const {
   syncStockState,
 } = require('../../controllers/obrasSociales/syncstock');
+const {
+  syncproductoscodebars,
+} = require('../../controllers/obrasSociales/controller');
+const {
+  syncmedicamentoscodebars,
+} = require('../../controllers/obrasSociales/controller');
 
 router.get('/', getdatos);
 router.post('/sync', syncdatos);
@@ -164,6 +170,12 @@ router.get('/stock/sync/progress', (req, res) => {
     entity: entity || null,
   });
 });
+
+// Productos ↔ codebars (Quantio → Supabase)
+router.post('/productoscodebars/sync', syncproductoscodebars);
+
+// Completar codebar2/3/4 en medicamentos a partir de productoscodebars
+router.post('/medicamentos/codebars/sync', syncmedicamentoscodebars);
 
 // Laboratorios
 router.get('/laboratorios', getlaboratorios);

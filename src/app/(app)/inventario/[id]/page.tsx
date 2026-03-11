@@ -33,10 +33,6 @@ export default function InventarioDetailPage() {
   const [stockRealUnidades, setStockRealUnidades] = useState('');
   const [guardando, setGuardando] = useState(false);
 
-  // Cerrar control
-  const [cerrando, setCerrando] = useState(false);
-  const [confirmCerrar, setConfirmCerrar] = useState(false);
-
   const cargarControl = useCallback(async () => {
     try {
       const res = await fetch(`/api/inventario/${id}`);
@@ -145,17 +141,6 @@ export default function InventarioDetailPage() {
     await cargarControl();
   }
 
-  async function handleCerrar() {
-    setCerrando(true);
-    try {
-      const res = await fetch(`/api/inventario/${id}/cerrar`, { method: 'POST' });
-      if (res.ok) { router.push('/dashboard'); }
-    } finally {
-      setCerrando(false);
-      setConfirmCerrar(false);
-    }
-  }
-
   if (loading) return <PageSpinner />;
   if (error || !control) return (
     <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center">
@@ -198,11 +183,11 @@ export default function InventarioDetailPage() {
           <Button
             variant="danger"
             size="sm"
-            onClick={() => setConfirmCerrar(true)}
+            onClick={() => router.push(`/inventario/${id}/diferencias`)}
             className="shrink-0 gap-1"
           >
             <CheckCircle2 className="h-4 w-4" />
-            Cerrar control
+            Revisar diferencias
           </Button>
         )}
       </div>
@@ -481,25 +466,6 @@ export default function InventarioDetailPage() {
         )}
       </Card>
 
-      {/* Modal de confirmación de cierre */}
-      {confirmCerrar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">¿Cerrar control?</h3>
-            <p className="text-sm text-gray-600 mb-6">
-              Una vez cerrado no podrás agregar más productos. Esta acción no se puede deshacer.
-            </p>
-            <div className="flex gap-3">
-              <Button variant="outline" size="lg" onClick={() => setConfirmCerrar(false)} className="flex-1">
-                Cancelar
-              </Button>
-              <Button variant="danger" size="lg" loading={cerrando} onClick={handleCerrar} className="flex-1">
-                Cerrar control
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

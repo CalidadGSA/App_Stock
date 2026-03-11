@@ -54,6 +54,9 @@ create table medicamentos (
   Troquel       bigint,
   CodLab        integer,
   codebar          text ,
+  codebar2         text,
+  codebar3         text,
+  codebar4         text,
   Producto         text,
   Presentaci          text,
   Precio              double precision,
@@ -119,6 +122,17 @@ create table stock (
   primary key (Sucursal, IDProducto)
 );
 create index idx_stock_idproducto on stock(IDProducto);
+
+
+-- ------------------------------------------------------------
+-- PRODUCTOS ↔ CODEBARS (múltiples códigos por producto, desde Quantio)
+-- ------------------------------------------------------------
+create table productoscodebars (
+  IDProducto  bigint not null,
+  codebar     text   not null,
+  primary key (IDProducto, codebar)
+);
+create index idx_productoscodebars_codebar on productoscodebars(codebar);
 
 
 -- ------------------------------------------------------------

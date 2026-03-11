@@ -35,6 +35,12 @@ const {
   syncLaboratoriosLegacyToSupabase,
   syncLaboratoriosState,
 } = require('./synclaboratorios');
+const {
+  syncProductosCodebarsFromQuantio,
+} = require('./syncproductoscodebars');
+const {
+  syncMedicamentosCodebars,
+} = require('./syncmedicamentosCodebars');
 
 /* ======================================================
    📡 GET /api/datos  (sucursales en Supabase)
@@ -93,6 +99,35 @@ exports.getdatos = async (req, res) => {
   } catch (error) {
     console.error('💥 Error leyendo sucursales desde Supabase:', error);
     res.status(500).json({ message: 'Error al obtener sucursales' });
+  }
+};
+
+/* ======================================================
+   🔄 POST /api/sync/productoscodebars (Quantio → Supabase)
+   👉 Copia IDProducto + codebar desde Quantio a la tabla productoscodebars
+====================================================== */
+exports.syncproductoscodebars = async (req, res) => {
+  try {
+    const result = await syncProductosCodebarsFromQuantio();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('💥 Error sync productoscodebars:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+};
+
+/* ======================================================
+   🔄 POST /api/datos/medicamentos/codebars/sync
+   👉 Cruza medicamentos.codplex con productoscodebars.idproducto y
+      rellena codebar2, codebar3 y codebar4
+====================================================== */
+exports.syncmedicamentoscodebars = async (req, res) => {
+  try {
+    const result = await syncMedicamentosCodebars();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('💥 Error sync medicamentos codebars:', e);
+    res.status(500).json({ ok: false, error: e.message });
   }
 };
 

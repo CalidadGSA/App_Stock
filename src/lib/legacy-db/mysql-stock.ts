@@ -1,6 +1,6 @@
 /**
  * Lectura de stock desde la base MySQL externa (Onze Center).
- * Usa las variables de .env.local: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME.
+ * Usa las variables de .env.local: ONZE_DB_HOST, ONZE_DB_PORT, ONZE_DB_USER, ONZE_DB_PASSWORD, ONZE_DB_NAME.
  * Solo para uso en servidor (API routes).
  */
 
@@ -16,11 +16,11 @@ export interface StockLegacyRow {
 async function getPool() {
   if (globalThis.__mysqlStockPool) return globalThis.__mysqlStockPool;
   const mysql = await import('mysql2/promise');
-  const host = process.env.DB_HOST;
-  const port = parseInt(process.env.DB_PORT || '3306', 10);
-  const user = process.env.DB_USER;
-  const password = process.env.DB_PASSWORD;
-  const database = process.env.DB_NAME;
+  const host = process.env.ONZE_DB_HOST;
+  const port = parseInt(process.env.ONZE_DB_PORT || '3306', 10);
+  const user = process.env.ONZE_DB_USER;
+  const password = process.env.ONZE_DB_PASSWORD;
+  const database = process.env.ONZE_DB_NAME;
   if (!host || !user || !password || !database) {
     return null;
   }
