@@ -14,16 +14,50 @@ export async function GET(
 
   const admin = await createAdminClient();
 
-  // Buscar primero en la tabla sincronizada de medicamentos (Supabase)
-  const { data: med, error } = await admin
-    .from('medicamentos')
-    .select('codplex, codebar, producto, presentaci, codlab, fraccionable')
+  // Resolver primero el ID de producto desde productoscodebars (para evitar duplicados por codebar)
+  let idProductoFromBarcode: number | null = null;
+  const { data: mapRow, error: mapError } = await admin
+    .from('productoscodebars')
+    .select('idproducto')
     .eq('codebar', barcode)
+    .order('idproducto', { ascending: true })
+    .limit(1)
     .maybeSingle();
 
-  if (error) {
-    console.error('Error buscando medicamento por código de barras:', error);
-    return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
+  if (mapError) {
+    console.error('Error buscando mapping productoscodebars por código de barras:', mapError);
+  }
+  if (mapRow && typeof mapRow.idproducto === 'number') {
+    idProductoFromBarcode = mapRow.idproducto;
+  }
+
+  // Buscar en medicamentos por ID (codplex) si lo conocemos; si no, caer a buscar por codebar pero limitando a 1 fila
+  let med: any = null;
+  if (idProductoFromBarcode != null) {
+    const { data, error } = await admin
+      .from('medicamentos')
+      .select('codplex, codebar, producto, presentaci, codlab, fraccionable')
+      .eq('codplex', idProductoFromBarcode)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error buscando medicamento por ID (codplex):', error);
+      return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
+    }
+    med = data;
+  } else {
+    const { data, error } = await admin
+      .from('medicamentos')
+      .select('codplex, codebar, producto, presentaci, codlab, fraccionable')
+      .eq('codebar', barcode)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error buscando medicamento por código de barras:', error);
+      return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
+    }
+    med = data;
   }
 
   if (!med) {
@@ -60,18 +94,28 @@ export async function GET(
     const sucursalNum = parseInt(sucursalId, 10);
     const idProducto = Number(med.codplex);
     if (!Number.isNaN(sucursalNum) && !Number.isNaN(idProducto)) {
-      const { getStockFromLegacy } = await import('@/lib/legacy-db/mysql-stock');
-      const stockRow = await getStockFromLegacy(sucursalNum, idProducto);
+      try {
+        const { getStockFromLegacy } = await import('@/lib/legacy-db/mysql-stock');
 
-      if (stockRow) {
-        const cajas = Number(stockRow.cantidad ?? 0);
-        const unidadesSueltas = Number(stockRow.unidades ?? 0);
-        const unidadesProd = Number(stockRow.unidadesprod ?? 0) || 1;
+        // Evitar que la primera conexión lenta a MySQL bloquee toda la respuesta.
+        const timeoutMs = 1500;
+        const stockRow = await Promise.race([
+          getStockFromLegacy(sucursalNum, idProducto),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+        ]);
 
-        stock_cajas = cajas;
-        stock_unidades = unidadesSueltas;
-        unidades_por_caja = unidadesProd;
-        stock_sistema = cajas * unidadesProd + unidadesSueltas;
+        if (stockRow) {
+          const cajas = Number(stockRow.cantidad ?? 0);
+          const unidadesSueltas = Number(stockRow.unidades ?? 0);
+          const unidadesProd = Number(stockRow.unidadesprod ?? 0) || 1;
+
+          stock_cajas = cajas;
+          stock_unidades = unidadesSueltas;
+          unidades_por_caja = unidadesProd;
+          stock_sistema = cajas * unidadesProd + unidadesSueltas;
+        }
+      } catch (e) {
+        console.error('Error obteniendo stock legacy para producto', med.codplex, e);
       }
     }
   }

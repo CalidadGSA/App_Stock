@@ -18,7 +18,7 @@ export async function POST(
   const admin = await createAdminClient();
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id')
+    .select('estado, sucursal_id, categoria_macro, fecha_inicio')
     .eq('id', controlId)
     .single();
 
@@ -35,5 +35,50 @@ export async function POST(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Si el control tiene categoria_macro, incrementar vecesInventariado en base_productos
+  const categoriaMacro = control.categoria_macro as 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
+  if (categoriaMacro && sucursalId) {
+    const fechaControl = (control.fecha_inicio as string).slice(0, 10);
+    const sucursalNum = parseInt(sucursalId, 10);
+
+    const { data: trRows, error: trError } = await admin
+      .from('base_productos')
+      .select('trimestre')
+      .eq('idsucursal', sucursalNum)
+      .eq('categoriamacro', categoriaMacro)
+      .lte('fechainicio', fechaControl)
+      .gte('fechafin', fechaControl)
+      .limit(1);
+
+    if (!trError && trRows && trRows.length > 0) {
+      const trimestre = (trRows[0] as { trimestre: string }).trimestre;
+
+      const { data: detRows, error: detError } = await admin
+        .from('controles_inventario_detalle')
+        .select('producto_id_sistema')
+        .eq('control_id', controlId);
+
+      if (!detError && detRows && detRows.length > 0) {
+        const idProductos = Array.from(
+          new Set(
+            detRows
+              .map((d: { producto_id_sistema: string }) => Number(d.producto_id_sistema))
+              .filter((n: number) => !Number.isNaN(n))
+          )
+        ) as number[];
+
+        if (idProductos.length > 0) {
+          await admin.rpc('incrementar_veces_inventariado', {
+            p_sucursal_id: sucursalNum,
+            p_categoria_macro: categoriaMacro,
+            p_trimestre: trimestre,
+            p_id_productos: idProductos,
+          });
+        }
+      }
+    }
+  }
+
   return NextResponse.json({ data });
 }

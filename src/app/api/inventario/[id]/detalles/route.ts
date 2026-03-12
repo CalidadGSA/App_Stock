@@ -149,6 +149,8 @@ export async function PATCH(
     stock_real_cajas?: number | null;
     stock_real_unidades?: number | null;
     stock_real: number;
+    stock_sist_cajas?: number | null;
+    stock_sist_unidades?: number | null;
   };
 
   if (!body.detalle_id) {
@@ -170,8 +172,15 @@ export async function PATCH(
     .eq('id', body.detalle_id)
     .maybeSingle();
 
-  const sistCajas = detalleActual?.stock_sist_cajas ?? 0;
-  const sistUnidades = detalleActual?.stock_sist_unidades ?? 0;
+  let sistCajas = detalleActual?.stock_sist_cajas ?? 0;
+  let sistUnidades = detalleActual?.stock_sist_unidades ?? 0;
+
+  if (typeof body.stock_sist_cajas === 'number' && !Number.isNaN(body.stock_sist_cajas)) {
+    sistCajas = body.stock_sist_cajas;
+  }
+  if (typeof body.stock_sist_unidades === 'number' && !Number.isNaN(body.stock_sist_unidades)) {
+    sistUnidades = body.stock_sist_unidades;
+  }
 
   const deltaC =
     cajas != null ? cajas - sistCajas : 0;
@@ -196,6 +205,8 @@ export async function PATCH(
   const { data, error } = await admin
     .from('controles_inventario_detalle')
     .update({
+      stock_sist_cajas: sistCajas,
+      stock_sist_unidades: sistUnidades,
       stock_real_cajas: cajas,
       stock_real_unidades: unidadesSueltas,
       stock_real: body.stock_real,

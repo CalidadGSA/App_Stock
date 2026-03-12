@@ -34,6 +34,7 @@ export default function AjustesPage() {
   const [sucursalId, setSucursalId] = useState('');
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
+  const [origenFiltro, setOrigenFiltro] = useState<'todos' | 'Sucursal' | 'Auditoria'>('todos');
   const [loadingSucursales, setLoadingSucursales] = useState(true);
   const [loadingDiferencias, setLoadingDiferencias] = useState(false);
   const [diferencias, setDiferencias] = useState<DiferenciaItem[]>([]);
@@ -82,6 +83,9 @@ export default function AjustesPage() {
         desde,
         hasta,
       });
+      if (origenFiltro !== 'todos') {
+        params.set('origen', origenFiltro);
+      }
       const res = await fetch(`/api/inventario/diferencias?${params.toString()}`);
       const json = await res.json();
       if (!res.ok) {
@@ -117,6 +121,23 @@ export default function AjustesPage() {
     }
   }
 
+  async function handleEliminarDiferencia(id: string) {
+    setError('');
+    try {
+      const res = await fetch(`/api/inventario/diferencias?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'Error al eliminar diferencia');
+        return;
+      }
+      setDiferencias((prev) => prev.filter((d) => d.id !== id));
+    } catch {
+      setError('Error al eliminar diferencia');
+    }
+  }
+
   async function handleExportar() {
     setError('');
     if (!sucursalId || !desde || !hasta) {
@@ -138,6 +159,10 @@ export default function AjustesPage() {
         desde,
         hasta,
       });
+      // Si el origen es "todos" exportamos diferencias de ambos orígenes.
+      if (origenFiltro !== 'todos') {
+        params.set('origen', origenFiltro);
+      }
       const res = await fetch(`/api/inventario/export?${params.toString()}`);
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
@@ -223,6 +248,38 @@ export default function AjustesPage() {
                 />
                 <Button
                   size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const hoy = new Date();
+                    const yyyy = hoy.getFullYear();
+                    const mm = String(hoy.getMonth() + 1).padStart(2, '0');
+                    const dd = String(hoy.getDate()).padStart(2, '0');
+                    const hoyStr = `${yyyy}-${mm}-${dd}`;
+                    setDesde(hoyStr);
+                    setHasta(hoyStr);
+                  }}
+                >
+                  Hoy
+                </Button>
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-medium text-gray-700">
+                    Origen
+                  </label>
+                  <select
+                    value={origenFiltro}
+                    onChange={(e) =>
+                      setOrigenFiltro(e.target.value as 'todos' | 'Sucursal' | 'Auditoria')
+                    }
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
+                      focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  >
+                    <option value="todos">Todos</option>
+                    <option value="Sucursal">Sucursal</option>
+                    <option value="Auditoria">Auditoría</option>
+                  </select>
+                </div>
+                <Button
+                  size="sm"
                   variant="secondary"
                   onClick={cargarDiferencias}
                   disabled={loadingDiferencias}
@@ -235,7 +292,7 @@ export default function AjustesPage() {
                   {error}
                 </p>
               )}
-              <div>
+              <div className="flex items-center gap-3">
                 <Button
                   size="sm"
                   onClick={handleExportar}
@@ -249,6 +306,13 @@ export default function AjustesPage() {
                   }
                 >
                   Exportar CSV
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => router.push('/ajustes/historial')}
+                >
+                  Ver historial de ajustes
                 </Button>
               </div>
             </div>
@@ -297,6 +361,9 @@ export default function AjustesPage() {
                     <th className="px-4 py-2 text-right font-medium text-gray-600">
                       Diferencia
                     </th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-600">
+                      Acciones
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -326,6 +393,15 @@ export default function AjustesPage() {
                       </td>
                       <td className="px-4 py-2 text-right text-xs text-gray-700">
                         {d.diffCajas.toFixed(0)} / {d.diffUnidades.toFixed(0)}
+                      </td>
+                      <td className="px-4 py-2 text-right text-xs">
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          onClick={() => void handleEliminarDiferencia(d.id)}
+                        >
+                          Quitar
+                        </Button>
                       </td>
                     </tr>
                   ))}

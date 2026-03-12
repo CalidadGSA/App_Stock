@@ -130,16 +130,16 @@ create index idx_stock_idproducto on stock(IDProducto);
 create table base_productos (
   idSucursal        integer    not null references sucursales(Sucursal),
   idProducto        bigint     not null,
-  idCategoria       integer    not null,
+  categoriamacro    text       not null,
   trimestre         text       not null,
   fechaInicio       date       not null,
   fechaFin          date       not null,
   orden             integer    not null default 0,
   vecesInventariado integer    not null default 0,
-  primary key (idSucursal, idProducto, idCategoria, trimestre)
+  primary key (idSucursal, idProducto, categoriamacro, trimestre)
 );
 create index idx_baseprod_producto  on base_productos(idProducto);
-create index idx_baseprod_categoria on base_productos(idCategoria);
+create index idx_baseprod_categoriamacro on base_productos(categoriamacro);
 create index idx_baseprod_trimestre on base_productos(trimestre);
 
 
@@ -169,6 +169,10 @@ create table controles_inventario (
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+
+-- Categoría macro opcional para el inventario (FARMA / BIENESTAR / PSICOTROPICOS)
+alter table controles_inventario
+  add column if not exists categoria_macro text;
 create index idx_ci_sucursal on controles_inventario(sucursal_id);
 create index idx_ci_estado   on controles_inventario(estado);
 create index idx_ci_usuario on controles_inventario(usuario_id);
@@ -284,6 +288,28 @@ alter table controles_inventario         enable row level security;
 alter table controles_inventario_detalle enable row level security;
 alter table controles_vencimientos       enable row level security;
 alter table controles_vencimientos_detalle enable row level security;
+
+-- ------------------------------------------------------------
+-- FUNCIÓN: incrementar vecesInventariado al cerrar un inventario diario
+-- ------------------------------------------------------------
+create or replace function incrementar_veces_inventariado(
+  p_sucursal_id integer,
+  p_categoria_macro text,
+  p_trimestre text,
+  p_id_productos bigint[]
+)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update base_productos
+  set vecesinventariado = vecesinventariado + 1
+  where idsucursal = p_sucursal_id
+    and categoriamacro = p_categoria_macro
+    and trimestre = p_trimestre
+    and idproducto = any(p_id_productos);
+$$;
 
 -- Políticas: el service_role bypassa RLS automáticamente.
 -- (Operadores se gestiona por sync legacy; sin tabla usuarios no hay política por auth.uid.)

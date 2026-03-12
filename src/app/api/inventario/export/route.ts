@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
   const sucursalIdParam = searchParams.get('sucursal_id');
   const desde = searchParams.get('desde');
   const hasta = searchParams.get('hasta');
+  const origen = searchParams.get('origen'); // 'Sucursal' | 'Auditoria' | null
 
   if (!sucursalIdParam || !desde || !hasta) {
     return NextResponse.json(
@@ -44,16 +45,22 @@ export async function GET(request: NextRequest) {
   const hastaIso = `${hasta}T23:59:59.999Z`;
 
   // Traer detalles de inventario con unión a controles para filtrar por sucursal y fecha
-  const { data: detalles, error: detError } = await admin
+  let query = admin
     .from('controles_inventario_detalle')
     .select(
-      'id, producto_id_sistema, codigo_barras, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id)'
+      'id, producto_id_sistema, codigo_barras, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, origen)'
     )
     .eq('controles_inventario.sucursal_id', sucursalId)
     .gte('controles_inventario.fecha_inicio', desdeIso)
     .lte('controles_inventario.fecha_inicio', hastaIso)
     .eq('con_diferencias', 1)
     .eq('ajustado', 0);
+
+  if (origen === 'Sucursal' || origen === 'Auditoria') {
+    query = query.eq('controles_inventario.origen', origen);
+  }
+
+  const { data: detalles, error: detError } = await query;
 
   if (detError) {
     return NextResponse.json({ error: detError.message }, { status: 500 });
@@ -69,6 +76,9 @@ export async function GET(request: NextRequest) {
     stock_real_unidades?: number | null;
     con_diferencias?: number | null;
     ajustado?: number | null;
+    // join
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    controles_inventario?: { origen?: string } | any;
   };
 
   const filasDet: {
@@ -77,9 +87,10 @@ export async function GET(request: NextRequest) {
     codigo: string;
     diffCajas: number;
     diffUnidades: number;
+    origenControl: string;
   }[] = [];
 
-  for (const d of (detalles as Row[] ?? [])) {
+  for (const d of ((detalles as Row[]) ?? [])) {
     if (d.ajustado === 1) continue;
     const sistC = d.stock_sist_cajas ?? 0;
     const sistU = d.stock_sist_unidades ?? 0;
@@ -91,12 +102,18 @@ export async function GET(request: NextRequest) {
 
     if (deltaC === 0 && deltaU === 0) continue;
 
+    const origenControl =
+      d.controles_inventario && typeof d.controles_inventario === 'object'
+        ? (d.controles_inventario.origen as string | undefined) ?? 'Sucursal'
+        : 'Sucursal';
+
     filasDet.push({
       idDetalle: d.id,
       idProducto: d.producto_id_sistema,
       codigo: d.codigo_barras,
       diffCajas: deltaC,
       diffUnidades: deltaU,
+      origenControl,
     });
   }
 
@@ -148,10 +165,22 @@ export async function GET(request: NextRequest) {
         await admin.from('ajustes_detalle').insert(detallesRows);
 
         const ids = filasDet.map((r) => r.idDetalle);
+        const updates = filasDet.map((r) => ({
+          id: r.idDetalle,
+          estado: r.origenControl === 'Auditoria' ? 'ajustado_auditoria' : 'ajustado_sucursal',
+        }));
+
+        // Marcar como ajustados y diferenciar si el ajuste corresponde a un control de auditoría o de sucursal
         await admin
           .from('controles_inventario_detalle')
-          .update({ estado: 'ajustado' })
-          .in('id', ids);
+          .upsert(
+            updates.map((u) => ({
+              id: u.id,
+              estado: u.estado,
+              ajustado: 1,
+            })),
+            { onConflict: 'id' }
+          );
       }
     } catch {
       // Si fallan las tablas de ajustes, al menos devolvemos el CSV

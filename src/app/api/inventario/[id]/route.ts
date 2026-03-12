@@ -18,9 +18,16 @@ export async function GET(
   const admin = await createAdminClient();
   const { data, error } = await admin
     .from('controles_inventario')
-    .select('*, sucursales(nombrefantasia), operadores(nombrecompleto), controles_inventario_detalle(*)')
+    .select(
+      '*, sucursales(nombrefantasia), operadores(nombrecompleto), controles_inventario_detalle(*)'
+    )
     .eq('id', id)
     .eq('sucursal_id', sucursalId ?? '')
+    // Mantener el orden original de carga de los productos
+    .order('fecha_registro', {
+      referencedTable: 'controles_inventario_detalle',
+      ascending: true,
+    })
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
