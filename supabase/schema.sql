@@ -125,6 +125,25 @@ create index idx_stock_idproducto on stock(IDProducto);
 
 
 -- ------------------------------------------------------------
+-- BASE DE PRODUCTOS POR SUCURSAL / CATEGORÍA / TRIMESTRE
+-- ------------------------------------------------------------
+create table base_productos (
+  idSucursal        integer    not null references sucursales(Sucursal),
+  idProducto        bigint     not null,
+  idCategoria       integer    not null,
+  trimestre         text       not null,
+  fechaInicio       date       not null,
+  fechaFin          date       not null,
+  orden             integer    not null default 0,
+  vecesInventariado integer    not null default 0,
+  primary key (idSucursal, idProducto, idCategoria, trimestre)
+);
+create index idx_baseprod_producto  on base_productos(idProducto);
+create index idx_baseprod_categoria on base_productos(idCategoria);
+create index idx_baseprod_trimestre on base_productos(trimestre);
+
+
+-- ------------------------------------------------------------
 -- PRODUCTOS ↔ CODEBARS (múltiples códigos por producto, desde Quantio)
 -- ------------------------------------------------------------
 create table productoscodebars (
@@ -145,6 +164,7 @@ create table controles_inventario (
   fecha_inicio timestamptz not null default now(),
   fecha_fin    timestamptz,
   estado       estado_control not null default 'en_progreso',
+  origen       text not null default 'Sucursal',
   descripcion  text,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()

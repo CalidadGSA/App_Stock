@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     .insert({
       sucursal_id: parseInt(sucursalId, 10),
       usuario_id: operador.idoperador,
+      origen: 'Auditoria',
       descripcion,
     })
     .select()

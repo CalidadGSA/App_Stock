@@ -66,6 +66,7 @@ export async function POST(request: NextRequest) {
     .insert({
       sucursal_id: parseInt(sucursalId, 10),
       usuario_id: operador.idoperador,
+      origen: 'Sucursal',
       descripcion: body.descripcion ?? null,
     })
     .select()

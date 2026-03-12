@@ -47,33 +47,40 @@ export async function GET(request: NextRequest) {
   const { data: detalles, error: detError } = await admin
     .from('controles_inventario_detalle')
     .select(
-      'producto_id_sistema, codigo_barras, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, controles_inventario!inner(fecha_inicio, sucursal_id)'
+      'id, producto_id_sistema, codigo_barras, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id)'
     )
     .eq('controles_inventario.sucursal_id', sucursalId)
     .gte('controles_inventario.fecha_inicio', desdeIso)
-    .lte('controles_inventario.fecha_inicio', hastaIso);
+    .lte('controles_inventario.fecha_inicio', hastaIso)
+    .eq('con_diferencias', 1)
+    .eq('ajustado', 0);
 
   if (detError) {
     return NextResponse.json({ error: detError.message }, { status: 500 });
   }
 
-  // Agrupar por producto + código de barras y acumular diferencias
   type Row = {
+    id: string;
     producto_id_sistema: string;
     codigo_barras: string;
     stock_sist_cajas?: number | null;
     stock_sist_unidades?: number | null;
     stock_real_cajas?: number | null;
     stock_real_unidades?: number | null;
+    con_diferencias?: number | null;
+    ajustado?: number | null;
   };
 
-  const mapa = new Map<
-    string,
-    { idProducto: string; codigo: string; diffCajas: number; diffUnidades: number }
-  >();
+  const filasDet: {
+    idDetalle: string;
+    idProducto: string;
+    codigo: string;
+    diffCajas: number;
+    diffUnidades: number;
+  }[] = [];
 
   for (const d of (detalles as Row[] ?? [])) {
-    const key = `${d.producto_id_sistema}::${d.codigo_barras}`;
+    if (d.ajustado === 1) continue;
     const sistC = d.stock_sist_cajas ?? 0;
     const sistU = d.stock_sist_unidades ?? 0;
     const realC = d.stock_real_cajas ?? 0;
@@ -82,27 +89,20 @@ export async function GET(request: NextRequest) {
     const deltaC = realC - sistC;
     const deltaU = realU - sistU;
 
-    if (!mapa.has(key)) {
-      mapa.set(key, {
-        idProducto: d.producto_id_sistema,
-        codigo: d.codigo_barras,
-        diffCajas: 0,
-        diffUnidades: 0,
-      });
-    }
+    if (deltaC === 0 && deltaU === 0) continue;
 
-    const agg = mapa.get(key)!;
-    agg.diffCajas += deltaC;
-    agg.diffUnidades += deltaU;
+    filasDet.push({
+      idDetalle: d.id,
+      idProducto: d.producto_id_sistema,
+      codigo: d.codigo_barras,
+      diffCajas: deltaC,
+      diffUnidades: deltaU,
+    });
   }
 
-  const filas = Array.from(mapa.values()).filter(
-    (r) => r.diffCajas !== 0 || r.diffUnidades !== 0
-  );
-
-  // Construir CSV UTF-8
+  // Construir CSV UTF-8 (una fila por detalle con diferencia)
   let csv = 'idProducto,codigo_barras,diferencia_cajas,diferencia_unidades\n';
-  for (const r of filas) {
+  for (const r of filasDet) {
     const cols = [
       r.idProducto ?? '',
       r.codigo ?? '',
@@ -118,6 +118,45 @@ export async function GET(request: NextRequest) {
   const sucursalNombre = (sucursal as { nombrefantasia: string }).nombrefantasia;
   const safeNombre = sucursalNombre.replace(/[^A-Za-z0-9 _-]/g, '');
   const filename = `Inventario ${safeNombre} ${desde} a ${hasta}.csv`;
+
+  // Marcar detalles como ajustados y registrar en tablas de ajustes (si existen)
+  if (filasDet.length > 0) {
+    try {
+      const { data: ajuste } = await admin
+        .from('ajustes')
+        .insert({
+          sucursal_id: sucursalId,
+          usuario_id: operador.idoperador,
+          fecha_desde: desde,
+          fecha_hasta: hasta,
+          archivo_nombre: filename,
+        })
+        .select()
+        .single();
+
+      if (ajuste) {
+        const ajusteId = ajuste.id as string;
+        const detallesRows = filasDet.map((r) => ({
+          ajuste_id: ajusteId,
+          detalle_id: r.idDetalle,
+          idProducto: r.idProducto,
+          codigo_barras: r.codigo,
+          diferencia_cajas: r.diffCajas,
+          diferencia_unidades: r.diffUnidades,
+        }));
+
+        await admin.from('ajustes_detalle').insert(detallesRows);
+
+        const ids = filasDet.map((r) => r.idDetalle);
+        await admin
+          .from('controles_inventario_detalle')
+          .update({ estado: 'ajustado' })
+          .in('id', ids);
+      }
+    } catch {
+      // Si fallan las tablas de ajustes, al menos devolvemos el CSV
+    }
+  }
 
   return new Response(csv, {
     status: 200,

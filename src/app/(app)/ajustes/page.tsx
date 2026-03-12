@@ -12,6 +12,22 @@ interface SucursalOption {
   nombre: string;
 }
 
+interface DiferenciaItem {
+  id: string;
+  producto_id_sistema: string;
+  codigo_barras: string;
+  descripcion: string;
+  presentacion: string | null;
+  laboratorio: string | null;
+  stock_sist_cajas?: number | null;
+  stock_sist_unidades?: number | null;
+  stock_real_cajas?: number | null;
+  stock_real_unidades?: number | null;
+  origen?: string | null;
+  diffCajas: number;
+  diffUnidades: number;
+}
+
 export default function AjustesPage() {
   const router = useRouter();
   const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
@@ -19,6 +35,8 @@ export default function AjustesPage() {
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
   const [loadingSucursales, setLoadingSucursales] = useState(true);
+  const [loadingDiferencias, setLoadingDiferencias] = useState(false);
+  const [diferencias, setDiferencias] = useState<DiferenciaItem[]>([]);
   const [exportando, setExportando] = useState(false);
   const [error, setError] = useState('');
 
@@ -46,10 +64,71 @@ export default function AjustesPage() {
     void cargarSucursales();
   }, []);
 
+  async function cargarDiferencias() {
+    setError('');
+    setDiferencias([]);
+    if (!sucursalId || !desde || !hasta) {
+      setError('Seleccioná sucursal, fecha desde y fecha hasta.');
+      return;
+    }
+    if (hasta < desde) {
+      setError('La fecha "Hasta" no puede ser anterior a la fecha "Desde".');
+      return;
+    }
+    setLoadingDiferencias(true);
+    try {
+      const params = new URLSearchParams({
+        sucursal_id: sucursalId,
+        desde,
+        hasta,
+      });
+      const res = await fetch(`/api/inventario/diferencias?${params.toString()}`);
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json.error ?? 'Error al cargar diferencias');
+        return;
+      }
+      const items: DiferenciaItem[] = (json.data ?? []).map((r: any) => {
+        const sistC = r.stock_sist_cajas ?? 0;
+        const sistU = r.stock_sist_unidades ?? 0;
+        const realC = r.stock_real_cajas ?? 0;
+        const realU = r.stock_real_unidades ?? 0;
+        return {
+          id: r.id,
+          producto_id_sistema: r.producto_id_sistema,
+          codigo_barras: r.codigo_barras,
+          descripcion: r.descripcion,
+          presentacion: r.presentacion ?? null,
+          laboratorio: r.laboratorio ?? null,
+          stock_sist_cajas: r.stock_sist_cajas,
+          stock_sist_unidades: r.stock_sist_unidades,
+          stock_real_cajas: r.stock_real_cajas,
+          stock_real_unidades: r.stock_real_unidades,
+          origen: r.controles_inventario?.origen ?? null,
+          diffCajas: realC - sistC,
+          diffUnidades: realU - sistU,
+        };
+      });
+      setDiferencias(items);
+    } catch {
+      setError('Error al cargar diferencias');
+    } finally {
+      setLoadingDiferencias(false);
+    }
+  }
+
   async function handleExportar() {
     setError('');
     if (!sucursalId || !desde || !hasta) {
       setError('Seleccioná sucursal, fecha desde y fecha hasta.');
+      return;
+    }
+    if (hasta < desde) {
+      setError('La fecha "Hasta" no puede ser anterior a la fecha "Desde".');
+      return;
+    }
+    if (diferencias.length === 0) {
+      setError('No hay diferencias para exportar con los filtros seleccionados.');
       return;
     }
     setExportando(true);
@@ -142,6 +221,14 @@ export default function AjustesPage() {
                   value={hasta}
                   onChange={(e) => setHasta(e.target.value)}
                 />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={cargarDiferencias}
+                  disabled={loadingDiferencias}
+                >
+                  Ver diferencias
+                </Button>
               </div>
               {error && (
                 <p className="text-sm text-red-600">
@@ -153,10 +240,97 @@ export default function AjustesPage() {
                   size="sm"
                   onClick={handleExportar}
                   loading={exportando}
+                  disabled={
+                    exportando ||
+                    !sucursalId ||
+                    !desde ||
+                    !hasta ||
+                    diferencias.length === 0
+                  }
                 >
                   Exportar CSV
                 </Button>
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <h2 className="font-semibold text-gray-900">
+            Diferencias pendientes de ajuste
+          </h2>
+          <p className="text-sm text-gray-600">
+            Solo se muestran los ítems con diferencias en cajas o unidades que aún no fueron ajustados.
+          </p>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loadingDiferencias ? (
+            <div className="py-6">
+              <PageSpinner />
+            </div>
+          ) : diferencias.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-gray-400">
+              No hay diferencias pendientes para los filtros seleccionados.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b border-gray-100 bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600">
+                      Producto
+                    </th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600">
+                      Código barras
+                    </th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600">
+                      Origen
+                    </th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-600">
+                      Sist. (cajas/unid.)
+                    </th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-600">
+                      Real (cajas/unid.)
+                    </th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-600">
+                      Diferencia
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {diferencias.map((d) => (
+                    <tr key={d.id}>
+                      <td className="px-4 py-2">
+                        <p className="font-medium text-gray-900">
+                          {d.descripcion}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {d.presentacion} · {d.laboratorio}
+                        </p>
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs text-gray-700">
+                        {d.codigo_barras}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-gray-700">
+                        {d.origen === 'Auditoria' ? 'Auditoría' : 'Sucursal'}
+                      </td>
+                      <td className="px-4 py-2 text-right text-xs text-gray-700">
+                        {(d.stock_sist_cajas ?? 0).toString()} /{' '}
+                        {(d.stock_sist_unidades ?? 0).toString()}
+                      </td>
+                      <td className="px-4 py-2 text-right text-xs text-gray-700">
+                        {(d.stock_real_cajas ?? 0).toString()} /{' '}
+                        {(d.stock_real_unidades ?? 0).toString()}
+                      </td>
+                      <td className="px-4 py-2 text-right text-xs text-gray-700">
+                        {d.diffCajas.toFixed(0)} / {d.diffUnidades.toFixed(0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </CardContent>
