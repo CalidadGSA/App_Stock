@@ -97,7 +97,16 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                   onClick={() => router.push('/inventario/nuevo')}
                 >
                   <ClipboardList className="h-4 w-4" />
-                  Iniciar inventario
+                  Inventario diario
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                  onClick={() => router.push('/inventario/ocasional')}
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Inventario ocasional
                 </Button>
                 <Button
                   size="sm"
@@ -178,7 +187,18 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                     router.push('/inventario/nuevo');
                   }}
                 >
-                  <ClipboardList className="h-4 w-4" /> Iniciar inventario
+                  <ClipboardList className="h-4 w-4" /> Inventario diario
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    router.push('/inventario/ocasional');
+                  }}
+                >
+                  <ClipboardList className="h-4 w-4" /> Inventario ocasional
                 </Button>
                 <Button
                   size="sm"

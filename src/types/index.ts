@@ -65,6 +65,10 @@ export interface ControlInventario {
   fecha_inicio: string;
   fecha_fin: string | null;
   estado: EstadoControl;
+  /** Origen del control: 'Sucursal' (operador) o 'Auditoria' (admin). */
+  origen?: string | null;
+  /** Categoría macro del inventario: FARMA / BIENESTAR / PSICOTROPICOS */
+  categoria_macro?: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
   descripcion: string | null;
   created_at: string;
   updated_at: string;

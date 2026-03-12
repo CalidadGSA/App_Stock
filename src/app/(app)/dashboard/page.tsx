@@ -98,6 +98,20 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Ajustes (solo admin) */}
+      {stats?.rol === 'admin' && (
+        <div className="flex justify-end">
+          <Button
+            size="lg"
+            variant="secondary"
+            className="border border-gray-300 text-gray-800 px-6 shadow-sm"
+            onClick={() => (window.location.href = '/ajustes')}
+          >
+            Ajustes
+          </Button>
+        </div>
+      )}
+
       {/* Últimas actividades */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Últimos inventarios */}
@@ -105,7 +119,12 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos inventarios</h3>
-              {/* Acciones principales están en el Navbar; acá solo listamos. */}
+              <Link
+                href="/inventario"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Ver todos
+              </Link>
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -113,35 +132,54 @@ export default function DashboardPage() {
               <p className="px-5 py-4 text-sm text-gray-400">Sin controles registrados aún.</p>
             ) : (
               <ul className="divide-y divide-gray-100">
-                {stats?.ultimos_inventarios.map(inv => (
-                  <li key={inv.id}>
-                    <Link
-                      href={`/inventario/${inv.id}`}
-                      className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        {inv.estado === 'cerrado'
-                          ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                          : <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
-                        }
-                        <div>
-                          <p className="text-sm font-medium text-gray-800">{formatDateTime(inv.fecha_inicio)}</p>
-                          {inv.descripcion && (
-                            <p className="text-xs text-gray-500 truncate max-w-[220px]">
-                              {inv.descripcion}
-                            </p>
+                {stats?.ultimos_inventarios.map(inv => {
+                  const tipo =
+                    inv.origen === 'Auditoria'
+                      ? 'Auditoría'
+                      : (inv.descripcion ?? '').toLowerCase().includes('ocasional')
+                        ? 'Inventario ocasional'
+                        : 'Inventario diario';
+                  return (
+                    <li key={inv.id}>
+                      <Link
+                        href={`/inventario/${inv.id}`}
+                        className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          {inv.estado === 'cerrado' ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                          ) : (
+                            <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
                           )}
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">
+                              {formatDateTime(inv.fecha_inicio)}
+                            </p>
+                            <div className="mt-0.5 flex items-center gap-2">
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                              >
+                                {tipo}
+                              </Badge>
+                              {inv.descripcion && (
+                                <p className="text-xs text-gray-500 truncate max-w-[180px]">
+                                  {inv.descripcion}
+                                </p>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={inv.estado === 'cerrado' ? 'success' : 'warning'}>
-                          {inv.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
-                        </Badge>
-                        <ChevronRight className="h-4 w-4 text-gray-400" />
-                      </div>
-                    </Link>
-                  </li>
-                ))}
+                        <div className="flex items-center gap-2">
+                          <Badge variant={inv.estado === 'cerrado' ? 'success' : 'warning'}>
+                            {inv.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
+                          </Badge>
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardContent>
@@ -152,11 +190,12 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos controles de vencimientos</h3>
-              {stats?.rol !== 'admin' && (
-                <Link href="/vencimientos/nuevo" className="text-xs text-blue-600 hover:underline">
-                  Nuevo control
-                </Link>
-              )}
+              <Link
+                href="/vencimientos"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Ver todos
+              </Link>
             </div>
           </CardHeader>
           <CardContent className="p-0">

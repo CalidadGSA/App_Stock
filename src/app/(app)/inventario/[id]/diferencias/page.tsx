@@ -98,7 +98,27 @@ export default function InventarioDiferenciasPage() {
 
   const detallesConDiferencias = useMemo(() => {
     const todos = control?.controles_inventario_detalle ?? [];
-    return todos.filter((d) => (d.diferencia ?? 0) !== 0);
+    return todos.filter((d) => {
+      // Si tenemos cajas/unidades desglosado, usamos esa diferencia.
+      const sistC = d.stock_sist_cajas ?? null;
+      const sistU = d.stock_sist_unidades ?? null;
+      const realC = d.stock_real_cajas ?? null;
+      const realU = d.stock_real_unidades ?? null;
+
+      const tieneDesglose =
+        sistC !== null || sistU !== null || realC !== null || realU !== null;
+
+      if (tieneDesglose) {
+        const diffC =
+          sistC !== null && realC !== null ? realC - sistC : 0;
+        const diffU =
+          sistU !== null && realU !== null ? realU - sistU : 0;
+        return diffC !== 0 || diffU !== 0;
+      }
+
+      // Fallback: usar diferencia total si no hay desglose
+      return (d.diferencia ?? 0) !== 0;
+    });
   }, [control]);
 
   async function handleGuardarLinea(detalle: ControlInventarioDetalle) {

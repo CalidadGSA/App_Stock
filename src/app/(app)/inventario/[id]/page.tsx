@@ -32,6 +32,8 @@ export default function InventarioDetailPage() {
   const [stockRealCajas, setStockRealCajas] = useState('');
   const [stockRealUnidades, setStockRealUnidades] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const [detalleSeleccionadoId, setDetalleSeleccionadoId] = useState<string | null>(null);
+  const [filtroCodigo, setFiltroCodigo] = useState<string>('');
 
   const cargarControl = useCallback(async () => {
     try {
@@ -48,6 +50,47 @@ export default function InventarioDetailPage() {
 
   useEffect(() => { cargarControl(); }, [cargarControl]);
 
+  async function cargarProductoParaDetalle(detalle: ControlInventarioDetalle) {
+    // Intenta traer stock actual desde /api/productos/[barcode]
+    try {
+      const res = await fetch(`/api/productos/${encodeURIComponent(detalle.codigo_barras)}`);
+      const json = await res.json() as { data?: ProductoLegacy; error?: string };
+      if (res.ok && json.data) {
+        const prod = json.data;
+        setProductoEscaneado(prod);
+        setStockRealCajas(
+          detalle.stock_real_cajas != null ? String(detalle.stock_real_cajas) : ''
+        );
+        setStockRealUnidades(
+          detalle.stock_real_unidades != null ? String(detalle.stock_real_unidades) : ''
+        );
+        return;
+      }
+    } catch {
+      // Si falla, seguimos con los datos del detalle
+    }
+
+    // Fallback: construir a partir del detalle si el API no respondió
+    setProductoEscaneado({
+      producto_id_sistema: detalle.producto_id_sistema,
+      codigo_barras: detalle.codigo_barras,
+      descripcion: detalle.descripcion,
+      presentacion: detalle.presentacion ?? null,
+      laboratorio: detalle.laboratorio ?? null,
+      stock_sistema: detalle.stock_sistema,
+      stock_cajas: detalle.stock_sist_cajas ?? undefined,
+      stock_unidades: detalle.stock_sist_unidades ?? undefined,
+      unidades_por_caja: undefined,
+      fraccionable: undefined,
+    });
+    setStockRealCajas(
+      detalle.stock_real_cajas != null ? String(detalle.stock_real_cajas) : ''
+    );
+    setStockRealUnidades(
+      detalle.stock_real_unidades != null ? String(detalle.stock_real_unidades) : ''
+    );
+  }
+
   async function handleScan(barcode: string) {
     setErrorProducto('');
     setProductoEscaneado(null);
@@ -55,23 +98,81 @@ export default function InventarioDetailPage() {
     setStockRealUnidades('');
     setBuscandoProducto(true);
 
-    try {
-      const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
-      const json = await res.json() as { data?: ProductoLegacy; error?: string };
-      if (!res.ok) {
-        setErrorProducto(json.error ?? 'Producto no encontrado');
+    // En inventarios diarios con categoría macro (FARMA/BIENESTAR/PSICOTROPICOS),
+    // el escaneo solo sirve para ubicar un producto ya registrado, sin agregar líneas nuevas.
+    if (control?.categoria_macro) {
+      const detallesControl = control.controles_inventario_detalle ?? [];
+      const detalle = detallesControl.find((d) => d.codigo_barras === barcode) ?? null;
+
+      if (!detalle) {
+        setErrorProducto('Este producto no forma parte de los productos asignados a este inventario diario.');
+        setBuscandoProducto(false);
         return;
       }
-      setProductoEscaneado(json.data!);
-    } catch {
-      setErrorProducto('Error al buscar el producto');
-    } finally {
+
+      setDetalleSeleccionadoId(detalle.id);
+      setFiltroCodigo(barcode);
+      await cargarProductoParaDetalle(detalle);
       setBuscandoProducto(false);
+      return;
     }
+
+    async function fetchProducto(intento: number): Promise<void> {
+      try {
+        const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
+        const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+
+        if (!res.ok) {
+          // Si es el primer intento y hay error de servidor/red, reintentar una vez.
+          if (intento === 1 && (res.status >= 500 || res.status === 408)) {
+            await fetchProducto(2);
+            return;
+          }
+          setErrorProducto(json.error ?? 'Producto no encontrado');
+          return;
+        }
+        setProductoEscaneado(json.data!);
+      } catch {
+        if (intento === 1) {
+          await fetchProducto(2);
+          return;
+        }
+        setErrorProducto('Error al buscar el producto');
+      }
+    }
+
+    await fetchProducto(1);
+    setBuscandoProducto(false);
   }
 
   async function handleGuardarLinea() {
     if (!productoEscaneado) return;
+    // Antes de guardar, validar que el stock de sistema no haya cambiado mientras se hacía el conteo
+    if (control?.categoria_macro) {
+      try {
+        const res = await fetch(
+          `/api/productos/${encodeURIComponent(productoEscaneado.codigo_barras)}`
+        );
+        const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+        if (res.ok && json.data) {
+          const nuevo = json.data;
+          const cajasPrevias = productoEscaneado.stock_cajas ?? 0;
+          const unidadesPrevias = productoEscaneado.stock_unidades ?? 0;
+          const cajasNuevas = nuevo.stock_cajas ?? 0;
+          const unidadesNuevas = nuevo.stock_unidades ?? 0;
+
+          if (cajasPrevias !== cajasNuevas || unidadesPrevias !== unidadesNuevas) {
+            setErrorProducto(
+              'El stock del sistema cambió mientras se hacía el conteo. Revisá nuevamente antes de confirmar.'
+            );
+            return;
+          }
+        }
+      } catch {
+        // Si falla la validación, permitimos continuar; solo evitamos fallar silenciosamente
+      }
+    }
+
     const cajasNum =
       stockRealCajas.trim() === '' ? 0 : parseFloat(stockRealCajas);
     const unidadesNum =
@@ -104,29 +205,51 @@ export default function InventarioDetailPage() {
 
     setGuardando(true);
     try {
-      const res = await fetch(`/api/inventario/${id}/detalles`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          producto_id_sistema: productoEscaneado.producto_id_sistema,
-          codigo_barras: productoEscaneado.codigo_barras,
-          descripcion: productoEscaneado.descripcion,
-          presentacion: productoEscaneado.presentacion,
-          laboratorio: productoEscaneado.laboratorio,
-          stock_sistema: productoEscaneado.stock_sistema,
-          stock_sist_cajas: productoEscaneado.stock_cajas ?? undefined,
-          stock_sist_unidades: productoEscaneado.stock_unidades ?? undefined,
-          stock_real_cajas: cajasNum || undefined,
-          stock_real_unidades: unidadesFinal || undefined,
-          stock_real: totalUnidades,
-        }),
-      });
+      let res: Response;
+
+      // En inventarios diarios con categoria_macro y un detalle seleccionado, actualizamos la línea existente (PATCH)
+      if (control?.categoria_macro && detalleSeleccionadoId) {
+        res = await fetch(`/api/inventario/${id}/detalles`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            detalle_id: detalleSeleccionadoId,
+            stock_sist_cajas: productoEscaneado.stock_cajas ?? null,
+            stock_sist_unidades: productoEscaneado.stock_unidades ?? null,
+            stock_real_cajas: cajasNum,
+            stock_real_unidades: unidadesFinal,
+            stock_real: totalUnidades,
+          }),
+        });
+      } else {
+        // Inventarios sin categoria_macro: seguimos creando nuevas líneas (POST)
+        res = await fetch(`/api/inventario/${id}/detalles`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            producto_id_sistema: productoEscaneado.producto_id_sistema,
+            codigo_barras: productoEscaneado.codigo_barras,
+            descripcion: productoEscaneado.descripcion,
+            presentacion: productoEscaneado.presentacion,
+            laboratorio: productoEscaneado.laboratorio,
+            stock_sistema: productoEscaneado.stock_sistema,
+            stock_sist_cajas: productoEscaneado.stock_cajas ?? undefined,
+            stock_sist_unidades: productoEscaneado.stock_unidades ?? undefined,
+            stock_real_cajas: cajasNum || undefined,
+            stock_real_unidades: unidadesFinal || undefined,
+            stock_real: totalUnidades,
+          }),
+        });
+      }
+
       const json = await res.json() as { error?: string };
       if (!res.ok) { setErrorProducto(json.error ?? 'Error al guardar'); return; }
 
       setProductoEscaneado(null);
       setStockRealCajas('');
       setStockRealUnidades('');
+      setDetalleSeleccionadoId(null);
+      setFiltroCodigo('');
       await cargarControl();
     } catch {
       setErrorProducto('Error al guardar la línea');
@@ -151,6 +274,30 @@ export default function InventarioDetailPage() {
 
   const enProgreso = control.estado === 'en_progreso';
   const detalles = control.controles_inventario_detalle ?? [];
+  const detallesFiltrados =
+    control.categoria_macro && filtroCodigo
+      ? detalles.filter((d) => d.codigo_barras === filtroCodigo)
+      : detalles;
+
+  // Resumen final de sobrantes / faltantes basado en cajas y unidades
+  let totalSobrantes = 0;
+  let totalFaltantes = 0;
+  let totalSinDiferencia = 0;
+  for (const d of detalles) {
+    const sistC = d.stock_sist_cajas ?? 0;
+    const sistU = d.stock_sist_unidades ?? 0;
+    const realC = d.stock_real_cajas ?? 0;
+    const realU = d.stock_real_unidades ?? 0;
+    const diffC = realC - sistC;
+    const diffU = realU - sistU;
+    if (diffC === 0 && diffU === 0) {
+      totalSinDiferencia += 1;
+    } else if (diffC > 0 || diffU > 0) {
+      totalSobrantes += 1;
+    } else {
+      totalFaltantes += 1;
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -163,11 +310,16 @@ export default function InventarioDetailPage() {
             </Button>
           </Link>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-gray-900">Control de inventario</h1>
               <Badge variant={enProgreso ? 'warning' : 'success'}>
                 {enProgreso ? 'En progreso' : 'Cerrado'}
               </Badge>
+              {control.categoria_macro && (
+                <span className="text-xs text-gray-600 border border-gray-200 rounded-full px-2 py-0.5">
+                  Categoría: {control.categoria_macro}
+                </span>
+              )}
             </div>
             <p className="text-sm text-gray-500">
               Inicio: {formatDateTime(control.fecha_inicio)}
@@ -204,7 +356,8 @@ export default function InventarioDetailPage() {
               // Mientras hay un producto cargado o se está guardando, desactivamos el escáner
               disabled={buscandoProducto || guardando || !!productoEscaneado}
               placeholder="Escanear o ingresar código de barras..."
-              autoFocusInput={!productoEscaneado}
+              // En inventarios con categoria_macro no forzamos el foco permanente en el buscador
+              autoFocusInput={!productoEscaneado && !control?.categoria_macro}
             />
 
             {buscandoProducto && (
@@ -340,6 +493,11 @@ export default function InventarioDetailPage() {
                       setStockRealCajas('');
                       setStockRealUnidades('');
                       setErrorProducto('');
+                      // En inventarios diarios con categoria_macro volvemos a mostrar el listado completo
+                      if (control?.categoria_macro) {
+                        setDetalleSeleccionadoId(null);
+                        setFiltroCodigo('');
+                      }
                     }}
                     className="flex-1"
                   >
@@ -387,7 +545,7 @@ export default function InventarioDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {detalles.map(det => {
+                  {detallesFiltrados.map(det => {
                     const dif = det.diferencia;
                     const sistCajas = det.stock_sist_cajas ?? 0;
                     const sistUnidades = det.stock_sist_unidades ?? 0;
@@ -395,26 +553,48 @@ export default function InventarioDetailPage() {
                     const realUnidades = det.stock_real_unidades ?? 0;
                     const difCajas = realCajas - sistCajas;
                     const difUnidades = realUnidades - sistUnidades;
+                    const isSelected = detalleSeleccionadoId === det.id;
+                    // Consideramos inventariado solo si se cargó explícitamente algún stock real
+                    const yaInventariado =
+                      det.stock_real_cajas != null || det.stock_real_unidades != null;
                     return (
-                      <tr key={det.id} className="hover:bg-gray-50">
+                      <tr
+                        key={det.id}
+                        className={`hover:bg-gray-50 cursor-pointer ${
+                          yaInventariado ? 'bg-green-50' : ''
+                        } ${isSelected ? 'ring-2 ring-blue-300' : ''}`}
+                        onClick={async () => {
+                          setErrorProducto('');
+                          setDetalleSeleccionadoId(det.id);
+                          if (control.categoria_macro) {
+                            setFiltroCodigo(det.codigo_barras);
+                            await cargarProductoParaDetalle(det);
+                          }
+                        }}
+                      >
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-900">{det.descripcion}</p>
-                          <p className="text-xs text-gray-400">{det.presentacion} · {det.laboratorio}</p>
+                          <p className="text-xs text-gray-400">
+                            {det.presentacion} · {det.laboratorio}
+                          </p>
+                          <p className="mt-0.5 font-mono text-sm text-gray-700">
+                            {det.codigo_barras}
+                          </p>
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">
                           <div className="flex flex-col items-end gap-0.5">
                             <span className="text-[11px] uppercase tracking-wide text-gray-400">Cajas</span>
-                            <span>{sistCajas}</span>
+                            <span>{det.stock_sist_cajas == null ? '-' : sistCajas}</span>
                             <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
-                            <span>{sistUnidades}</span>
+                            <span>{det.stock_sist_unidades == null ? '-' : sistUnidades}</span>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">
                           <div className="flex flex-col items-end gap-0.5">
                             <span className="text-[11px] uppercase tracking-wide text-gray-400">Cajas</span>
-                            <span>{realCajas}</span>
+                            <span>{det.stock_real_cajas == null ? '-' : realCajas}</span>
                             <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
-                            <span>{realUnidades}</span>
+                            <span>{det.stock_real_unidades == null ? '-' : realUnidades}</span>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
@@ -440,7 +620,10 @@ export default function InventarioDetailPage() {
                         {enProgreso && (
                           <td className="px-4 py-3">
                             <button
-                              onClick={() => handleEliminarLinea(det.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleEliminarLinea(det.id);
+                              }}
                               className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -458,9 +641,15 @@ export default function InventarioDetailPage() {
         {detalles.length > 0 && (
           <CardFooter>
             <div className="flex gap-4 text-xs text-gray-500">
-              <span className="text-blue-600 font-medium">+{detalles.filter(d => d.diferencia > 0).length} sobrantes</span>
-              <span className="text-red-600 font-medium">{detalles.filter(d => d.diferencia < 0).length} faltantes</span>
-              <span className="text-gray-400">{detalles.filter(d => d.diferencia === 0).length} sin diferencia</span>
+              <span className="text-blue-600 font-medium">
+                +{totalSobrantes} sobrantes
+              </span>
+              <span className="text-red-600 font-medium">
+                {totalFaltantes} faltantes
+              </span>
+              <span className="text-gray-400">
+                {totalSinDiferencia} sin diferencia
+              </span>
             </div>
           </CardFooter>
         )}

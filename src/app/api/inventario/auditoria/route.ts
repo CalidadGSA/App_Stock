@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     .insert({
       sucursal_id: parseInt(sucursalId, 10),
       usuario_id: operador.idoperador,
+      origen: 'Auditoria',
       descripcion,
     })
     .select()
@@ -62,9 +63,10 @@ export async function POST(request: Request) {
     const { data: detallesConDif, error: difError } = await admin
       .from('controles_inventario_detalle')
       .select(
-        'producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sistema, stock_sist_cajas, stock_sist_unidades'
+        'producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sistema, stock_sist_cajas, stock_sist_unidades, estado'
       )
       .neq('diferencia', 0)
+      .neq('estado', 'ajustado_auditoria')
       .in('control_id', idsCerrados);
 
     if (!difError && detallesConDif && detallesConDif.length > 0) {

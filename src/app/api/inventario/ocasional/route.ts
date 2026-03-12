@@ -3,13 +3,10 @@ import { getOperadorSession } from '@/lib/auth/session';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
-/** POST /api/inventario/ocasional - crear inventario ocasional (solo admin) */
+/** POST /api/inventario/ocasional - crear inventario ocasional (admin y operadores) */
 export async function POST(request: Request) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
@@ -34,6 +31,7 @@ export async function POST(request: Request) {
     .insert({
       sucursal_id: parseInt(sucursalId, 10),
       usuario_id: operador.idoperador,
+      origen: operador.rol === 'admin' ? 'Auditoria' : 'Sucursal',
       descripcion,
     })
     .select()
