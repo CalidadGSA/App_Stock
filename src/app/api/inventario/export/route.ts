@@ -117,8 +117,8 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Construir CSV UTF-8 (una fila por detalle con diferencia)
-  let csv = 'idProducto,codigo_barras,diferencia_cajas,diferencia_unidades\n';
+  // Construir CSV UTF-8 sin cabecera (una fila por detalle con diferencia)
+  let csv = '';
   for (const r of filasDet) {
     const cols = [
       r.idProducto ?? '',
@@ -136,54 +136,88 @@ export async function GET(request: NextRequest) {
   const safeNombre = sucursalNombre.replace(/[^A-Za-z0-9 _-]/g, '');
   const filename = `Inventario ${safeNombre} ${desde} a ${hasta}.csv`;
 
-  // Marcar detalles como ajustados y registrar en tablas de ajustes (si existen)
+  // Marcar detalles como ajustados y registrar en tablas de ajustes.
+  // Si algo falla, devolvemos error para no dejar un CSV exportado sin reflejo en la base.
   if (filasDet.length > 0) {
-    try {
-      const { data: ajuste } = await admin
-        .from('ajustes')
-        .insert({
-          sucursal_id: sucursalId,
-          usuario_id: operador.idoperador,
-          fecha_desde: desde,
-          fecha_hasta: hasta,
-          archivo_nombre: filename,
+    const { data: ajuste, error: ajusteError } = await admin
+      .from('ajustes')
+      .insert({
+        sucursal_id: sucursalId,
+        usuario_id: operador.idoperador,
+        fecha_desde: desde,
+        fecha_hasta: hasta,
+        archivo_nombre: filename,
+      })
+      .select()
+      .single();
+
+    if (ajusteError || !ajuste) {
+      return NextResponse.json(
+        { error: ajusteError?.message ?? 'Error al registrar el ajuste exportado' },
+        { status: 500 }
+      );
+    }
+
+    const ajusteId = ajuste.id as string;
+    const detallesRows = filasDet.map((r) => ({
+      ajuste_id: ajusteId,
+      detalle_id: r.idDetalle,
+      idproducto: r.idProducto,
+      codigo_barras: r.codigo,
+      diferencia_cajas: r.diffCajas,
+      diferencia_unidades: r.diffUnidades,
+    }));
+
+    const { error: ajusteDetalleError } = await admin
+      .from('ajustes_detalle')
+      .insert(detallesRows);
+
+    if (ajusteDetalleError) {
+      return NextResponse.json(
+        { error: ajusteDetalleError.message },
+        { status: 500 }
+      );
+    }
+
+    const idsAuditoria = filasDet
+      .filter((r) => r.origenControl === 'Auditoria')
+      .map((r) => r.idDetalle);
+    const idsSucursal = filasDet
+      .filter((r) => r.origenControl !== 'Auditoria')
+      .map((r) => r.idDetalle);
+
+    if (idsAuditoria.length > 0) {
+      const { error: updateAuditError } = await admin
+        .from('controles_inventario_detalle')
+        .update({
+          estado: 'ajustado_auditoria',
+          ajustado: 1,
         })
-        .select()
-        .single();
+        .in('id', idsAuditoria);
 
-      if (ajuste) {
-        const ajusteId = ajuste.id as string;
-        const detallesRows = filasDet.map((r) => ({
-          ajuste_id: ajusteId,
-          detalle_id: r.idDetalle,
-          idProducto: r.idProducto,
-          codigo_barras: r.codigo,
-          diferencia_cajas: r.diffCajas,
-          diferencia_unidades: r.diffUnidades,
-        }));
-
-        await admin.from('ajustes_detalle').insert(detallesRows);
-
-        const ids = filasDet.map((r) => r.idDetalle);
-        const updates = filasDet.map((r) => ({
-          id: r.idDetalle,
-          estado: r.origenControl === 'Auditoria' ? 'ajustado_auditoria' : 'ajustado_sucursal',
-        }));
-
-        // Marcar como ajustados y diferenciar si el ajuste corresponde a un control de auditoría o de sucursal
-        await admin
-          .from('controles_inventario_detalle')
-          .upsert(
-            updates.map((u) => ({
-              id: u.id,
-              estado: u.estado,
-              ajustado: 1,
-            })),
-            { onConflict: 'id' }
-          );
+      if (updateAuditError) {
+        return NextResponse.json(
+          { error: updateAuditError.message },
+          { status: 500 }
+        );
       }
-    } catch {
-      // Si fallan las tablas de ajustes, al menos devolvemos el CSV
+    }
+
+    if (idsSucursal.length > 0) {
+      const { error: updateSucursalError } = await admin
+        .from('controles_inventario_detalle')
+        .update({
+          estado: 'ajustado_sucursal',
+          ajustado: 1,
+        })
+        .in('id', idsSucursal);
+
+      if (updateSucursalError) {
+        return NextResponse.json(
+          { error: updateSucursalError.message },
+          { status: 500 }
+        );
+      }
     }
   }
 

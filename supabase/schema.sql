@@ -213,11 +213,58 @@ create table controles_inventario_detalle (
   stock_real_unidades numeric(12,2),
   -- Total contado en unidades (cajas*unidades_por_caja + unidades_sueltas)
   stock_real          numeric(12,2) not null default 0,
+  estado              text not null default 'en_progreso',
+  con_diferencias     smallint not null default 0,
+  auditado            smallint not null default 0,
+  ajustado            smallint not null default 0,
   diferencia          numeric(12,2) generated always as (stock_real - stock_sistema) stored,
   fecha_registro      timestamptz not null default now()
 );
 create index idx_cid_control on controles_inventario_detalle(control_id);
 create index idx_cid_producto_sistema on controles_inventario_detalle(producto_id_sistema);
+
+alter table controles_inventario_detalle
+  add column if not exists estado text;
+alter table controles_inventario_detalle
+  add column if not exists con_diferencias smallint not null default 0;
+alter table controles_inventario_detalle
+  add column if not exists auditado smallint not null default 0;
+alter table controles_inventario_detalle
+  add column if not exists ajustado smallint not null default 0;
+
+update controles_inventario_detalle
+set estado = case
+  when ajustado = 1 and auditado = 1 then 'ajustado_auditoria'
+  when ajustado = 1 then 'ajustado_sucursal'
+  when auditado = 1 then 'auditado'
+  when con_diferencias = 1 then 'con_diferencia'
+  else 'sin_diferencias'
+end
+where estado is null
+   or estado not in (
+     'en_progreso',
+     'con_diferencia',
+     'sin_diferencias',
+     'auditado',
+     'ajustado_auditoria',
+     'ajustado_sucursal'
+   );
+
+alter table controles_inventario_detalle
+  drop constraint if exists chk_cid_estado;
+
+alter table controles_inventario_detalle
+  add constraint chk_cid_estado
+  check (
+    estado in (
+      'en_progreso',
+      'con_diferencia',
+      'sin_diferencias',
+      'auditado',
+      'ajustado_auditoria',
+      'ajustado_sucursal'
+    )
+  );
 
 -- ------------------------------------------------------------
 -- CONTROLES DE VENCIMIENTOS  (cabecera)
