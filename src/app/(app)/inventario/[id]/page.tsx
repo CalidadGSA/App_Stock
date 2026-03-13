@@ -401,7 +401,7 @@ export default function InventarioDetailPage() {
   ]);
 
   async function cargarProductoParaDetalle(detalle: ControlInventarioDetalle) {
-    // Intenta traer stock actual desde /api/productos/[barcode]
+    // Solo abrimos la card si pudimos obtener el stock actual.
     try {
       const res = await fetch(`/api/productos/${encodeURIComponent(detalle.codigo_barras)}`);
       const json = await res.json() as { data?: ProductoLegacy; error?: string };
@@ -414,32 +414,25 @@ export default function InventarioDetailPage() {
         setStockRealUnidades(
           detalle.stock_real_unidades != null ? String(detalle.stock_real_unidades) : ''
         );
-        return;
+        return true;
       }
+      setProductoEscaneado(null);
+      setStockRealCajas('');
+      setStockRealUnidades('');
+      setErrorProducto(
+        json.error ??
+          'No se pudo consultar el stock del sistema. Volvé a intentar para evitar contar con datos incorrectos.'
+      );
+      return false;
     } catch {
-      // Si falla, seguimos con los datos del detalle
+      setProductoEscaneado(null);
+      setStockRealCajas('');
+      setStockRealUnidades('');
+      setErrorProducto(
+        'No se pudo consultar el stock del sistema. Volvé a intentar para evitar contar con datos incorrectos.'
+      );
+      return false;
     }
-
-    // Fallback: construir a partir del detalle si el API no respondió
-    setProductoEscaneado({
-      producto_id_sistema: detalle.producto_id_sistema,
-      codigo_barras: detalle.codigo_barras,
-      codigos_secundarios: [],
-      descripcion: detalle.descripcion,
-      presentacion: detalle.presentacion ?? null,
-      laboratorio: detalle.laboratorio ?? null,
-      stock_sistema: detalle.stock_sistema,
-      stock_cajas: detalle.stock_sist_cajas ?? undefined,
-      stock_unidades: detalle.stock_sist_unidades ?? undefined,
-      unidades_por_caja: undefined,
-      fraccionable: undefined,
-    });
-    setStockRealCajas(
-      detalle.stock_real_cajas != null ? String(detalle.stock_real_cajas) : ''
-    );
-    setStockRealUnidades(
-      detalle.stock_real_unidades != null ? String(detalle.stock_real_unidades) : ''
-    );
   }
 
   async function handleScan(barcode: string) {
@@ -487,9 +480,14 @@ export default function InventarioDetailPage() {
         return;
       }
 
-      setDetalleSeleccionadoId(detalle.id);
-      setFiltroCodigo(detalle.codigo_barras);
-      await cargarProductoParaDetalle(detalle);
+      const cargado = await cargarProductoParaDetalle(detalle);
+      if (cargado) {
+        setDetalleSeleccionadoId(detalle.id);
+        setFiltroCodigo(detalle.codigo_barras);
+      } else {
+        setDetalleSeleccionadoId(null);
+        setFiltroCodigo('');
+      }
       setBuscandoProducto(false);
       return;
     }
@@ -1019,11 +1017,16 @@ export default function InventarioDetailPage() {
                         } ${isSelected ? 'ring-2 ring-blue-300' : ''}`}
                         onClick={async () => {
                           setErrorProducto('');
-                          setDetalleSeleccionadoId(det.id);
-                          if (control.categoria_macro) {
-                            setFiltroCodigo(det.codigo_barras);
+                          const cargado = await cargarProductoParaDetalle(det);
+                          if (cargado) {
+                            setDetalleSeleccionadoId(det.id);
+                            if (control.categoria_macro) {
+                              setFiltroCodigo(det.codigo_barras);
+                            }
+                          } else {
+                            setDetalleSeleccionadoId(null);
+                            setFiltroCodigo('');
                           }
-                          await cargarProductoParaDetalle(det);
                         }}
                       >
                         <td className="px-4 py-3">

@@ -85,26 +85,30 @@ export async function GET(
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
 
-  let stock_sistema = 0;
+  let stock_sistema: number | undefined;
   let stock_cajas: number | undefined;
   let stock_unidades: number | undefined;
   let unidades_por_caja: number | undefined;
+  let stockLookupFailed = false;
 
   if (sucursalId) {
     const sucursalNum = parseInt(sucursalId, 10);
     const idProducto = Number(med.codplex);
     if (!Number.isNaN(sucursalNum) && !Number.isNaN(idProducto)) {
       try {
-        const { getStockFromLegacy } = await import('@/lib/legacy-db/mysql-stock');
+        const { getStockFromLegacyDetailed } = await import('@/lib/legacy-db/mysql-stock');
 
         // Evitar que la primera conexión lenta a MySQL bloquee toda la respuesta.
         const timeoutMs = 1500;
-        const stockRow = await Promise.race([
-          getStockFromLegacy(sucursalNum, idProducto),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+        const stockResult = await Promise.race([
+          getStockFromLegacyDetailed(sucursalNum, idProducto),
+          new Promise<{ status: 'timeout' }>((resolve) =>
+            setTimeout(() => resolve({ status: 'timeout' }), timeoutMs)
+          ),
         ]);
 
-        if (stockRow) {
+        if (stockResult.status === 'ok' && stockResult.row) {
+          const stockRow = stockResult.row;
           const cajas = Number(stockRow.cantidad ?? 0);
           const unidadesSueltas = Number(stockRow.unidades ?? 0);
           const unidadesProd = Number(stockRow.unidadesprod ?? 0) || 1;
@@ -113,11 +117,24 @@ export async function GET(
           stock_unidades = unidadesSueltas;
           unidades_por_caja = unidadesProd;
           stock_sistema = cajas * unidadesProd + unidadesSueltas;
+        } else if (stockResult.status !== 'ok') {
+          stockLookupFailed = true;
         }
       } catch (e) {
         console.error('Error obteniendo stock legacy para producto', med.codplex, e);
+        stockLookupFailed = true;
       }
     }
+  }
+
+  if (stockLookupFailed || stock_sistema == null) {
+    return NextResponse.json(
+      {
+        error:
+          'No se pudo consultar el stock del sistema en este momento. Volvé a intentar para evitar contar con datos incorrectos.',
+      },
+      { status: 503 }
+    );
   }
 
   const producto = {

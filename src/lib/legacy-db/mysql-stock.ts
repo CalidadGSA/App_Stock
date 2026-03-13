@@ -13,6 +13,33 @@ export interface StockLegacyRow {
   unidadesprod: number;
 }
 
+export type StockLegacyLookupResult =
+  | { status: 'ok'; row: StockLegacyRow | null }
+  | { status: 'unavailable'; error: unknown };
+
+function isTransientMySqlError(error: unknown) {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? String(error.code ?? '') : '';
+  return [
+    'ECONNRESET',
+    'PROTOCOL_CONNECTION_LOST',
+    'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+    'ETIMEDOUT',
+    'ECONNREFUSED',
+  ].includes(code);
+}
+
+async function resetPool() {
+  const pool = globalThis.__mysqlStockPool;
+  globalThis.__mysqlStockPool = undefined;
+  if (!pool) return;
+  try {
+    await pool.end();
+  } catch {
+    // Si el pool ya quedó roto, ignoramos el error para recrearlo limpio.
+  }
+}
+
 async function getPool() {
   if (globalThis.__mysqlStockPool) return globalThis.__mysqlStockPool;
   const mysql = await import('mysql2/promise');
@@ -42,21 +69,42 @@ async function getPool() {
  * Obtiene el stock de un producto en una sucursal desde la base MySQL externa.
  * Tabla: stock (Sucursal, IDProducto, Cantidad, Unidades, UnidadesProd).
  */
+export async function getStockFromLegacyDetailed(
+  sucursalId: number,
+  idProducto: number
+): Promise<StockLegacyLookupResult> {
+  for (let intento = 1; intento <= 2; intento += 1) {
+    const pool = await getPool();
+    if (!pool) {
+      return { status: 'unavailable', error: new Error('Configuración MySQL incompleta') };
+    }
+
+    try {
+      const [rows] = await pool.query<StockLegacyRow[]>(
+        'SELECT Cantidad AS cantidad, Unidades AS unidades, UnidadesProd AS unidadesprod FROM stock WHERE Sucursal = ? AND IDProducto = ? LIMIT 1',
+        [sucursalId, idProducto]
+      );
+      const row = Array.isArray(rows) ? rows[0] : null;
+      return { status: 'ok', row: row ?? null };
+    } catch (err) {
+      console.error('Error leyendo stock desde MySQL legacy:', err);
+
+      if (intento === 1 && isTransientMySqlError(err)) {
+        await resetPool();
+        continue;
+      }
+
+      return { status: 'unavailable', error: err };
+    }
+  }
+
+  return { status: 'unavailable', error: new Error('No se pudo consultar MySQL legacy') };
+}
+
 export async function getStockFromLegacy(
   sucursalId: number,
   idProducto: number
 ): Promise<StockLegacyRow | null> {
-  const pool = await getPool();
-  if (!pool) return null;
-  try {
-    const [rows] = await pool.query<StockLegacyRow[]>(
-      'SELECT Cantidad AS cantidad, Unidades AS unidades, UnidadesProd AS unidadesprod FROM stock WHERE Sucursal = ? AND IDProducto = ? LIMIT 1',
-      [sucursalId, idProducto]
-    );
-    const row = Array.isArray(rows) ? rows[0] : null;
-    return row ?? null;
-  } catch (err) {
-    console.error('Error leyendo stock desde MySQL legacy:', err);
-    return null;
-  }
+  const result = await getStockFromLegacyDetailed(sucursalId, idProducto);
+  return result.status === 'ok' ? result.row : null;
 }
