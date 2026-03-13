@@ -4,6 +4,11 @@
 
 export type RolUsuario = 'admin' | 'operador_sucursal';
 export type EstadoControl = 'en_progreso' | 'cerrado';
+export type TipoControlInventario =
+  | 'diario'
+  | 'ocasional_sucursal'
+  | 'ocasional_auditoria'
+  | 'auditoria';
 
 // ------------------------------------------------------------
 // Entidades de la base de datos
@@ -39,6 +44,7 @@ export interface ProductoCache {
 export interface ProductoLegacy {
   producto_id_sistema: string;
   codigo_barras: string;
+  codigos_secundarios?: string[];
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
@@ -67,6 +73,8 @@ export interface ControlInventario {
   estado: EstadoControl;
   /** Origen del control: 'Sucursal' (operador) o 'Auditoria' (admin). */
   origen?: string | null;
+  /** Tipo explícito del control para distinguir diarios, auditorías y ocasionales por origen. */
+  tipo?: TipoControlInventario | null;
   /** Categoría macro del inventario: FARMA / BIENESTAR / PSICOTROPICOS */
   categoria_macro?: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
   descripcion: string | null;

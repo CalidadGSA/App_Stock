@@ -36,7 +36,7 @@ export async function GET(
   if (idProductoFromBarcode != null) {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab, fraccionable')
+      .select('codplex, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, fraccionable')
       .eq('codplex', idProductoFromBarcode)
       .maybeSingle();
 
@@ -48,7 +48,7 @@ export async function GET(
   } else {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab, fraccionable')
+      .select('codplex, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, fraccionable')
       .eq('codebar', barcode)
       .limit(1)
       .maybeSingle();
@@ -123,6 +123,9 @@ export async function GET(
   const producto = {
     producto_id_sistema: String(med.codplex),
     codigo_barras: med.codebar,
+    codigos_secundarios: [med.codebar2, med.codebar3, med.codebar4]
+      .filter((code: unknown): code is string => typeof code === 'string' && code.trim().length > 0)
+      .filter((code, index, arr) => code !== med.codebar && arr.indexOf(code) === index),
     descripcion: med.producto,
     presentacion: med.presentaci ?? null,
     laboratorio: laboratorioNombre ?? (med.codlab != null ? String(med.codlab) : null),

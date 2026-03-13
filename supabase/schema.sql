@@ -165,6 +165,7 @@ create table controles_inventario (
   fecha_fin    timestamptz,
   estado       estado_control not null default 'en_progreso',
   origen       text not null default 'Sucursal',
+  tipo         text not null default 'ocasional_sucursal',
   descripcion  text,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
@@ -173,10 +174,23 @@ create table controles_inventario (
 -- Categoría macro opcional para el inventario (FARMA / BIENESTAR / PSICOTROPICOS)
 alter table controles_inventario
   add column if not exists categoria_macro text;
+alter table controles_inventario
+  add column if not exists tipo text;
 create index idx_ci_sucursal on controles_inventario(sucursal_id);
 create index idx_ci_estado   on controles_inventario(estado);
 create index idx_ci_usuario on controles_inventario(usuario_id);
 create index idx_ci_fecha_inicio on controles_inventario(fecha_inicio);
+create index if not exists idx_ci_tipo on controles_inventario(tipo);
+
+update controles_inventario
+set tipo = case
+  when categoria_macro is not null then 'diario'
+  when origen = 'Auditoria' and coalesce(lower(descripcion), '') like '%ocasional%' then 'ocasional_auditoria'
+  when origen = 'Auditoria' then 'auditoria'
+  else 'ocasional_sucursal'
+end
+where tipo is null
+   or tipo not in ('diario', 'ocasional_sucursal', 'ocasional_auditoria', 'auditoria');
 
 -- ------------------------------------------------------------
 -- CONTROLES DE INVENTARIO  (detalle)

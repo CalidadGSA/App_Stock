@@ -1,5 +1,9 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  inferirTipoControlInventario,
+  nombreTipoControlInventario,
+} from '@/lib/inventario/tipo-control';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -16,6 +20,30 @@ export async function POST(request: Request) {
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   const admin = await createAdminClient();
+  const tipoObjetivo = 'auditoria';
+
+  const { data: controlesAbiertos, error: abiertosError } = await admin
+    .from('controles_inventario')
+    .select('id, origen, tipo, categoria_macro, descripcion')
+    .eq('sucursal_id', parseInt(sucursalId, 10))
+    .eq('estado', 'en_progreso');
+
+  if (abiertosError) {
+    return NextResponse.json({ error: abiertosError.message }, { status: 500 });
+  }
+
+  const controlAbiertoMismoTipo = (controlesAbiertos ?? []).find(
+    (control) => inferirTipoControlInventario(control) === tipoObjetivo
+  );
+
+  if (controlAbiertoMismoTipo) {
+    return NextResponse.json(
+      {
+        error: `Ya hay una ${nombreTipoControlInventario(tipoObjetivo)} abierta.`,
+      },
+      { status: 409 }
+    );
+  }
 
   let body: { descripcion?: string } = {};
   try {
@@ -36,6 +64,7 @@ export async function POST(request: Request) {
       sucursal_id: parseInt(sucursalId, 10),
       usuario_id: operador.idoperador,
       origen: 'Auditoria',
+      tipo: 'auditoria',
       descripcion,
     })
     .select()

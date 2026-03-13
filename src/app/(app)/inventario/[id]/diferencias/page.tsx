@@ -226,7 +226,7 @@ export default function InventarioDiferenciasPage() {
     if (
       detallesConDiferencias.length > 0 &&
       !confirm(
-        'Aún hay diferencias distintas de 0. ¿Seguro que querés cerrar el control igualmente?'
+        '¿Cerrar control con estas diferencias?'
       )
     ) {
       return;

@@ -15,6 +15,18 @@ export default function NuevoInventarioPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
+  async function crearInventario(confirmOverride = false) {
+    return fetch('/api/inventario', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        descripcion: descripcion.trim() || undefined,
+        categoria_macro: categoriaMacro || undefined,
+        confirm_override: confirmOverride || undefined,
+      }),
+    });
+  }
+
   async function handleCrear(e: React.FormEvent) {
     e.preventDefault();
     setError('');
@@ -26,15 +38,32 @@ export default function NuevoInventarioPage() {
     setCreating(true);
 
     try {
-      const res = await fetch('/api/inventario', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          descripcion: descripcion.trim() || undefined,
-          categoria_macro: categoriaMacro || undefined,
-        }),
-      });
-      const json = await res.json() as { data?: { id: string }; error?: string };
+      let res = await crearInventario(false);
+      let json = await res.json() as {
+        data?: { id: string };
+        error?: string;
+        warning?: string | null;
+        requires_confirmation?: boolean;
+      };
+
+      if (!res.ok && json.requires_confirmation) {
+        const confirmar = window.confirm(
+          json.warning ?? 'Ya existe un inventario abierto de esta categoría. ¿Querés crearlo igual?'
+        );
+
+        if (!confirmar) {
+          setCreating(false);
+          return;
+        }
+
+        res = await crearInventario(true);
+        json = await res.json() as {
+          data?: { id: string };
+          error?: string;
+          warning?: string | null;
+          requires_confirmation?: boolean;
+        };
+      }
 
       if (!res.ok) { setError(json.error ?? 'Error al crear control'); return; }
 

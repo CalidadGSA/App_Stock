@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
+import { etiquetaTipoControlInventario, inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats } from '@/types';
 
@@ -133,12 +134,9 @@ export default function DashboardPage() {
             ) : (
               <ul className="divide-y divide-gray-100">
                 {stats?.ultimos_inventarios.map(inv => {
-                  const tipo =
-                    inv.origen === 'Auditoria'
-                      ? 'Auditoría'
-                      : (inv.descripcion ?? '').toLowerCase().includes('ocasional')
-                        ? 'Inventario ocasional'
-                        : 'Inventario diario';
+                  const tipo = etiquetaTipoControlInventario(
+                    inferirTipoControlInventario(inv)
+                  );
                   return (
                     <li key={inv.id}>
                       <Link
@@ -157,7 +155,7 @@ export default function DashboardPage() {
                             </p>
                             <div className="mt-0.5 flex items-center gap-2">
                               <Badge
-                                variant="outline"
+                                variant="default"
                                 className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
                               >
                                 {tipo}

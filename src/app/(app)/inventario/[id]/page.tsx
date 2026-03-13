@@ -17,6 +17,29 @@ interface ControlConDetalles extends ControlInventario {
   controles_inventario_detalle: ControlInventarioDetalle[];
 }
 
+function normalizeBarcode(value: string | null | undefined) {
+  return (value ?? '').trim();
+}
+
+function productoAceptaBarcode(producto: ProductoLegacy | null, barcode: string) {
+  if (!producto) return false;
+
+  const scanned = normalizeBarcode(barcode);
+  if (!scanned) return false;
+
+  const codigos = new Set([
+    normalizeBarcode(producto.codigo_barras),
+    ...(producto.codigos_secundarios ?? []).map(normalizeBarcode),
+  ]);
+
+  codigos.delete('');
+  return codigos.has(scanned);
+}
+
+function detalleCoincideConBarcode(detalle: ControlInventarioDetalle, barcode: string) {
+  return normalizeBarcode(detalle.codigo_barras) === normalizeBarcode(barcode);
+}
+
 export default function InventarioDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -131,7 +154,7 @@ export default function InventarioDetailPage() {
     field: 'cajas' | 'unidades',
     e: React.KeyboardEvent<HTMLInputElement>
   ) {
-    if (!control?.categoria_macro || !productoEscaneado) return;
+    if (!productoEscaneado) return;
 
     const isDigit = /^\d$/.test(e.key);
     const isEnter = e.key === 'Enter';
@@ -259,7 +282,7 @@ export default function InventarioDetailPage() {
   useEffect(() => { cargarControl(); }, [cargarControl]);
 
   useEffect(() => {
-    if (!control?.categoria_macro || !productoEscaneado) return;
+    if (!productoEscaneado) return;
 
     function targetField(target: EventTarget | null): 'cajas' | 'unidades' | null {
       if (!(target instanceof HTMLElement)) return null;
@@ -372,7 +395,6 @@ export default function InventarioDetailPage() {
       window.removeEventListener('keydown', handleGlobalInputCapture, true);
     };
   }, [
-    control?.categoria_macro,
     productoEscaneado,
     stockRealCajas,
     stockRealUnidades,
@@ -402,6 +424,7 @@ export default function InventarioDetailPage() {
     setProductoEscaneado({
       producto_id_sistema: detalle.producto_id_sistema,
       codigo_barras: detalle.codigo_barras,
+      codigos_secundarios: [],
       descripcion: detalle.descripcion,
       presentacion: detalle.presentacion ?? null,
       laboratorio: detalle.laboratorio ?? null,
@@ -422,15 +445,9 @@ export default function InventarioDetailPage() {
   async function handleScan(barcode: string) {
     setErrorProducto('');
 
-    // Si la card está abierta en un inventario diario:
-    // - el mismo código suma 1 caja
-    // - un código distinto no cierra la card ni cambia de producto
-    if (
-      control?.categoria_macro &&
-      productoEscaneado &&
-      detalleSeleccionadoId
-    ) {
-      if (barcode === productoEscaneado.codigo_barras) {
+    // Si la card está abierta, cualquier barcode del mismo producto suma 1 caja.
+    if (productoEscaneado) {
+      if (productoAceptaBarcode(productoEscaneado, barcode)) {
         setStockRealCajas((prev) => String((parseInt(prev || '0', 10) || 0) + 1));
       } else {
         setErrorProducto('Este código no pertenece al producto seleccionado.');
@@ -447,7 +464,22 @@ export default function InventarioDetailPage() {
     // el escaneo solo sirve para ubicar un producto ya registrado, sin agregar líneas nuevas.
     if (control?.categoria_macro) {
       const detallesControl = control.controles_inventario_detalle ?? [];
-      const detalle = detallesControl.find((d) => d.codigo_barras === barcode) ?? null;
+      let detalle = detallesControl.find((d) => d.codigo_barras === barcode) ?? null;
+
+      if (!detalle) {
+        try {
+          const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
+          const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+          if (res.ok && json.data) {
+            detalle =
+              detallesControl.find(
+                (d) => d.producto_id_sistema === json.data?.producto_id_sistema
+              ) ?? null;
+          }
+        } catch {
+          // Si falla esta resolución extra, dejamos el mismo mensaje estándar.
+        }
+      }
 
       if (!detalle) {
         setErrorProducto('Este producto no forma parte de los productos asignados a este inventario diario.');
@@ -456,7 +488,7 @@ export default function InventarioDetailPage() {
       }
 
       setDetalleSeleccionadoId(detalle.id);
-      setFiltroCodigo(barcode);
+      setFiltroCodigo(detalle.codigo_barras);
       await cargarProductoParaDetalle(detalle);
       setBuscandoProducto(false);
       return;
@@ -476,7 +508,34 @@ export default function InventarioDetailPage() {
           setErrorProducto(json.error ?? 'Producto no encontrado');
           return;
         }
-        setProductoEscaneado(json.data!);
+        const producto = json.data!;
+        const detallesControl = control?.controles_inventario_detalle ?? [];
+        const detalleExistente =
+          detallesControl.find(
+            (d) => d.producto_id_sistema === producto.producto_id_sistema
+          ) ??
+          detallesControl.find((d) => detalleCoincideConBarcode(d, barcode)) ??
+          null;
+
+        setProductoEscaneado(producto);
+
+        if (detalleExistente) {
+          setDetalleSeleccionadoId(detalleExistente.id);
+          setStockRealCajas(
+            detalleExistente.stock_real_cajas != null
+              ? String(detalleExistente.stock_real_cajas)
+              : ''
+          );
+          setStockRealUnidades(
+            detalleExistente.stock_real_unidades != null
+              ? String(detalleExistente.stock_real_unidades)
+              : ''
+          );
+        } else {
+          setDetalleSeleccionadoId(null);
+          setStockRealCajas('');
+          setStockRealUnidades('');
+        }
       } catch {
         if (intento === 1) {
           await fetchProducto(2);
@@ -560,8 +619,8 @@ export default function InventarioDetailPage() {
     try {
       let res: Response;
 
-      // En inventarios diarios con categoria_macro y un detalle seleccionado, actualizamos la línea existente (PATCH)
-      if (control?.categoria_macro && detalleSeleccionadoId) {
+      // Si ya existe un detalle para este producto en el control, actualizamos la línea existente (PATCH)
+      if (detalleSeleccionadoId) {
         res = await fetch(`/api/inventario/${id}/detalles`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -575,7 +634,7 @@ export default function InventarioDetailPage() {
           }),
         });
       } else {
-        // Inventarios sin categoria_macro: seguimos creando nuevas líneas (POST)
+        // Si el producto todavía no existe en el control, creamos una línea nueva (POST)
         res = await fetch(`/api/inventario/${id}/detalles`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -604,7 +663,7 @@ export default function InventarioDetailPage() {
       setDetalleSeleccionadoId(null);
       setFiltroCodigo('');
 
-      // En inventarios diarios con categoria_macro, actualizamos el detalle en memoria
+      // Si actualizamos un detalle existente en un inventario diario, lo reflejamos en memoria
       // para no romper el orden original de la lista.
       if (control?.categoria_macro && detalleSeleccionadoId) {
         setControl(prev => {
@@ -743,13 +802,12 @@ export default function InventarioDetailPage() {
               // En inventarios diarios guiados, el escáner sigue activo con la card abierta para sumar cajas
               disabled={
                 buscandoProducto ||
-                guardando ||
-                (!!productoEscaneado && !control?.categoria_macro)
+                guardando
               }
               placeholder="Escanear o ingresar código de barras..."
               // En inventarios con categoria_macro no forzamos el foco permanente en el buscador
               autoFocusInput={!productoEscaneado && !control?.categoria_macro}
-              captureGlobally={!!control?.categoria_macro && !!productoEscaneado && !editandoCard}
+              captureGlobally={!!productoEscaneado && !editandoCard}
             />
 
             {buscandoProducto && (
@@ -892,11 +950,8 @@ export default function InventarioDetailPage() {
                       setStockRealCajas('');
                       setStockRealUnidades('');
                       setErrorProducto('');
-                      // En inventarios diarios con categoria_macro volvemos a mostrar el listado completo
-                      if (control?.categoria_macro) {
-                        setDetalleSeleccionadoId(null);
-                        setFiltroCodigo('');
-                      }
+                      setDetalleSeleccionadoId(null);
+                      setFiltroCodigo('');
                     }}
                     className="flex-1"
                   >
@@ -967,8 +1022,8 @@ export default function InventarioDetailPage() {
                           setDetalleSeleccionadoId(det.id);
                           if (control.categoria_macro) {
                             setFiltroCodigo(det.codigo_barras);
-                            await cargarProductoParaDetalle(det);
                           }
+                          await cargarProductoParaDetalle(det);
                         }}
                       >
                         <td className="px-4 py-3">

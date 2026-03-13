@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { LogOut, ClipboardList, CalendarClock, Menu, X } from 'lucide-react';
 import Link from 'next/link';
@@ -14,9 +14,22 @@ interface NavbarProps {
 
 export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }: NavbarProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [rol, setRol] = useState<'admin' | 'operador_sucursal'>('operador_sucursal');
+
+  const estaEnControlInventario =
+    pathname.startsWith('/inventario/') &&
+    pathname !== '/inventario/nuevo' &&
+    pathname !== '/inventario/ocasional' &&
+    pathname !== '/inventario/auditoria';
+
+  const estaEnControlVencimientos =
+    pathname.startsWith('/vencimientos/') &&
+    pathname !== '/vencimientos/nuevo';
+
+  const ocultarAccionesOperativas = estaEnControlInventario || estaEnControlVencimientos;
 
   useEffect(() => {
     async function cargarRol() {
@@ -69,6 +82,8 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
             </span>
           </div>
           <div className="hidden md:flex items-center gap-2">
+            {!ocultarAccionesOperativas && (
+              <>
             {rol === 'admin' ? (
               <>
                 <Button
@@ -97,7 +112,8 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                   onClick={() => router.push('/inventario/nuevo')}
                 >
                   <ClipboardList className="h-4 w-4" />
-                  Inventario diario
+                  <span className="lg:hidden">Diario</span>
+                  <span className="hidden lg:inline">Inventario diario</span>
                 </Button>
                 <Button
                   size="sm"
@@ -106,7 +122,8 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                   onClick={() => router.push('/inventario/ocasional')}
                 >
                   <ClipboardList className="h-4 w-4" />
-                  Inventario ocasional
+                  <span className="lg:hidden">Ocasional</span>
+                  <span className="hidden lg:inline">Inventario ocasional</span>
                 </Button>
                 <Button
                   size="sm"
@@ -115,12 +132,15 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                   onClick={() => router.push('/vencimientos/nuevo')}
                 >
                   <CalendarClock className="h-4 w-4" />
-                  Control de vencimientos
+                  <span className="lg:hidden">Vencimientos</span>
+                  <span className="hidden lg:inline">Control de vencimientos</span>
                 </Button>
               </>
             )}
+              </>
+            )}
           </div>
-          {rol === 'admin' && (
+          {rol === 'admin' && !ocultarAccionesOperativas && (
             <button
               onClick={handleCambiarSucursal}
               className="hidden md:flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
@@ -128,14 +148,16 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
               Cambiar sucursal
             </button>
           )}
-          <button
-            onClick={handleLogout}
-            disabled={loggingOut}
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-gray-600 hover:bg-red-50 hover:text-red-700 transition-colors shrink-0"
-          >
-            <LogOut className="h-4 w-4" />
-            <span className="hidden sm:inline">{loggingOut ? 'Saliendo...' : 'Salir'}</span>
-          </button>
+          {!ocultarAccionesOperativas && (
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-gray-600 hover:bg-red-50 hover:text-red-700 transition-colors shrink-0"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">{loggingOut ? 'Saliendo...' : 'Salir'}</span>
+            </button>
+          )}
           <button
             className="md:hidden rounded-lg p-1.5 text-gray-600 hover:bg-gray-100 shrink-0"
             onClick={() => setMenuOpen(!menuOpen)}
@@ -153,7 +175,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
             <p className="text-xs text-gray-500">{nombreUsuario}</p>
           </div>
           <nav className="flex flex-col gap-1">
-            {rol === 'admin' ? (
+            {!ocultarAccionesOperativas && (rol === 'admin' ? (
               <>
                 <Button
                   size="sm"
@@ -212,8 +234,8 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                   <CalendarClock className="h-4 w-4" /> Control de vencimientos
                 </Button>
               </>
-            )}
-            {rol === 'admin' && (
+            ))}
+            {rol === 'admin' && !ocultarAccionesOperativas && (
               <button
                 onClick={handleCambiarSucursal}
                 className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 text-left w-full"
@@ -221,13 +243,15 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                 Cambiar sucursal
               </button>
             )}
-            <button
-              onClick={handleLogout}
-              disabled={loggingOut}
-              className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 text-left w-full"
-            >
-              <LogOut className="h-4 w-4" /> {loggingOut ? 'Saliendo...' : 'Salir'}
-            </button>
+            {!ocultarAccionesOperativas && (
+              <button
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 text-left w-full"
+              >
+                <LogOut className="h-4 w-4" /> {loggingOut ? 'Saliendo...' : 'Salir'}
+              </button>
+            )}
           </nav>
         </div>
       )}
