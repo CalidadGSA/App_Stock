@@ -1,5 +1,9 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  esTipoControlVisibleParaOperadorSucursal,
+  inferirTipoControlInventario,
+} from '@/lib/inventario/tipo-control';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -14,16 +18,19 @@ export async function POST(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const admin = await createAdminClient();
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id, categoria_macro, fecha_inicio')
+    .select('estado, sucursal_id, categoria_macro, fecha_inicio, origen, tipo, descripcion')
     .eq('id', controlId)
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
   if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  const tipoControl = inferirTipoControlInventario(control);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'Ya está cerrado' }, { status: 400 });
 
   const now = new Date().toISOString();

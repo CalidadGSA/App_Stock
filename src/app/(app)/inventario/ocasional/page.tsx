@@ -13,16 +13,48 @@ export default function NuevoInventarioOcasionalPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  async function crearInventario(confirmOverride = false) {
+    return fetch('/api/inventario/ocasional', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        descripcion: descripcion.trim() || 'Inventario ocasional',
+        confirm_override: confirmOverride || undefined,
+      }),
+    });
+  }
+
   async function handleCrear() {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch('/api/inventario/ocasional', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ descripcion: descripcion.trim() || 'Inventario ocasional' }),
-      });
-      const json = await res.json();
+      let res = await crearInventario(false);
+      let json = await res.json() as {
+        data?: { id: string };
+        error?: string;
+        warning?: string;
+        requires_confirmation?: boolean;
+      };
+
+      if (!res.ok && json.requires_confirmation) {
+        const confirmar = window.confirm(
+          json.warning ?? 'Ya existe un inventario ocasional abierto. ¿Querés crearlo igual?'
+        );
+
+        if (!confirmar) {
+          setLoading(false);
+          return;
+        }
+
+        res = await crearInventario(true);
+        json = await res.json() as {
+          data?: { id: string };
+          error?: string;
+          warning?: string;
+          requires_confirmation?: boolean;
+        };
+      }
+
       if (!res.ok) {
         setError(json.error ?? 'Error al crear inventario ocasional');
         return;

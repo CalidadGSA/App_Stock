@@ -1,5 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  esTipoAuditoria,
+  esTipoControlVisibleParaOperadorSucursal,
+  inferirTipoControlInventario,
+} from '@/lib/inventario/tipo-control';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -33,18 +38,21 @@ export async function POST(
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const admin = await createAdminClient();
 
   // Verificar que el control pertenece a la sucursal y está en progreso
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id, origen')
+    .select('estado, sucursal_id, origen, tipo, categoria_macro, descripcion')
     .eq('id', controlId)
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
   if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  const tipoControl = inferirTipoControlInventario(control);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'El control ya está cerrado' }, { status: 400 });
 
   const body = await request.json() as DetalleBody;
@@ -77,7 +85,7 @@ export async function POST(
   let estado = 'en_progreso';
   let conDiferencias = 0;
   let auditado = 0;
-  if (control.origen === 'Auditoria') {
+  if (esTipoAuditoria(tipoControl)) {
     estado = 'auditado';
     auditado = 1;
     conDiferencias = deltaC === 0 && deltaU === 0 ? 0 : 1;
@@ -131,17 +139,20 @@ export async function PATCH(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const admin = await createAdminClient();
 
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id, origen')
+    .select('estado, sucursal_id, origen, tipo, categoria_macro, descripcion')
     .eq('id', controlId)
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
   if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  const tipoControl = inferirTipoControlInventario(control);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'El control ya está cerrado' }, { status: 400 });
 
   const body = await request.json() as {
@@ -190,7 +201,7 @@ export async function PATCH(
   let estado = 'en_progreso';
   let conDiferencias = 0;
   let auditado = 0;
-  if (control.origen === 'Auditoria') {
+  if (esTipoAuditoria(tipoControl)) {
     estado = 'auditado';
     auditado = 1;
     conDiferencias = deltaC === 0 && deltaU === 0 ? 0 : 1;
@@ -237,6 +248,7 @@ export async function DELETE(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const detalleId = new URL(request.url).searchParams.get('detalle_id');
   if (!detalleId) return NextResponse.json({ error: 'detalle_id requerido' }, { status: 400 });
@@ -244,11 +256,13 @@ export async function DELETE(
   const admin = await createAdminClient();
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id')
+    .select('estado, sucursal_id, origen, tipo, categoria_macro, descripcion')
     .eq('id', controlId)
     .single();
 
   if (!control || String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  const tipoControl = inferirTipoControlInventario(control);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'Control cerrado' }, { status: 400 });
 
   const { error } = await admin.from('controles_inventario_detalle').delete().eq('id', detalleId);

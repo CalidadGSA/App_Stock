@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
+import { etiquetaTipoControlInventario, inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
 import { formatDateTime } from '@/lib/utils';
 import type { ControlInventario } from '@/types';
 
@@ -120,12 +121,9 @@ export default function InventarioListPage() {
           ) : (
             <ul className="divide-y divide-gray-100">
               {items.map((inv) => {
-                const tipo =
-                  inv.origen === 'Auditoria'
-                    ? 'Auditoría'
-                    : (inv.descripcion ?? '').toLowerCase().includes('ocasional')
-                      ? 'Inventario ocasional'
-                      : 'Inventario diario';
+                const tipo = etiquetaTipoControlInventario(
+                  inferirTipoControlInventario(inv)
+                );
                 return (
                   <li key={inv.id}>
                     <Link

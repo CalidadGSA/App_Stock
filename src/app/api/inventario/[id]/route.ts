@@ -1,5 +1,9 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  esTipoControlVisibleParaOperadorSucursal,
+  inferirTipoControlInventario,
+} from '@/lib/inventario/tipo-control';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -14,6 +18,7 @@ export async function GET(
   const { id } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const admin = await createAdminClient();
   const { data, error } = await admin
@@ -31,5 +36,9 @@ export async function GET(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+  const tipoControl = inferirTipoControlInventario(data);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
   return NextResponse.json({ data });
 }
