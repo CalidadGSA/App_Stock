@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, CheckCircle2, Trash2, Package, TrendingUp, TrendingDown, Minus } from 'lucide-react';
@@ -34,6 +34,214 @@ export default function InventarioDetailPage() {
   const [guardando, setGuardando] = useState(false);
   const [detalleSeleccionadoId, setDetalleSeleccionadoId] = useState<string | null>(null);
   const [filtroCodigo, setFiltroCodigo] = useState<string>('');
+  const [editandoCard, setEditandoCard] = useState(false);
+  const inputCajasRef = useRef<HTMLInputElement>(null);
+  const inputUnidadesRef = useRef<HTMLInputElement>(null);
+  const ultimoKeyMsRef = useRef(0);
+  const scannerBufferRef = useRef('');
+  const scannerEnInputRef = useRef(false);
+  const baselineCajasRef = useRef('');
+  const baselineUnidadesRef = useRef('');
+  const sequenceStartCajasRef = useRef('');
+  const sequenceStartUnidadesRef = useRef('');
+  const pendingManualTimerRef = useRef<number | null>(null);
+  const pendingManualFieldRef = useRef<'cajas' | 'unidades' | null>(null);
+
+  function handleChangeStockRealCajas(value: string) {
+    if (value === '') {
+      setStockRealCajas('');
+      baselineCajasRef.current = '';
+      return;
+    }
+    // Solo permitir enteros de hasta 4 dígitos; evita que un barcode quede escrito literal.
+    if (!/^\d{1,4}$/.test(value)) {
+      if (value.replace(/\D/g, '').length > 4) {
+        setErrorProducto('Se detectó una lectura de código. Ese valor no se carga en el campo de cajas.');
+      }
+      return;
+    }
+    setErrorProducto('');
+    setStockRealCajas(value);
+    if (!scannerEnInputRef.current) {
+      baselineCajasRef.current = value;
+    }
+  }
+
+  function handleChangeStockRealUnidades(value: string) {
+    if (value === '') {
+      setStockRealUnidades('');
+      baselineUnidadesRef.current = '';
+      return;
+    }
+    // Solo permitir enteros de hasta 3 dígitos; evita que un barcode quede escrito literal.
+    if (!/^\d{1,3}$/.test(value)) {
+      if (value.replace(/\D/g, '').length > 3) {
+        setErrorProducto('Se detectó una lectura de código. Ese valor no se carga en el campo de unidades.');
+      }
+      return;
+    }
+    setErrorProducto('');
+    setStockRealUnidades(value);
+    if (!scannerEnInputRef.current) {
+      baselineUnidadesRef.current = value;
+    }
+  }
+
+  function resetScannerInputCapture() {
+    ultimoKeyMsRef.current = 0;
+    scannerBufferRef.current = '';
+    scannerEnInputRef.current = false;
+    sequenceStartCajasRef.current = '';
+    sequenceStartUnidadesRef.current = '';
+    if (pendingManualTimerRef.current != null) {
+      window.clearTimeout(pendingManualTimerRef.current);
+      pendingManualTimerRef.current = null;
+    }
+    pendingManualFieldRef.current = null;
+  }
+
+  function setFieldValue(field: 'cajas' | 'unidades', value: string) {
+    if (field === 'cajas') {
+      setStockRealCajas(value);
+      baselineCajasRef.current = value;
+      if (inputCajasRef.current) inputCajasRef.current.value = value;
+    } else {
+      setStockRealUnidades(value);
+      baselineUnidadesRef.current = value;
+      if (inputUnidadesRef.current) inputUnidadesRef.current.value = value;
+    }
+  }
+
+  function handleCardInputFocus(field: 'cajas' | 'unidades') {
+    setEditandoCard(true);
+    if (field === 'cajas') {
+      baselineCajasRef.current = stockRealCajas;
+    } else {
+      baselineUnidadesRef.current = stockRealUnidades;
+    }
+    resetScannerInputCapture();
+  }
+
+  function handleCardInputBlur() {
+    setEditandoCard(false);
+    resetScannerInputCapture();
+  }
+
+  function handleCardInputKeyDown(
+    field: 'cajas' | 'unidades',
+    e: React.KeyboardEvent<HTMLInputElement>
+  ) {
+    if (!control?.categoria_macro || !productoEscaneado) return;
+
+    const isDigit = /^\d$/.test(e.key);
+    const isEnter = e.key === 'Enter';
+    const now = Date.now();
+
+    if (isDigit) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const delta = ultimoKeyMsRef.current === 0 ? Number.POSITIVE_INFINITY : now - ultimoKeyMsRef.current;
+      ultimoKeyMsRef.current = now;
+      const thresholdMs = 20;
+      const manualCommitDelayMs = 35;
+
+      // Guardamos el valor al inicio de una nueva secuencia de teclas.
+      if (scannerBufferRef.current.length === 0) {
+        if (field === 'cajas') {
+          sequenceStartCajasRef.current = stockRealCajas;
+        } else {
+          sequenceStartUnidadesRef.current = stockRealUnidades;
+        }
+      }
+
+      // Si detectamos una secuencia extremadamente rápida, asumimos que es el escáner
+      if (!scannerEnInputRef.current && scannerBufferRef.current.length > 0 && delta < thresholdMs) {
+        scannerEnInputRef.current = true;
+        if (pendingManualTimerRef.current != null) {
+          window.clearTimeout(pendingManualTimerRef.current);
+          pendingManualTimerRef.current = null;
+        }
+        pendingManualFieldRef.current = null;
+        if (field === 'cajas') {
+          setStockRealCajas(sequenceStartCajasRef.current);
+          if (inputCajasRef.current) {
+            inputCajasRef.current.value = sequenceStartCajasRef.current;
+          }
+        } else {
+          setStockRealUnidades(sequenceStartUnidadesRef.current);
+          if (inputUnidadesRef.current) {
+            inputUnidadesRef.current.value = sequenceStartUnidadesRef.current;
+          }
+        }
+      }
+
+      scannerBufferRef.current += e.key;
+
+      // Si todavía no parece escáner, diferimos un instante la escritura manual.
+      // Así evitamos que el primer dígito del barcode llegue a verse en el campo.
+      if (!scannerEnInputRef.current) {
+        if (pendingManualTimerRef.current != null) {
+          window.clearTimeout(pendingManualTimerRef.current);
+        }
+        pendingManualFieldRef.current = field;
+        const current = field === 'cajas' ? stockRealCajas : stockRealUnidades;
+        const maxDigits = field === 'cajas' ? 4 : 3;
+        const next = `${current}${e.key}`.slice(0, maxDigits);
+        pendingManualTimerRef.current = window.setTimeout(() => {
+          if (!scannerEnInputRef.current && pendingManualFieldRef.current === field) {
+            setFieldValue(field, next);
+            scannerBufferRef.current = '';
+            ultimoKeyMsRef.current = 0;
+          }
+          pendingManualTimerRef.current = null;
+          pendingManualFieldRef.current = null;
+        }, manualCommitDelayMs);
+      }
+      return;
+    }
+
+    if (isEnter && scannerEnInputRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      const barcode = scannerBufferRef.current.trim();
+      resetScannerInputCapture();
+      setEditandoCard(false);
+      if (field === 'cajas') {
+        inputCajasRef.current?.blur();
+      } else {
+        inputUnidadesRef.current?.blur();
+      }
+      if (barcode) {
+        void handleScan(barcode);
+      }
+      return;
+    }
+
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      e.stopPropagation();
+      resetScannerInputCapture();
+      const current = field === 'cajas' ? stockRealCajas : stockRealUnidades;
+      setFieldValue(field, current.slice(0, -1));
+      return;
+    }
+
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      e.stopPropagation();
+      resetScannerInputCapture();
+      setFieldValue(field, '');
+      return;
+    }
+
+    if (
+      !isEnter &&
+      !['ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'].includes(e.key)
+    ) {
+      resetScannerInputCapture();
+    }
+  }
 
   const cargarControl = useCallback(async () => {
     try {
@@ -49,6 +257,126 @@ export default function InventarioDetailPage() {
   }, [id]);
 
   useEffect(() => { cargarControl(); }, [cargarControl]);
+
+  useEffect(() => {
+    if (!control?.categoria_macro || !productoEscaneado) return;
+
+    function targetField(target: EventTarget | null): 'cajas' | 'unidades' | null {
+      if (!(target instanceof HTMLElement)) return null;
+      if (inputCajasRef.current && target === inputCajasRef.current) return 'cajas';
+      if (inputUnidadesRef.current && target === inputUnidadesRef.current) return 'unidades';
+      return null;
+    }
+
+    function handleGlobalInputCapture(e: KeyboardEvent) {
+      const field = targetField(e.target);
+      if (!field) return;
+
+      const isDigit = /^\d$/.test(e.key);
+      const isEnter = e.key === 'Enter';
+      const isBackspace = e.key === 'Backspace';
+      const isDelete = e.key === 'Delete';
+      const allowedNav = ['ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
+
+      if (!isDigit && !isEnter && !isBackspace && !isDelete && !allowedNav.includes(e.key)) {
+        return;
+      }
+
+      // Interceptar antes de que el navegador escriba nada en el input
+      e.preventDefault();
+      e.stopPropagation();
+
+      const now = Date.now();
+      const delta = ultimoKeyMsRef.current === 0 ? Number.POSITIVE_INFINITY : now - ultimoKeyMsRef.current;
+
+      if (isDigit) {
+        ultimoKeyMsRef.current = now;
+        const thresholdMs = 20;
+        const manualCommitDelayMs = 35;
+
+        if (scannerBufferRef.current.length === 0) {
+          if (field === 'cajas') {
+            sequenceStartCajasRef.current = stockRealCajas;
+          } else {
+            sequenceStartUnidadesRef.current = stockRealUnidades;
+          }
+        }
+
+        if (!scannerEnInputRef.current && scannerBufferRef.current.length > 0 && delta < thresholdMs) {
+          scannerEnInputRef.current = true;
+          if (pendingManualTimerRef.current != null) {
+            window.clearTimeout(pendingManualTimerRef.current);
+            pendingManualTimerRef.current = null;
+          }
+          pendingManualFieldRef.current = null;
+          if (field === 'cajas') {
+            setFieldValue('cajas', sequenceStartCajasRef.current);
+          } else {
+            setFieldValue('unidades', sequenceStartUnidadesRef.current);
+          }
+        }
+
+        scannerBufferRef.current += e.key;
+
+        if (!scannerEnInputRef.current) {
+          if (pendingManualTimerRef.current != null) {
+            window.clearTimeout(pendingManualTimerRef.current);
+          }
+          pendingManualFieldRef.current = field;
+          const current = field === 'cajas' ? stockRealCajas : stockRealUnidades;
+          const maxDigits = field === 'cajas' ? 4 : 3;
+          const next = `${current}${e.key}`.slice(0, maxDigits);
+          pendingManualTimerRef.current = window.setTimeout(() => {
+            if (!scannerEnInputRef.current && pendingManualFieldRef.current === field) {
+              setFieldValue(field, next);
+              scannerBufferRef.current = '';
+              ultimoKeyMsRef.current = 0;
+            }
+            pendingManualTimerRef.current = null;
+            pendingManualFieldRef.current = null;
+          }, manualCommitDelayMs);
+        }
+        return;
+      }
+
+      if (isEnter && scannerEnInputRef.current) {
+        const barcode = scannerBufferRef.current.trim();
+        resetScannerInputCapture();
+        setEditandoCard(false);
+        if (field === 'cajas') {
+          inputCajasRef.current?.blur();
+        } else {
+          inputUnidadesRef.current?.blur();
+        }
+        if (barcode) {
+          void handleScan(barcode);
+        }
+        return;
+      }
+
+      if (isBackspace) {
+        resetScannerInputCapture();
+        const current = field === 'cajas' ? stockRealCajas : stockRealUnidades;
+        setFieldValue(field, current.slice(0, -1));
+        return;
+      }
+
+      if (isDelete) {
+        resetScannerInputCapture();
+        setFieldValue(field, '');
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalInputCapture, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalInputCapture, true);
+    };
+  }, [
+    control?.categoria_macro,
+    productoEscaneado,
+    stockRealCajas,
+    stockRealUnidades,
+  ]);
 
   async function cargarProductoParaDetalle(detalle: ControlInventarioDetalle) {
     // Intenta traer stock actual desde /api/productos/[barcode]
@@ -93,6 +421,23 @@ export default function InventarioDetailPage() {
 
   async function handleScan(barcode: string) {
     setErrorProducto('');
+
+    // Si la card está abierta en un inventario diario:
+    // - el mismo código suma 1 caja
+    // - un código distinto no cierra la card ni cambia de producto
+    if (
+      control?.categoria_macro &&
+      productoEscaneado &&
+      detalleSeleccionadoId
+    ) {
+      if (barcode === productoEscaneado.codigo_barras) {
+        setStockRealCajas((prev) => String((parseInt(prev || '0', 10) || 0) + 1));
+      } else {
+        setErrorProducto('Este código no pertenece al producto seleccionado.');
+      }
+      return;
+    }
+
     setProductoEscaneado(null);
     setStockRealCajas('');
     setStockRealUnidades('');
@@ -182,8 +527,16 @@ export default function InventarioDetailPage() {
       setErrorProducto('Ingresá una cantidad válida de cajas (>= 0)');
       return;
     }
+    if (cajasNum > 6000) {
+      setErrorProducto('El stock físico en cajas no puede ser mayor a 6000.');
+      return;
+    }
     if (isNaN(unidadesNum) || unidadesNum < 0) {
       setErrorProducto('Ingresá una cantidad válida de unidades (>= 0)');
+      return;
+    }
+    if (unidadesNum > 110) {
+      setErrorProducto('El stock físico en unidades no puede ser mayor a 110.');
       return;
     }
     const noFraccionableSinUnidades =
@@ -250,7 +603,37 @@ export default function InventarioDetailPage() {
       setStockRealUnidades('');
       setDetalleSeleccionadoId(null);
       setFiltroCodigo('');
-      await cargarControl();
+
+      // En inventarios diarios con categoria_macro, actualizamos el detalle en memoria
+      // para no romper el orden original de la lista.
+      if (control?.categoria_macro && detalleSeleccionadoId) {
+        setControl(prev => {
+          if (!prev) return prev;
+          const detallesPrev = prev.controles_inventario_detalle ?? [];
+          const nuevosDetalles = detallesPrev.map(d => {
+            if (d.id !== detalleSeleccionadoId) return d;
+            const nuevoStockSistema = productoEscaneado.stock_sistema;
+            const nuevaDiferencia = totalUnidades - nuevoStockSistema;
+            return {
+              ...d,
+              stock_sistema: nuevoStockSistema,
+              stock_sist_cajas: productoEscaneado.stock_cajas ?? null,
+              stock_sist_unidades: productoEscaneado.stock_unidades ?? null,
+              stock_real_cajas: cajasNum,
+              stock_real_unidades: unidadesFinal,
+              stock_real: totalUnidades,
+              diferencia: nuevaDiferencia,
+            };
+          });
+          return {
+            ...prev,
+            controles_inventario_detalle: nuevosDetalles,
+          };
+        });
+      } else {
+        // Para otros inventarios, recargamos desde el backend.
+        await cargarControl();
+      }
     } catch {
       setErrorProducto('Error al guardar la línea');
     } finally {
@@ -273,7 +656,11 @@ export default function InventarioDetailPage() {
   );
 
   const enProgreso = control.estado === 'en_progreso';
-  const detalles = control.controles_inventario_detalle ?? [];
+  const detalles = [...(control.controles_inventario_detalle ?? [])].sort(
+    (a, b) =>
+      new Date(a.fecha_registro).getTime() -
+      new Date(b.fecha_registro).getTime()
+  );
   const detallesFiltrados =
     control.categoria_macro && filtroCodigo
       ? detalles.filter((d) => d.codigo_barras === filtroCodigo)
@@ -353,11 +740,16 @@ export default function InventarioDetailPage() {
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
               onScan={handleScan}
-              // Mientras hay un producto cargado o se está guardando, desactivamos el escáner
-              disabled={buscandoProducto || guardando || !!productoEscaneado}
+              // En inventarios diarios guiados, el escáner sigue activo con la card abierta para sumar cajas
+              disabled={
+                buscandoProducto ||
+                guardando ||
+                (!!productoEscaneado && !control?.categoria_macro)
+              }
               placeholder="Escanear o ingresar código de barras..."
               // En inventarios con categoria_macro no forzamos el foco permanente en el buscador
               autoFocusInput={!productoEscaneado && !control?.categoria_macro}
+              captureGlobally={!!control?.categoria_macro && !!productoEscaneado && !editandoCard}
             />
 
             {buscandoProducto && (
@@ -412,14 +804,17 @@ export default function InventarioDetailPage() {
                   {/* Columna derecha: stock real (inputs cajas/unidades) */}
                   <div className="rounded-lg bg-white border border-gray-200 px-3 py-2 space-y-2">
                     <Input
+                      ref={inputCajasRef}
                       label="Stock real (cajas)"
-                      type="number"
-                      min="0"
-                      step="1"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={stockRealCajas}
-                      onChange={e => setStockRealCajas(e.target.value)}
+                      onChange={e => handleChangeStockRealCajas(e.target.value)}
+                      onFocus={() => handleCardInputFocus('cajas')}
+                      onBlur={handleCardInputBlur}
+                      onKeyDown={e => handleCardInputKeyDown('cajas', e)}
                       placeholder="0"
-                      autoFocus
                       className="text-xl font-bold"
                     />
                     {(() => {
@@ -428,12 +823,16 @@ export default function InventarioDetailPage() {
                         (productoEscaneado.stock_unidades ?? 0) === 0;
                       return (
                         <Input
+                          ref={inputUnidadesRef}
                           label="Stock real (unidades)"
-                          type="number"
-                          min="0"
-                          step="1"
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           value={noPermitirUnidades ? '0' : stockRealUnidades}
-                          onChange={e => !noPermitirUnidades && setStockRealUnidades(e.target.value)}
+                          onChange={e => !noPermitirUnidades && handleChangeStockRealUnidades(e.target.value)}
+                          onFocus={() => handleCardInputFocus('unidades')}
+                          onBlur={handleCardInputBlur}
+                          onKeyDown={e => handleCardInputKeyDown('unidades', e)}
                           placeholder="0"
                           className="text-xl font-bold"
                           disabled={noPermitirUnidades}

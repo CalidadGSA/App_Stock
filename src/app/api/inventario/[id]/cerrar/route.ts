@@ -56,25 +56,34 @@ export async function POST(
 
       const { data: detRows, error: detError } = await admin
         .from('controles_inventario_detalle')
-        .select('producto_id_sistema')
+        .select('producto_id_sistema, stock_real_cajas, stock_real_unidades')
         .eq('control_id', controlId);
 
       if (!detError && detRows && detRows.length > 0) {
         const idProductos = Array.from(
           new Set(
             detRows
+              // Solo contamos productos que fueron efectivamente recontados (tienen algún stock_real)
+              .filter(
+                (d: { stock_real_cajas: number | null; stock_real_unidades: number | null }) =>
+                  d.stock_real_cajas != null || d.stock_real_unidades != null
+              )
               .map((d: { producto_id_sistema: string }) => Number(d.producto_id_sistema))
               .filter((n: number) => !Number.isNaN(n))
           )
         ) as number[];
 
         if (idProductos.length > 0) {
-          await admin.rpc('incrementar_veces_inventariado', {
+          const { error: rpcError } = await admin.rpc('incrementar_veces_inventariado', {
             p_sucursal_id: sucursalNum,
             p_categoria_macro: categoriaMacro,
             p_trimestre: trimestre,
             p_id_productos: idProductos,
           });
+
+          if (rpcError) {
+            console.error('Error al incrementar vecesInventariado en base_productos:', rpcError);
+          }
         }
       }
     }
