@@ -23,9 +23,9 @@ export async function GET(
     )
     .eq('id', id)
     .eq('sucursal_id', sucursalId ?? '')
-    // Mantener el orden original de carga de los productos
+    // Mantener el orden original de carga de los productos (por fecha_registro del detalle)
     .order('fecha_registro', {
-      referencedTable: 'controles_inventario_detalle',
+      foreignTable: 'controles_inventario_detalle',
       ascending: true,
     })
     .single();
