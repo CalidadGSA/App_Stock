@@ -280,6 +280,9 @@ create table controles_vencimientos (
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+-- Categoría macro opcional para el control de vencimientos (FARMA / BIENESTAR / PSICOTROPICOS)
+alter table controles_vencimientos
+  add column if not exists categoria_macro text;
 create index idx_cv_sucursal on controles_vencimientos(sucursal_id);
 create index idx_cv_estado   on controles_vencimientos(estado);
 create index idx_cv_usuario on controles_vencimientos(usuario_id);
@@ -303,6 +306,39 @@ create table controles_vencimientos_detalle (
 create index idx_cvd_control    on controles_vencimientos_detalle(control_id);
 create index idx_cvd_vencimiento on controles_vencimientos_detalle(fecha_vencimiento);
 create index idx_cvd_producto_sistema on controles_vencimientos_detalle(producto_id_sistema);
+
+-- Flag para marcar un registro como vendido en la vista "por vencer" sin borrarlo del control
+alter table controles_vencimientos_detalle
+  add column if not exists vendido smallint not null default 0;
+
+-- Flag para marcar un registro como devuelto (devolución registrada)
+alter table controles_vencimientos_detalle
+  add column if not exists devuelto smallint not null default 0;
+
+-- ------------------------------------------------------------
+-- DEVOLUCIONES DE VENCIMIENTOS
+-- ------------------------------------------------------------
+create table if not exists devoluciones_vencimientos (
+  id           uuid primary key default gen_random_uuid(),
+  sucursal_id  integer not null references sucursales(Sucursal),
+  usuario_id   integer not null references operadores(IDOperador),
+  fecha        timestamptz not null default now()
+);
+
+create table if not exists devoluciones_vencimientos_detalle (
+  id                       uuid primary key default gen_random_uuid(),
+  devolucion_id            uuid not null references devoluciones_vencimientos(id) on delete cascade,
+  detalle_vencimiento_id   uuid not null references controles_vencimientos_detalle(id),
+  control_id               uuid not null references controles_vencimientos(id) on delete cascade,
+  producto_id_sistema      text not null,
+  codigo_barras            text not null,
+  descripcion              text not null,
+  presentacion             text,
+  laboratorio              text,
+  fecha_vencimiento        date not null,
+  cantidad                 numeric(12,2) not null,
+  categoria_macro          text
+);
 
 -- ------------------------------------------------------------
 -- SYNC LEGACY → SUPABASE  (estado y auditoría)

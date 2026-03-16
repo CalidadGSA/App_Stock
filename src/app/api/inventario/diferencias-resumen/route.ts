@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/inventario/diferencias-resumen
@@ -11,13 +12,21 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
+
+  const cookieStore = await cookies();
+  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  if (!sucursalId) {
+    return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
+  }
+  const sucursalNum = parseInt(sucursalId, 10);
+  if (Number.isNaN(sucursalNum)) {
+    return NextResponse.json({ error: 'Sucursal inválida' }, { status: 400 });
   }
 
   const { searchParams } = new URL(request.url);
   const desdeActual = searchParams.get('desdeActual');
   const hastaActual = searchParams.get('hastaActual');
+  const categoriaMacro = searchParams.get('categoria_macro');
 
   if (!desdeActual || !hastaActual) {
     return NextResponse.json(
@@ -38,15 +47,22 @@ export async function GET(request: NextRequest) {
     const desdeIso = `${desde}T00:00:00.000Z`;
     const hastaIso = `${hasta}T23:59:59.999Z`;
 
-    const { data, error } = await admin
+    let query = admin
       .from('controles_inventario_detalle')
       .select(
-        'producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio)'
+        'producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, categoria_macro)'
       )
+      .eq('controles_inventario.sucursal_id', sucursalNum)
       .gte('controles_inventario.fecha_inicio', desdeIso)
       .lte('controles_inventario.fecha_inicio', hastaIso)
       .eq('con_diferencias', 1)
       .eq('ajustado', 0);
+
+    if (categoriaMacro) {
+      query = query.eq('controles_inventario.categoria_macro', categoriaMacro);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new Error(error.message);

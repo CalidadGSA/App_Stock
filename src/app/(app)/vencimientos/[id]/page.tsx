@@ -39,6 +39,15 @@ export default function VencimientoDetailPage() {
   const [errorProducto, setErrorProducto] = useState('');
   const [lotes, setLotes] = useState<LoteForm[]>([LOTE_VACIO]);
   const [guardando, setGuardando] = useState(false);
+  const [resultadosBusqueda, setResultadosBusqueda] = useState<
+    {
+      producto_id_sistema: string;
+      codigo_barras: string | null;
+      descripcion: string;
+      presentacion: string | null;
+      laboratorio: string | null;
+    }[]
+  >([]);
 
   const [cerrando, setCerrando] = useState(false);
   const [confirmCerrar, setConfirmCerrar] = useState(false);
@@ -62,12 +71,53 @@ export default function VencimientoDetailPage() {
     setErrorProducto('');
     setProductoEscaneado(null);
     setLotes([LOTE_VACIO]);
-    setBuscandoProducto(true);
+    setResultadosBusqueda([]);
 
+    const query = barcode.trim();
+    if (!query) return;
+
+    // Si contiene letras, lo interpretamos como búsqueda por nombre (producto + presentación)
+    if (/[a-zA-Z]/.test(query)) {
+      setBuscandoProducto(true);
+      try {
+        const params = new URLSearchParams({ q: query });
+        const res = await fetch(`/api/productos/buscar?${params.toString()}`);
+        const json = await res.json() as {
+          data?: {
+            producto_id_sistema: string;
+            codigo_barras: string | null;
+            descripcion: string;
+            presentacion: string | null;
+            laboratorio: string | null;
+          }[];
+          error?: string;
+        };
+        if (!res.ok) {
+          setErrorProducto(json.error ?? 'Error al buscar productos en medicamentos.');
+          return;
+        }
+        const lista = json.data ?? [];
+        setResultadosBusqueda(lista);
+        if (lista.length === 0) {
+          setErrorProducto('No se encontraron productos para ese texto.');
+        }
+      } catch {
+        setErrorProducto('Error al buscar productos en medicamentos.');
+      } finally {
+        setBuscandoProducto(false);
+      }
+      return;
+    }
+
+    // Caso código de barras: usamos la versión básica sin stock.
+    setBuscandoProducto(true);
     try {
-      const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
+      const res = await fetch(`/api/productos/basico/${encodeURIComponent(barcode)}`);
       const json = await res.json() as { data?: ProductoLegacy; error?: string };
-      if (!res.ok) { setErrorProducto(json.error ?? 'Producto no encontrado'); return; }
+      if (!res.ok) {
+        setErrorProducto(json.error ?? 'Producto no encontrado');
+        return;
+      }
       setProductoEscaneado(json.data!);
     } catch {
       setErrorProducto('Error al buscar el producto');
@@ -171,6 +221,12 @@ export default function VencimientoDetailPage() {
 
   const enProgreso = control.estado === 'en_progreso';
   const detalles = control.controles_vencimientos_detalle ?? [];
+  // Nombre completo del operador desde el join con operadores
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const operadorNombreCompleto =
+    ((control as any).operadores?.nombrecompleto as string | undefined) ??
+    ((control as any).operadores?.nombreCompleto as string | undefined) ??
+    '';
 
   return (
     <div className="flex flex-col gap-6">
@@ -181,16 +237,26 @@ export default function VencimientoDetailPage() {
             <Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4" /></Button>
           </Link>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-gray-900">Control de vencimientos</h1>
               <Badge variant={enProgreso ? 'warning' : 'success'}>
                 {enProgreso ? 'En progreso' : 'Cerrado'}
               </Badge>
+              {control.categoria_macro && (
+                <Badge variant="default" className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700">
+                  {control.categoria_macro}
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-gray-500">
               Inicio: {formatDateTime(control.fecha_inicio)}
               {control.fecha_fin && ` · Cierre: ${formatDateTime(control.fecha_fin)}`}
             </p>
+            {operadorNombreCompleto && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                Operador: {operadorNombreCompleto}
+              </p>
+            )}
             {control.observaciones && (
               <p className="text-xs text-gray-400 mt-0.5">Obs: {control.observaciones}</p>
             )}
@@ -229,6 +295,59 @@ export default function VencimientoDetailPage() {
             {errorProducto && (
               <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
                 {errorProducto}
+              </div>
+            )}
+
+            {/* Resultados de búsqueda por nombre (producto + presentación) */}
+            {resultadosBusqueda.length > 0 && !productoEscaneado && (
+              <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs text-gray-800 space-y-2">
+                <p className="font-semibold">Resultados en medicamentos:</p>
+                <ul className="max-h-56 space-y-1 overflow-y-auto">
+                  {resultadosBusqueda.map((r) => (
+                    <li
+                      key={`${r.producto_id_sistema}-${r.codigo_barras ?? 'sin-bc'}`}
+                      className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">
+                          {r.descripcion}
+                        </p>
+                        <p className="truncate text-[11px] text-gray-500">
+                          {r.presentacion} · {r.laboratorio}
+                        </p>
+                        <p className="font-mono text-[11px] text-gray-500">
+                          {r.codigo_barras ?? 'Sin código de barras'}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!r.codigo_barras}
+                        title={r.codigo_barras ? 'Usar este producto' : 'No se puede usar sin código de barras'}
+                        onClick={() => {
+                          if (!r.codigo_barras) return;
+                          setErrorProducto('');
+                          setResultadosBusqueda([]);
+                          setProductoEscaneado({
+                            producto_id_sistema: r.producto_id_sistema,
+                            codigo_barras: r.codigo_barras,
+                            codigos_secundarios: [],
+                            descripcion: r.descripcion,
+                            presentacion: r.presentacion,
+                            laboratorio: r.laboratorio,
+                            stock_sistema: 0,
+                            stock_cajas: undefined,
+                            stock_unidades: undefined,
+                            unidades_por_caja: undefined,
+                            fraccionable: undefined,
+                          });
+                        }}
+                      >
+                        Usar
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
 

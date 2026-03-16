@@ -137,10 +137,13 @@ export default function DashboardPage() {
           />
           <KpiCard
             icon={CalendarClock}
-            label="Por vencer (30 días)"
+            label="Por vencer en 30 días"
             value={stats?.productos_por_vencer_30 ?? 0}
-            sublabel={`${stats?.productos_por_vencer_60 ?? 0} en 60 días`}
+            sublabel={`${stats?.productos_por_vencer_60 ?? 0} en 60 días · ${stats?.productos_por_vencer_90 ?? 0} en 90 días`}
             color="bg-yellow-100 text-yellow-600"
+            onClick={() => {
+              router.push('/vencimientos/por-vencer?days=30');
+            }}
           />
           <KpiCard
             icon={AlertTriangle}
@@ -148,6 +151,9 @@ export default function DashboardPage() {
             value={stats?.productos_vencidos ?? 0}
             sublabel="Requieren atención"
             color="bg-red-100 text-red-600"
+            onClick={() => {
+              router.push('/vencimientos/vencidos');
+            }}
           />
         </div>
       </div>

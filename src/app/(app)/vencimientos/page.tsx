@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -9,8 +10,10 @@ import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/utils';
 import type { ControlVencimiento } from '@/types';
+import { ArrowLeft } from 'lucide-react';
 
 export default function VencimientosListPage() {
+  const router = useRouter();
   const [items, setItems] = useState<ControlVencimiento[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -64,9 +67,19 @@ export default function VencimientosListPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-gray-900">
-          Controles de vencimientos
-        </h1>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            aria-label="Volver"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <h1 className="text-xl font-bold text-gray-900">
+            Controles de vencimientos
+          </h1>
+        </div>
       </div>
 
       <Card>
@@ -130,11 +143,36 @@ export default function VencimientosListPage() {
                       <p className="text-sm font-medium text-gray-800">
                         {formatDateTime(c.fecha_inicio)}
                       </p>
-                      {c.observaciones && (
-                        <p className="text-xs text-gray-500 truncate max-w-[260px]">
-                          {c.observaciones}
-                        </p>
-                      )}
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                        {c.observaciones && (
+                          <p className="text-xs text-gray-500 truncate max-w-[260px]">
+                            {c.observaciones}
+                          </p>
+                        )}
+                        {c.categoria_macro && (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                          >
+                            {c.categoria_macro}
+                          </Badge>
+                        )}
+                      </div>
+                      {(() => {
+                        // Nombre completo del operador desde join con operadores
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        const op = (c as any).operadores;
+                        const nombreCompleto =
+                          (op?.nombrecompleto as string | undefined) ??
+                          (op?.nombreCompleto as string | undefined) ??
+                          '';
+                        if (!nombreCompleto) return null;
+                        return (
+                          <p className="text-[11px] text-gray-500">
+                            Operador: {nombreCompleto}
+                          </p>
+                        );
+                      })()}
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge

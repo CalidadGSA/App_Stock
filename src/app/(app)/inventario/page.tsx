@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +11,7 @@ import { PageSpinner } from '@/components/ui/spinner';
 import { etiquetaTipoControlInventario, inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
 import { formatDateTime } from '@/lib/utils';
 import type { ControlInventario } from '@/types';
+import { ArrowLeft } from 'lucide-react';
 
 interface ApiResponse {
   data?: ControlInventario[];
@@ -19,6 +20,7 @@ interface ApiResponse {
 
 export default function InventarioListPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [items, setItems] = useState<ControlInventario[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -77,7 +79,17 @@ export default function InventarioListPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-gray-900">Inventarios</h1>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            aria-label="Volver"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <h1 className="text-xl font-bold text-gray-900">Inventarios</h1>
+        </div>
       </div>
 
       <Card>

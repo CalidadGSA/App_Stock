@@ -119,6 +119,8 @@ export interface ControlVencimiento {
   observaciones: string | null;
   created_at: string;
   updated_at: string;
+  /** Categoría macro del control de vencimientos: FARMA / BIENESTAR / PSICOTROPICOS */
+  categoria_macro?: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
   sucursales?: Pick<Sucursal, 'nombre' | 'codigo_interno'>;
   usuarios?: Pick<Usuario, 'nombre'>;
 }
@@ -149,6 +151,7 @@ export interface DashboardStats {
   productos_vencidos: number;
   productos_por_vencer_30: number;
   productos_por_vencer_60: number;
+  productos_por_vencer_90: number;
   ultimos_inventarios: Pick<ControlInventario, 'id' | 'fecha_inicio' | 'estado' | 'descripcion' | 'sucursales'>[];
   ultimos_vencimientos: Pick<ControlVencimiento, 'id' | 'fecha_inicio' | 'estado' | 'sucursales'>[];
 }
