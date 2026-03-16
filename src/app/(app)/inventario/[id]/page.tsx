@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardFooter } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/utils';
+import { inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
 import type { ControlInventario, ControlInventarioDetalle, ProductoLegacy } from '@/types';
 
 interface ControlConDetalles extends ControlInventario {
@@ -57,6 +58,11 @@ export default function InventarioDetailPage() {
   const [guardando, setGuardando] = useState(false);
   const [detalleSeleccionadoId, setDetalleSeleccionadoId] = useState<string | null>(null);
   const [filtroCodigo, setFiltroCodigo] = useState<string>('');
+  const [filtroNombre, setFiltroNombre] = useState<string>('');
+  const [resultadosBusqueda, setResultadosBusqueda] = useState<
+    { producto_id_sistema: string; codigo_barras: string | null; descripcion: string; presentacion: string | null; laboratorio: string | null }[]
+  >([]);
+  const [buscandoEnMedicamentos, setBuscandoEnMedicamentos] = useState(false);
   const [editandoCard, setEditandoCard] = useState(false);
   const inputCajasRef = useRef<HTMLInputElement>(null);
   const inputUnidadesRef = useRef<HTMLInputElement>(null);
@@ -438,6 +444,70 @@ export default function InventarioDetailPage() {
   async function handleScan(barcode: string) {
     setErrorProducto('');
 
+    const query = barcode.trim();
+    if (!query) return;
+
+    // Si contiene letras y es un inventario guiado (diario con categoria_macro),
+    // filtramos solo dentro de la lista preasignada.
+    if (/[a-zA-Z]/.test(query)) {
+      // Con categoría macro (inventario diario guiado): solo buscar dentro de los productos asignados.
+      if (esControlGuiado) {
+        const detallesControl = control?.controles_inventario_detalle ?? [];
+        const q = query.toLowerCase();
+        const coincidencias = detallesControl.filter((d) => {
+          const nombreCompleto = `${d.descripcion ?? ''} ${d.presentacion ?? ''}`.toLowerCase();
+          return nombreCompleto.includes(q);
+        });
+
+        if (coincidencias.length === 0) {
+          setErrorProducto('No se encontraron productos con ese nombre en este control.');
+          setFiltroNombre('');
+        } else {
+          setFiltroNombre(query);
+          setDetalleSeleccionadoId(null);
+          setProductoEscaneado(null);
+          setStockRealCajas('');
+          setStockRealUnidades('');
+        }
+        setBuscandoProducto(false);
+        return;
+      }
+
+      // En inventarios ocasionales / auditoría: buscar directamente en medicamentos.
+      setBuscandoEnMedicamentos(true);
+      setResultadosBusqueda([]);
+      try {
+        const params = new URLSearchParams({ q: query });
+        const res = await fetch(`/api/productos/buscar?${params.toString()}`);
+        const json = await res.json() as {
+          data?: {
+            producto_id_sistema: string;
+            codigo_barras: string | null;
+            descripcion: string;
+            presentacion: string | null;
+            laboratorio: string | null;
+          }[];
+          error?: string;
+        };
+        if (!res.ok) {
+          setErrorProducto(json.error ?? 'Error al buscar productos en medicamentos.');
+        } else {
+          const lista = json.data ?? [];
+          setResultadosBusqueda(lista);
+          if (lista.length === 0) {
+            setErrorProducto('No se encontraron productos en medicamentos para esa búsqueda.');
+          }
+        }
+      } catch {
+        setErrorProducto('Error al buscar productos en medicamentos.');
+      } finally {
+        setBuscandoEnMedicamentos(false);
+      }
+
+      setBuscandoProducto(false);
+      return;
+    }
+
     // Si la card está abierta, cualquier barcode del mismo producto suma 1 caja.
     if (productoEscaneado) {
       if (productoAceptaBarcode(productoEscaneado, barcode)) {
@@ -713,15 +783,29 @@ export default function InventarioDetailPage() {
   );
 
   const enProgreso = control.estado === 'en_progreso';
+  const tipoControl = inferirTipoControlInventario({
+    origen: control.origen,
+    tipo: control.tipo ?? null,
+    categoria_macro: control.categoria_macro ?? null,
+    descripcion: control.descripcion ?? null,
+  });
+  const esControlGuiado = control.categoria_macro != null && tipoControl === 'diario';
   const detalles = [...(control.controles_inventario_detalle ?? [])].sort(
     (a, b) =>
       new Date(a.fecha_registro).getTime() -
       new Date(b.fecha_registro).getTime()
   );
-  const detallesFiltrados =
-    control.categoria_macro && filtroCodigo
-      ? detalles.filter((d) => d.codigo_barras === filtroCodigo)
-      : detalles;
+  let detallesFiltrados = detalles;
+  if (control.categoria_macro && filtroCodigo) {
+    detallesFiltrados = detallesFiltrados.filter((d) => d.codigo_barras === filtroCodigo);
+  }
+  if (filtroNombre.trim()) {
+    const q = filtroNombre.toLowerCase();
+    detallesFiltrados = detallesFiltrados.filter((d) => {
+      const nombreCompleto = `${d.descripcion ?? ''} ${d.presentacion ?? ''}`.toLowerCase();
+      return nombreCompleto.includes(q);
+    });
+  }
 
   // Resumen final de sobrantes / faltantes basado en cajas y unidades
   let totalSobrantes = 0;
@@ -802,11 +886,52 @@ export default function InventarioDetailPage() {
                 buscandoProducto ||
                 guardando
               }
-              placeholder="Escanear o ingresar código de barras..."
-              // En inventarios con categoria_macro no forzamos el foco permanente en el buscador
-              autoFocusInput={!productoEscaneado && !control?.categoria_macro}
-              captureGlobally={!!productoEscaneado && !editandoCard}
+              placeholder="Escanear código o escribir nombre de producto..."
+              // En inventarios diarios guiados mantenemos el foco en el escáner;
+              // en ocasionales/auditoría dejamos que el usuario use el buscador manual.
+              autoFocusInput={esControlGuiado && !productoEscaneado}
+              captureGlobally={esControlGuiado && !!productoEscaneado && !editandoCard}
             />
+
+            {/* Resultados de búsqueda manual en medicamentos (para ocasional / auditoría) */}
+            {!esControlGuiado && resultadosBusqueda.length > 0 && (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 space-y-2">
+                <p className="font-semibold">Resultados en medicamentos:</p>
+                <ul className="max-h-48 space-y-1 overflow-y-auto">
+                  {resultadosBusqueda.map((r) => (
+                    <li
+                      key={`${r.producto_id_sistema}-${r.codigo_barras ?? 'sin-bc'}`}
+                      className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">
+                          {r.descripcion}
+                        </p>
+                        <p className="truncate text-[11px] text-gray-500">
+                          {r.presentacion} · {r.laboratorio}
+                        </p>
+                        <p className="font-mono text-[11px] text-gray-500">
+                          {r.codigo_barras ?? 'Sin código de barras'}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!r.codigo_barras}
+                        title={r.codigo_barras ? 'Agregar al inventario' : 'No se puede agregar sin código de barras'}
+                        onClick={() => {
+                          if (!r.codigo_barras) return;
+                          // Reutilizamos el flujo normal de escaneo para que traiga stock y abra la card.
+                          void handleScan(r.codigo_barras);
+                        }}
+                      >
+                        Agregar
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {buscandoProducto && (
               <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -949,7 +1074,8 @@ export default function InventarioDetailPage() {
                       setStockRealUnidades('');
                       setErrorProducto('');
                       setDetalleSeleccionadoId(null);
-                      setFiltroCodigo('');
+          setFiltroCodigo('');
+          setFiltroNombre('');
                     }}
                     className="flex-1"
                   >
