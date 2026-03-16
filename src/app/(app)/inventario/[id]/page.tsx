@@ -789,6 +789,14 @@ export default function InventarioDetailPage() {
     categoria_macro: control.categoria_macro ?? null,
     descripcion: control.descripcion ?? null,
   });
+  // Nombre completo del operador que realizó el control (desde join con operadores)
+  const operadorNombreCompleto =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ((control as any).operadores?.nombrecompleto as string | undefined) ??
+    // Fallback por si en algún momento se mapea a otra propiedad
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ((control as any).operadores?.nombreCompleto as string | undefined) ??
+    '';
   const esControlGuiado = control.categoria_macro != null && tipoControl === 'diario';
   const detalles = [...(control.controles_inventario_detalle ?? [])].sort(
     (a, b) =>
@@ -853,6 +861,11 @@ export default function InventarioDetailPage() {
               Inicio: {formatDateTime(control.fecha_inicio)}
               {control.fecha_fin && ` · Cierre: ${formatDateTime(control.fecha_fin)}`}
             </p>
+            {operadorNombreCompleto && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                Operador: {operadorNombreCompleto}
+              </p>
+            )}
             {control.descripcion && (
               <p className="text-xs text-gray-500 mt-0.5">Descripción: {control.descripcion}</p>
             )}

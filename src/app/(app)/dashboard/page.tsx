@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ClipboardList, AlertTriangle, CalendarClock, TrendingDown,
   ChevronRight, CheckCircle2, Clock
@@ -15,13 +16,26 @@ import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats } from '@/types';
 
 function KpiCard({
-  icon: Icon, label, value, sublabel, color,
+  icon: Icon,
+  label,
+  value,
+  sublabel,
+  color,
+  onClick,
 }: {
-  icon: React.ElementType; label: string; value: number | string;
-  sublabel?: string; color: string;
+  icon: React.ElementType;
+  label: string;
+  value: number | string;
+  sublabel?: string;
+  color: string;
+  onClick?: () => void;
 }) {
+  const clickable = !!onClick;
   return (
-    <Card className="flex flex-col">
+    <Card
+      className={`flex flex-col ${clickable ? 'cursor-pointer transition-shadow hover:shadow-md' : ''}`}
+      onClick={onClick}
+    >
       <CardContent className="flex items-center gap-4 py-5">
         <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${color}`}>
           <Icon className="h-6 w-6" />
@@ -37,6 +51,7 @@ function KpiCard({
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -70,17 +85,55 @@ export default function DashboardPage() {
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
             icon={ClipboardList}
-            label="Inventarios totales"
+            label="Inventarios"
             value={stats?.inventarios_total ?? 0}
-            sublabel={`${stats?.inventarios_mes ?? 0} este mes`}
+            sublabel="este mes"
             color="bg-blue-100 text-blue-600"
+            onClick={() => {
+              const hoy = new Date();
+              const year = hoy.getFullYear();
+              const month = hoy.getMonth(); // 0-11
+              const first = new Date(year, month, 1);
+              const last = new Date(year, month + 1, 0);
+              const toYmd = (d: Date) => {
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${dd}`;
+              };
+              const desde = toYmd(first);
+              const hasta = toYmd(last);
+              router.push(`/inventario?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`);
+            }}
           />
           <KpiCard
             icon={TrendingDown}
             label="Items con diferencia"
             value={stats?.items_con_diferencia ?? 0}
-            sublabel="En todos los controles"
+            sublabel="en los últimos 60 días"
             color="bg-orange-100 text-orange-600"
+            onClick={() => {
+              const hoy = new Date();
+              // Últimos 60 días (incluyendo hoy)
+              const last = hoy;
+              const first = new Date(hoy);
+              first.setDate(first.getDate() - 59);
+              const toYmd = (d: Date) => {
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${dd}`;
+              };
+              const desdeActual = toYmd(first);
+              const hastaActual = toYmd(last);
+              router.push(
+                `/inventario/diferencias-resumen?desdeActual=${encodeURIComponent(
+                  desdeActual
+                )}&hastaActual=${encodeURIComponent(
+                  hastaActual
+                )}`
+              );
+            }}
           />
           <KpiCard
             icon={CalendarClock}

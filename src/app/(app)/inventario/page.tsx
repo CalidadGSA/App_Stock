@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -17,6 +18,7 @@ interface ApiResponse {
 }
 
 export default function InventarioListPage() {
+  const searchParams = useSearchParams();
   const [items, setItems] = useState<ControlInventario[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -59,9 +61,14 @@ export default function InventarioListPage() {
   }
 
   useEffect(() => {
+    // Tomar fechas iniciales desde la URL (si existen), por ejemplo cuando se viene desde el dashboard.
+    const desdeUrl = searchParams.get('desde') ?? '';
+    const hastaUrl = searchParams.get('hasta') ?? '';
+    if (desdeUrl) setDesde(desdeUrl);
+    if (hastaUrl) setHasta(hastaUrl);
     void cargar(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams]);
 
   function handleAplicarFiltros() {
     void cargar(1);
@@ -124,6 +131,13 @@ export default function InventarioListPage() {
                 const tipo = etiquetaTipoControlInventario(
                   inferirTipoControlInventario(inv)
                 );
+                // Nombre completo del operador que realizó el inventario (join con operadores)
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const operadorNombreCompleto =
+                  ((inv as any).operadores?.nombrecompleto as string | undefined) ??
+                  // Fallback por si en algún momento se mapea a otra propiedad
+                  ((inv as any).operadores?.nombreCompleto as string | undefined) ??
+                  '';
                 return (
                   <li key={inv.id}>
                     <Link
@@ -134,16 +148,32 @@ export default function InventarioListPage() {
                         <p className="text-sm font-medium text-gray-800">
                           {formatDateTime(inv.fecha_inicio)}
                         </p>
-                        <div className="mt-0.5 flex items-center gap-2">
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                          >
                             {tipo}
                           </Badge>
+                          {inv.categoria_macro && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                            >
+                              {inv.categoria_macro}
+                            </Badge>
+                          )}
                           {inv.descripcion && (
                             <p className="text-xs text-gray-500 truncate max-w-[220px]">
                               {inv.descripcion}
                             </p>
                           )}
                         </div>
+                        {operadorNombreCompleto && (
+                          <p className="text-[11px] text-gray-500">
+                            Operador: {operadorNombreCompleto}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge
