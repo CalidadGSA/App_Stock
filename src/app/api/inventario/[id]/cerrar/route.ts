@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import {
+  esTipoDiario,
   esTipoControlVisibleParaOperadorSucursal,
   inferirTipoControlInventario,
 } from '@/lib/inventario/tipo-control';
@@ -43,9 +44,9 @@ export async function POST(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Si el control tiene categoria_macro, incrementar vecesInventariado en base_productos
+  // Solo los inventarios diarios afectan vecesInventariado en base_productos.
   const categoriaMacro = control.categoria_macro as 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
-  if (categoriaMacro && sucursalId) {
+  if (esTipoDiario(tipoControl) && categoriaMacro && sucursalId) {
     const fechaControl = (control.fecha_inicio as string).slice(0, 10);
     const sucursalNum = parseInt(sucursalId, 10);
 

@@ -16,6 +16,11 @@ interface AjusteRow {
   origen?: string | null;
 }
 
+interface SucursalOption {
+  id: string;
+  nombre: string;
+}
+
 export default function HistorialAjustesPage() {
   const router = useRouter();
   const [items, setItems] = useState<AjusteRow[]>([]);
@@ -23,6 +28,27 @@ export default function HistorialAjustesPage() {
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
+  const [sucursalId, setSucursalId] = useState('');
+  const [mes, setMes] = useState(''); // formato YYYY-MM
+
+  useEffect(() => {
+    async function cargarSucursales() {
+      try {
+        const res = await fetch('/api/admin/sucursales');
+        const json = await res.json();
+        if (!res.ok) {
+          setError(json.error ?? 'Error al cargar sucursales');
+          return;
+        }
+        const list: SucursalOption[] = json.data ?? [];
+        setSucursales(list);
+      } catch {
+        setError('Error al cargar sucursales');
+      }
+    }
+    void cargarSucursales();
+  }, []);
 
   async function cargar(p = 1) {
     setLoading(true);
@@ -31,6 +57,12 @@ export default function HistorialAjustesPage() {
       const params = new URLSearchParams();
       params.set('page', String(p));
       params.set('pageSize', '20');
+      if (mes) {
+        params.set('month', mes);
+      }
+      if (sucursalId) {
+        params.set('sucursal_id', sucursalId);
+      }
       const res = await fetch(`/api/ajustes?${params.toString()}`);
       const json = await res.json() as {
         data?: AjusteRow[];
@@ -87,7 +119,7 @@ export default function HistorialAjustesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-bold text-gray-900">Historial de ajustes</h1>
         <Button
           variant="outline"
@@ -100,10 +132,54 @@ export default function HistorialAjustesPage() {
 
       <Card>
         <CardHeader>
-          <h2 className="font-semibold text-gray-900">Ajustes realizados</h2>
-          <p className="text-sm text-gray-600">
-            Listado de exportaciones de diferencias realizadas. Podés volver a descargar el archivo CSV original de cada ajuste.
-          </p>
+          <div className="flex flex-col gap-3">
+            <div>
+              <h2 className="font-semibold text-gray-900">Ajustes realizados</h2>
+              <p className="text-sm text-gray-600">
+                Listado de exportaciones de diferencias realizadas. Podés volver a descargar el archivo CSV original de cada ajuste.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium text-gray-700">
+                  Sucursal
+                </label>
+                <select
+                  value={sucursalId}
+                  onChange={(e) => setSucursalId(e.target.value)}
+                  className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
+                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                >
+                  <option value="">Todas las sucursales</option>
+                  {sucursales.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium text-gray-700">
+                  Mes
+                </label>
+                <input
+                  type="month"
+                  value={mes}
+                  onChange={(e) => setMes(e.target.value)}
+                  className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
+                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void cargar(1)}
+                disabled={loading}
+              >
+                Aplicar filtros
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (

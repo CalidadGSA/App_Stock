@@ -69,3 +69,7 @@ export function esTipoControlVisibleParaOperadorSucursal(
 export function esTipoAuditoria(tipo: TipoControlInventario) {
   return tipo === 'auditoria';
 }
+
+export function esTipoDiario(tipo: TipoControlInventario) {
+  return tipo === 'diario';
+}

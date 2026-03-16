@@ -28,7 +28,7 @@ export async function GET(
 
   const { data: detalles, error: detError } = await admin
     .from('ajustes_detalle')
-    .select('idProducto, codigo_barras, diferencia_cajas, diferencia_unidades')
+    .select('idproducto, codigo_barras, diferencia_cajas, diferencia_unidades')
     .eq('ajuste_id', id);
 
   if (detError) {
@@ -36,16 +36,16 @@ export async function GET(
   }
 
   type Row = {
-    idProducto: string;
+    idproducto: string;
     codigo_barras: string;
     diferencia_cajas: number;
     diferencia_unidades: number;
   };
 
-  let csv = 'idProducto,codigo_barras,diferencia_cajas,diferencia_unidades\n';
+  let csv = '';
   for (const r of ((detalles as Row[]) ?? [])) {
     const cols = [
-      r.idProducto ?? '',
+      r.idproducto ?? '',
       r.codigo_barras ?? '',
       r.diferencia_cajas.toString(),
       r.diferencia_unidades.toString(),
