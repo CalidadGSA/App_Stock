@@ -76,7 +76,7 @@ export async function GET() {
         .lte('fecha_vencimiento', en90dias),
       ultimosInvQuery,
       admin.from('controles_vencimientos')
-        .select('id, fecha_inicio, estado, sucursales(nombrefantasia)')
+        .select('id, fecha_inicio, estado, observaciones, categoria_macro, sucursales(nombrefantasia)')
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),

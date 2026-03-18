@@ -134,6 +134,11 @@ export default function VencidosPage() {
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/vencimientos/devoluciones">
+            <Button size="sm" variant="outline">
+              Historial de devoluciones
+            </Button>
+          </Link>
           <Link href="/vencimientos">
             <Button size="sm" variant="outline">
               Ver controles

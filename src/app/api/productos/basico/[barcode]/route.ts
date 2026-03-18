@@ -37,7 +37,7 @@ export async function GET(
   if (idProductoFromBarcode != null) {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab')
+      .select('codplex, codebar, producto, presentaci, codlab, activo')
       .eq('codplex', idProductoFromBarcode)
       .maybeSingle();
 
@@ -49,7 +49,7 @@ export async function GET(
   } else {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab')
+      .select('codplex, codebar, producto, presentaci, codlab, activo')
       .eq('codebar', barcode)
       .limit(1)
       .maybeSingle();
@@ -61,7 +61,7 @@ export async function GET(
     med = data;
   }
 
-  if (!med) {
+  if (!med || (med.activo as string | null)?.toUpperCase() === 'N') {
     return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
   }
 

@@ -62,7 +62,7 @@ export async function POST(request: Request) {
   const descripcion =
     body.descripcion && body.descripcion.trim().length > 0
       ? body.descripcion.trim()
-      : 'Inventario ocasional';
+      : null;
 
   const { data, error } = await admin
     .from('controles_inventario')

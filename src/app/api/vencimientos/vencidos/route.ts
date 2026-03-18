@@ -39,12 +39,13 @@ export async function GET(_request: NextRequest) {
   const { data, error } = await admin
     .from('controles_vencimientos_detalle')
     .select(
-      'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, vendido, controles_vencimientos!inner(sucursal_id, categoria_macro)'
+      'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, vendido, devuelto, controles_vencimientos!inner(sucursal_id, categoria_macro)'
     )
     .eq('controles_vencimientos.sucursal_id', parseInt(sucursalId, 10))
     .gte('fecha_vencimiento', hace40)
     .lt('fecha_vencimiento', hoyStr)
     .eq('vendido', 0)
+    .eq('devuelto', 0)
     .order('fecha_vencimiento', { ascending: true });
 
   if (error) {

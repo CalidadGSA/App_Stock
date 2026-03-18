@@ -447,6 +447,13 @@ export default function InventarioDetailPage() {
     const query = barcode.trim();
     if (!query) return;
 
+    // Si hay una card abierta, no permitir usar el buscador para cambiar de producto.
+    // Solo se permiten nuevos escaneos numéricos del mismo producto (ya manejados más abajo).
+    if (productoEscaneado && /[a-zA-Z]/.test(query)) {
+      setErrorProducto('Cerrá la card del producto actual antes de buscar otro.');
+      return;
+    }
+
     // Si contiene letras y es un inventario guiado (diario con categoria_macro),
     // filtramos solo dentro de la lista preasignada.
     if (/[a-zA-Z]/.test(query)) {
@@ -909,7 +916,7 @@ export default function InventarioDetailPage() {
             {/* Resultados de búsqueda manual en medicamentos (para ocasional / auditoría) */}
             {!esControlGuiado && resultadosBusqueda.length > 0 && (
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 space-y-2">
-                <p className="font-semibold">Resultados en medicamentos:</p>
+                <p className="font-semibold">Resultados:</p>
                 <ul className="max-h-48 space-y-1 overflow-y-auto">
                   {resultadosBusqueda.map((r) => (
                     <li

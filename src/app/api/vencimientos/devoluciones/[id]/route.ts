@@ -19,11 +19,6 @@ export async function GET(
   }
 
   const devolucionId = context.params.id;
-  // Validar que el id venga definido y con forma de UUID para evitar
-  // errores de casteo "invalid input syntax for type uuid"
-  if (!devolucionId || devolucionId === 'undefined') {
-    return NextResponse.json({ error: 'Id de devolución inválido' }, { status: 400 });
-  }
   const admin = await createAdminClient();
 
   // Verificamos que la devolución pertenezca a la sucursal actual

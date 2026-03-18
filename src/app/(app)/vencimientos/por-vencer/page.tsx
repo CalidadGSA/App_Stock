@@ -36,12 +36,26 @@ export default function PorVencerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [days, setDays] = useState(30);
+  const [daysMin, setDaysMin] = useState(0);
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>(''); // cod_rubro
    const [busquedaTexto, setBusquedaTexto] = useState('');
+  const [rangeKey, setRangeKey] = useState<'30_all' | '60_all' | '90_all' | '60_only' | '90_only'>('30_all');
 
   const desdeHastaLabel = useMemo(() => {
-    return `${days} días`;
-  }, [days]);
+    switch (rangeKey) {
+      case '60_only':
+        return 'solo a 60 días';
+      case '90_only':
+        return 'solo a 90 días';
+      case '60_all':
+        return '60 días';
+      case '90_all':
+        return '90 días';
+      case '30_all':
+      default:
+        return '30 días';
+    }
+  }, [rangeKey]);
 
   const itemsFiltrados = useMemo(() => {
     const q = busquedaTexto.trim().toLowerCase();
@@ -65,9 +79,19 @@ export default function PorVencerPage() {
     setError('');
     try {
       const daysParam = parseInt(searchParams.get('days') ?? '30', 10) || 30;
+      const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
       setDays(daysParam);
+      setDaysMin(daysMinParam);
+      // Determinar selección actual según (days, daysMin)
+      if (daysParam === 30 && daysMinParam === 0) setRangeKey('30_all');
+      else if (daysParam === 60 && daysMinParam === 31) setRangeKey('60_only');
+      else if (daysParam === 60 && daysMinParam === 0) setRangeKey('60_all');
+      else if (daysParam === 90 && daysMinParam === 61) setRangeKey('90_only');
+      else if (daysParam === 90 && daysMinParam === 0) setRangeKey('90_all');
+      else setRangeKey('30_all');
       const params = new URLSearchParams();
       params.set('days', String(daysParam));
+      params.set('daysMin', String(daysMinParam));
       if (categoriaFiltro) {
         params.set('cod_rubro', categoriaFiltro);
       }
@@ -127,10 +151,15 @@ export default function PorVencerPage() {
             <ArrowLeft className="h-4 w-4" />
           </button>
           <h1 className="text-xl font-bold text-gray-900">
-            Productos por vencer ({desdeHastaLabel})
+            Productos próximos a vencer ({desdeHastaLabel})
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/vencimientos/descuentos">
+            <Button size="sm" variant="outline">
+              Descuentos
+            </Button>
+          </Link>
           <Link href="/vencimientos">
             <Button size="sm" variant="outline">
               Ver controles
@@ -145,26 +174,48 @@ export default function PorVencerPage() {
             <div>
               <p className="text-sm font-medium text-gray-800">Filtros</p>
               <p className="text-xs text-gray-500">
-                Ordenado por fecha de vencimiento (más próximos primero).
+                Ordenado por fecha de vencimiento.
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium text-gray-700">Periodo</label>
                 <select
-                  value={String(days)}
+                    value={rangeKey}
                   onChange={(e) => {
-                    const value = parseInt(e.target.value, 10) || 30;
+                      const nextKey = e.target.value as typeof rangeKey;
+                      let nextDays = 30;
+                      let nextDaysMin = 0;
+                      if (nextKey === '60_all') {
+                        nextDays = 60;
+                        nextDaysMin = 0;
+                      }
+                      if (nextKey === '90_all') {
+                        nextDays = 90;
+                        nextDaysMin = 0;
+                      }
+                      if (nextKey === '60_only') {
+                        nextDays = 60;
+                        nextDaysMin = 31;
+                      }
+                      if (nextKey === '90_only') {
+                        nextDays = 90;
+                        nextDaysMin = 61;
+                      }
                     const params = new URLSearchParams(searchParams.toString());
-                    params.set('days', String(value));
+                      params.set('days', String(nextDays));
+                      params.set('daysMin', String(nextDaysMin));
+                      setRangeKey(nextKey);
                     router.push(`/vencimientos/por-vencer?${params.toString()}`);
                   }}
                   className="min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
-                  <option value="30">Últimos 30 días</option>
-                  <option value="60">Últimos 60 días</option>
-                  <option value="90">Últimos 90 días</option>
+                    <option value="30_all">Últimos 30 días</option>
+                    <option value="60_all">Últimos 60 días</option>
+                    <option value="90_all">Últimos 90 días</option>
+                    <option value="60_only">Solo a 60 días</option>
+                    <option value="90_only">Solo a 90 días</option>
                 </select>
               </div>
               <div className="flex flex-col gap-1">

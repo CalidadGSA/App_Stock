@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   // Buscamos por nombre (Producto + Presentaci) y por codebar.
   const { data, error } = await admin
     .from('medicamentos')
-    .select('codplex, codebar, producto, presentaci, codlab')
+    .select('codplex, codebar, producto, presentaci, codlab, activo')
     .or(`codebar.ilike.${like},producto.ilike.${like},presentaci.ilike.${like}`)
     .limit(20);
 
@@ -56,16 +56,19 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const resultados = data.map((m: any) => ({
-    producto_id_sistema: String(m.codplex),
-    codigo_barras: m.codebar as string | null,
-    descripcion: (m.producto as string | null) ?? '',
-    presentacion: (m.presentaci as string | null) ?? null,
-    laboratorio:
-      m.codlab != null
-        ? labMap.get(m.codlab as number) ?? String(m.codlab)
-        : null,
-  }));
+  const resultados = data
+    // Ignorar productos inactivos (activo = 'N')
+    .filter((m: any) => (m.activo as string | null)?.toUpperCase() !== 'N')
+    .map((m: any) => ({
+      producto_id_sistema: String(m.codplex),
+      codigo_barras: m.codebar as string | null,
+      descripcion: (m.producto as string | null) ?? '',
+      presentacion: (m.presentaci as string | null) ?? null,
+      laboratorio:
+        m.codlab != null
+          ? labMap.get(m.codlab as number) ?? String(m.codlab)
+          : null,
+    }));
 
   return NextResponse.json({ data: resultados });
 }

@@ -341,6 +341,20 @@ create table if not exists devoluciones_vencimientos_detalle (
 );
 
 -- ------------------------------------------------------------
+-- REGLAS DE DESCUENTOS POR VENCIMIENTOS
+-- ------------------------------------------------------------
+create table if not exists descuentos_vencimientos_reglas (
+  id             serial primary key,
+  id_subrubro    integer references subrubros(IDSubRubro),
+  categoria_macro text,
+  dias_min       integer not null,
+  dias_max       integer not null,
+  descuento      numeric(5,2) not null,
+  activo         smallint not null default 1
+);
+create index if not exists idx_dvr_subrubro on descuentos_vencimientos_reglas(id_subrubro);
+
+-- ------------------------------------------------------------
 -- SYNC LEGACY → SUPABASE  (estado y auditoría)
 -- ------------------------------------------------------------
 create table if not exists sync_status (

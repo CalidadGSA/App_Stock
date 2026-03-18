@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/utils';
+import { ArrowLeft } from 'lucide-react';
 
 type DevolucionRow = {
   id: string;
@@ -26,6 +28,7 @@ type DevolucionRow = {
 const CATEGORIAS = ['FARMA', 'BIENESTAR', 'PSICOTROPICOS'] as const;
 
 export default function DevolucionesVencimientosPage() {
+  const router = useRouter();
   const [items, setItems] = useState<DevolucionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -68,9 +71,19 @@ export default function DevolucionesVencimientosPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-gray-900">
-          Devoluciones de vencimientos
-        </h1>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            aria-label="Volver"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <h1 className="text-xl font-bold text-gray-900">
+            Devoluciones de vencimientos
+          </h1>
+        </div>
       </div>
 
       <Card>
