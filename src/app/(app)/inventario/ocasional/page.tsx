@@ -2,14 +2,15 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { ArrowLeft } from 'lucide-react';
 import { PageSpinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import Link from 'next/link';
 
 export default function NuevoInventarioOcasionalPage() {
   const router = useRouter();
-  const [descripcion, setDescripcion] = useState('Inventario ocasional');
+  const [descripcion, setDescripcion] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -18,7 +19,7 @@ export default function NuevoInventarioOcasionalPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        descripcion: descripcion.trim() || 'Inventario ocasional',
+        descripcion: descripcion.trim() || null,
         confirm_override: confirmOverride || undefined,
       }),
     });
@@ -73,36 +74,56 @@ export default function NuevoInventarioOcasionalPage() {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center py-16">
-      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h1 className="mb-4 text-lg font-semibold text-gray-900">
-          Nuevo inventario ocasional
-        </h1>
-        <p className="mb-4 text-sm text-gray-600">
-          Ingresá una descripción para identificar este inventario ocasional.
-        </p>
-        <Input
-          label="Descripción"
-          value={descripcion}
-          onChange={(e) => setDescripcion(e.target.value)}
-          placeholder="Inventario ocasional"
-        />
-        {error && (
-          <p className="mt-3 text-sm text-red-600">
-            {error}
-          </p>
-        )}
-        <div className="mt-6 flex items-center justify-between gap-3">
-          <Link href="/dashboard">
-            <Button variant="outline" size="sm">
-              Cancelar
-            </Button>
-          </Link>
-          <Button size="sm" onClick={handleCrear} loading={loading}>
-            Crear inventario
+    <div className="mx-auto max-w-lg">
+      <div className="mb-6 flex items-center gap-3">
+        <Link href="/dashboard">
+          <Button variant="ghost" size="sm" className="gap-1">
+            <ArrowLeft className="h-4 w-4" /> Volver
           </Button>
+        </Link>
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Nuevo inventario ocasional</h1>
+          <p className="text-sm text-gray-500">
+            Creá un inventario ocasional para contar productos específicos.
+          </p>
         </div>
       </div>
+
+      <div className="w-full rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-6 py-4">
+          <h2 className="text-sm font-semibold text-gray-900">Inventario ocasional</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Ingresá una descripción (opcional) para identificar este inventario.
+          </p>
+        </div>
+        <div className="px-6 py-5">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleCrear();
+            }}
+            className="flex flex-col gap-4"
+          >
+            <Input
+              label="Descripción (opcional)"
+              value={descripcion}
+              onChange={(e) => setDescripcion(e.target.value)}
+              placeholder="Ej: Recuento góndola perfumería"
+            />
+
+            {error && (
+              <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+            <Button type="submit" size="lg" loading={loading} className="mt-2 w-full">
+              Crear inventario ocasional y comenzar escaneo
+            </Button>
+          </form>
+        </div>
+      </div>
+
       {loading && (
         <div className="mt-6">
           <PageSpinner />

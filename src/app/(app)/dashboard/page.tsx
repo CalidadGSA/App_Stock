@@ -137,10 +137,13 @@ export default function DashboardPage() {
           />
           <KpiCard
             icon={CalendarClock}
-            label="Por vencer (30 días)"
+            label="Por vencer en 30 días"
             value={stats?.productos_por_vencer_30 ?? 0}
-            sublabel={`${stats?.productos_por_vencer_60 ?? 0} en 60 días`}
+            sublabel={`${stats?.productos_por_vencer_60 ?? 0} en 60 días · ${stats?.productos_por_vencer_90 ?? 0} en 90 días`}
             color="bg-yellow-100 text-yellow-600"
+            onClick={() => {
+              router.push('/vencimientos/por-vencer?days=30');
+            }}
           />
           <KpiCard
             icon={AlertTriangle}
@@ -148,6 +151,9 @@ export default function DashboardPage() {
             value={stats?.productos_vencidos ?? 0}
             sublabel="Requieren atención"
             color="bg-red-100 text-red-600"
+            onClick={() => {
+              router.push('/vencimientos/vencidos');
+            }}
           />
         </div>
       </div>
@@ -254,28 +260,61 @@ export default function DashboardPage() {
               <p className="px-5 py-4 text-sm text-gray-400">Sin controles registrados aún.</p>
             ) : (
               <ul className="divide-y divide-gray-100">
-                {stats?.ultimos_vencimientos.map(v => (
-                  <li key={v.id}>
-                    <Link
-                      href={`/vencimientos/${v.id}`}
-                      className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        {v.estado === 'cerrado'
-                          ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                          : <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
-                        }
-                        <p className="text-sm font-medium text-gray-800">{formatDateTime(v.fecha_inicio)}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={v.estado === 'cerrado' ? 'success' : 'warning'}>
-                          {v.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
-                        </Badge>
-                        <ChevronRight className="h-4 w-4 text-gray-400" />
-                      </div>
-                    </Link>
-                  </li>
-                ))}
+                {stats?.ultimos_vencimientos.map((v) => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const op = (v as any).operadores;
+                  const nombreCompleto =
+                    (op?.nombrecompleto as string | undefined) ??
+                    (op?.nombreCompleto as string | undefined) ??
+                    '';
+                  return (
+                    <li key={v.id}>
+                      <Link
+                        href={`/vencimientos/${v.id}`}
+                        className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          {v.estado === 'cerrado' ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                          ) : (
+                            <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
+                          )}
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">
+                              {formatDateTime(v.fecha_inicio)}
+                            </p>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                              {v.categoria_macro && (
+                                <Badge
+                                  variant="default"
+                                  className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                                >
+                                  {v.categoria_macro}
+                                </Badge>
+                              )}
+                              {v.observaciones && (
+                                <p className="text-xs text-gray-500 truncate max-w-[180px]">
+                                  {v.observaciones}
+                                </p>
+                              )}
+                            </div>
+                            {nombreCompleto && (
+                              <p className="text-[11px] text-gray-500">
+                                Operador: {nombreCompleto}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={v.estado === 'cerrado' ? 'success' : 'warning'}>
+                            {v.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
+                          </Badge>
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardContent>

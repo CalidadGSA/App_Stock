@@ -16,6 +16,7 @@ export async function GET() {
   const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
   const en30dias = new Date(hoy.getTime() + 30 * 86400000).toISOString().split('T')[0];
   const en60dias = new Date(hoy.getTime() + 60 * 86400000).toISOString().split('T')[0];
+  const en90dias = new Date(hoy.getTime() + 90 * 86400000).toISOString().split('T')[0];
   const hoyStr = hoy.toISOString().split('T')[0];
   const esAdmin = operador.rol === 'admin';
 
@@ -50,7 +51,7 @@ export async function GET() {
     ultimosInvQuery = ultimosInvQuery.in('tipo', ['diario', 'ocasional_sucursal']);
   }
 
-  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, ultimosInv, ultimosVenc] =
+  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc] =
     await Promise.all([
       invTotalQuery,
       invMesQuery,
@@ -69,9 +70,13 @@ export async function GET() {
         .select('id', { count: 'exact', head: true })
         .gte('fecha_vencimiento', hoyStr)
         .lte('fecha_vencimiento', en60dias),
+      admin.from('controles_vencimientos_detalle')
+        .select('id', { count: 'exact', head: true })
+        .gte('fecha_vencimiento', hoyStr)
+        .lte('fecha_vencimiento', en90dias),
       ultimosInvQuery,
       admin.from('controles_vencimientos')
-        .select('id, fecha_inicio, estado, sucursales(nombrefantasia)')
+        .select('id, fecha_inicio, estado, observaciones, categoria_macro, sucursales(nombrefantasia)')
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),
@@ -87,6 +92,7 @@ export async function GET() {
       productos_vencidos: vencidos.count ?? 0,
       productos_por_vencer_30: porVencer30.count ?? 0,
       productos_por_vencer_60: porVencer60.count ?? 0,
+      productos_por_vencer_90: porVencer90.count ?? 0,
       ultimos_inventarios: ultimosInv.data ?? [],
       ultimos_vencimientos: ultimosVenc.data ?? [],
     },

@@ -56,12 +56,17 @@ export async function POST(request: NextRequest) {
   const sucursalId = cookieStore.get('sucursal_id')?.value;
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
-  const body = await request.json() as { observaciones?: string };
+  const body = await request.json() as { observaciones?: string; categoria_macro?: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null };
 
   const admin = await createAdminClient();
   const { data, error } = await admin
     .from('controles_vencimientos')
-    .insert({ sucursal_id: parseInt(sucursalId, 10), usuario_id: operador.idoperador, observaciones: body.observaciones ?? null })
+    .insert({
+      sucursal_id: parseInt(sucursalId, 10),
+      usuario_id: operador.idoperador,
+      observaciones: body.observaciones ?? null,
+      categoria_macro: body.categoria_macro ?? null,
+    })
     .select()
     .single();
 
