@@ -20,7 +20,7 @@ export async function POST(
   const admin = await createAdminClient();
   const { data: sucursal, error: sucError } = await admin
     .from('sucursales')
-    .select('sucursal, nombrefantasia, contraseña, activa')
+    .select('*')
     .eq('sucursal', sucursalIdNum)
     .single();
 

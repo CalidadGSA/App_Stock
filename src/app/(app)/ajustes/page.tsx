@@ -397,7 +397,7 @@ export default function AjustesPage() {
                       <td className="px-4 py-2 text-right text-xs">
                         <Button
                           variant="outline"
-                          size="xs"
+                          size="sm"
                           onClick={() => void handleEliminarDiferencia(d.id)}
                         >
                           Quitar

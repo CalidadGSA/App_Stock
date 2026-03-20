@@ -231,7 +231,7 @@ export default function HistorialAjustesPage() {
                       </td>
                       <td className="px-4 py-2 text-right text-xs">
                         <Button
-                          size="xs"
+                          size="sm"
                           variant="outline"
                           onClick={() => void handleReexportar(a.id)}
                         >

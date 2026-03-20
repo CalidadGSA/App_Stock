@@ -80,11 +80,12 @@ export async function getStockFromLegacyDetailed(
     }
 
     try {
-      const [rows] = await pool.query<StockLegacyRow[]>(
+      const [rows] = await pool.query(
         'SELECT Cantidad AS cantidad, Unidades AS unidades, UnidadesProd AS unidadesprod FROM stock WHERE Sucursal = ? AND IDProducto = ? LIMIT 1',
         [sucursalId, idProducto]
       );
-      const row = Array.isArray(rows) ? rows[0] : null;
+      const typedRows = rows as StockLegacyRow[];
+      const row = Array.isArray(typedRows) ? typedRows[0] : null;
       return { status: 'ok', row: row ?? null };
     } catch (err) {
       console.error('Error leyendo stock desde MySQL legacy:', err);
