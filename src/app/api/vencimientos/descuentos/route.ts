@@ -113,8 +113,10 @@ export async function GET(request: NextRequest) {
       .from('descuentos_vencimientos_reglas')
       .select('id, id_subrubro, categoria_macro, dias_min, dias_max, descuento')
       .eq('activo', 1)
-      .lte('dias_min', diasHasta)
-      .gte('dias_max', diasHasta);
+      // dias_min = cota superior (ej: 180)
+      // dias_max = cota inferior (ej: 151)
+      .gte('dias_min', diasHasta)
+      .lte('dias_max', diasHasta);
 
     // Si hay subrubro, priorizar reglas específicas; si no, usar reglas generales (id_subrubro nulo)
     if (subId != null) {
