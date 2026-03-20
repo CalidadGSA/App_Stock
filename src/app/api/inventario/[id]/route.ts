@@ -1,5 +1,9 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  esTipoControlVisibleParaOperadorSucursal,
+  inferirTipoControlInventario,
+} from '@/lib/inventario/tipo-control';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -14,15 +18,27 @@ export async function GET(
   const { id } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const admin = await createAdminClient();
   const { data, error } = await admin
     .from('controles_inventario')
-    .select('*, sucursales(nombrefantasia), operadores(nombrecompleto), controles_inventario_detalle(*)')
+    .select(
+      '*, sucursales(nombrefantasia), operadores(nombrecompleto), controles_inventario_detalle(*)'
+    )
     .eq('id', id)
     .eq('sucursal_id', sucursalId ?? '')
+    // Mantener el orden original de carga de los productos (por fecha_registro del detalle)
+    .order('fecha_registro', {
+      foreignTable: 'controles_inventario_detalle',
+      ascending: true,
+    })
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+  const tipoControl = inferirTipoControlInventario(data);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
   return NextResponse.json({ data });
 }

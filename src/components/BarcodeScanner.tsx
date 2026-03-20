@@ -19,6 +19,8 @@ interface BarcodeScannerProps {
   placeholder?: string;
   /** Si true, mantiene el foco en el input del escáner (ideal para lector USB). */
   autoFocusInput?: boolean;
+  /** Si true, captura lecturas del escáner globalmente para evitar que se escriban en otros inputs. */
+  captureGlobally?: boolean;
 }
 
 export default function BarcodeScanner({
@@ -26,6 +28,7 @@ export default function BarcodeScanner({
   disabled,
   placeholder = 'Escanear código de barras...',
   autoFocusInput = true,
+  captureGlobally = false,
 }: BarcodeScannerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -33,6 +36,8 @@ export default function BarcodeScanner({
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const readerRef = useRef<unknown>(null);
+  const globalBufferRef = useRef('');
+  const globalTimerRef = useRef<number | null>(null);
 
   // Mantener el input enfocado (para lector USB / PDA)
   const refocus = useCallback(() => {
@@ -45,6 +50,55 @@ export default function BarcodeScanner({
   useEffect(() => {
     refocus();
   }, [refocus]);
+
+  useEffect(() => {
+    if (!captureGlobally || disabled || cameraActive) return;
+
+    function clearBuffer() {
+      globalBufferRef.current = '';
+      if (globalTimerRef.current != null) {
+        window.clearTimeout(globalTimerRef.current);
+        globalTimerRef.current = null;
+      }
+    }
+
+    function scheduleClear() {
+      if (globalTimerRef.current != null) {
+        window.clearTimeout(globalTimerRef.current);
+      }
+      globalTimerRef.current = window.setTimeout(() => {
+        clearBuffer();
+      }, 150);
+    }
+
+    function handleGlobalKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+      if (e.key === 'Enter') {
+        const barcode = globalBufferRef.current.trim();
+        if (barcode) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearBuffer();
+          onScan(barcode);
+        }
+        return;
+      }
+
+      if (e.key.length === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        globalBufferRef.current += e.key;
+        scheduleClear();
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
+      clearBuffer();
+    };
+  }, [captureGlobally, disabled, cameraActive, onScan]);
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     setInputValue(e.target.value);

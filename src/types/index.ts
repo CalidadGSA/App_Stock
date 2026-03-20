@@ -4,6 +4,11 @@
 
 export type RolUsuario = 'admin' | 'operador_sucursal';
 export type EstadoControl = 'en_progreso' | 'cerrado';
+export type TipoControlInventario =
+  | 'diario'
+  | 'ocasional_sucursal'
+  | 'ocasional_auditoria'
+  | 'auditoria';
 
 // ------------------------------------------------------------
 // Entidades de la base de datos
@@ -39,6 +44,7 @@ export interface ProductoCache {
 export interface ProductoLegacy {
   producto_id_sistema: string;
   codigo_barras: string;
+  codigos_secundarios?: string[];
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
@@ -65,6 +71,12 @@ export interface ControlInventario {
   fecha_inicio: string;
   fecha_fin: string | null;
   estado: EstadoControl;
+  /** Origen del control: 'Sucursal' (operador) o 'Auditoria' (admin). */
+  origen?: string | null;
+  /** Tipo explícito del control para distinguir diarios, auditorías y ocasionales por origen. */
+  tipo?: TipoControlInventario | null;
+  /** Categoría macro del inventario: FARMA / BIENESTAR / PSICOTROPICOS */
+  categoria_macro?: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
   descripcion: string | null;
   created_at: string;
   updated_at: string;
@@ -107,6 +119,8 @@ export interface ControlVencimiento {
   observaciones: string | null;
   created_at: string;
   updated_at: string;
+  /** Categoría macro del control de vencimientos: FARMA / BIENESTAR / PSICOTROPICOS */
+  categoria_macro?: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
   sucursales?: Pick<Sucursal, 'nombre' | 'codigo_interno'>;
   usuarios?: Pick<Usuario, 'nombre'>;
 }
@@ -137,8 +151,9 @@ export interface DashboardStats {
   productos_vencidos: number;
   productos_por_vencer_30: number;
   productos_por_vencer_60: number;
+  productos_por_vencer_90: number;
   ultimos_inventarios: Pick<ControlInventario, 'id' | 'fecha_inicio' | 'estado' | 'descripcion' | 'sucursales'>[];
-  ultimos_vencimientos: Pick<ControlVencimiento, 'id' | 'fecha_inicio' | 'estado' | 'sucursales'>[];
+  ultimos_vencimientos: Pick<ControlVencimiento, 'id' | 'fecha_inicio' | 'estado' | 'observaciones' | 'categoria_macro' | 'sucursales'>[];
 }
 
 // ------------------------------------------------------------

@@ -16,16 +16,46 @@ export async function GET() {
   const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
   const en30dias = new Date(hoy.getTime() + 30 * 86400000).toISOString().split('T')[0];
   const en60dias = new Date(hoy.getTime() + 60 * 86400000).toISOString().split('T')[0];
+  const en90dias = new Date(hoy.getTime() + 90 * 86400000).toISOString().split('T')[0];
   const hoyStr = hoy.toISOString().split('T')[0];
+  const esAdmin = operador.rol === 'admin';
 
-  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, ultimosInv, ultimosVenc] =
+  let invTotalQuery = admin
+    .from('controles_inventario')
+    .select('id', { count: 'exact', head: true })
+    .eq('sucursal_id', sucursalId);
+
+  let invMesQuery = admin
+    .from('controles_inventario')
+    .select('id', { count: 'exact', head: true })
+    .eq('sucursal_id', sucursalId)
+    .gte('created_at', inicioMes);
+
+  let invDetallesQuery = admin
+    .from('controles_inventario_detalle')
+    .select('diferencia, controles_inventario!inner(sucursal_id, origen)')
+    .eq('controles_inventario.sucursal_id', sucursalId)
+    .neq('diferencia', 0);
+
+  let ultimosInvQuery = admin
+    .from('controles_inventario')
+    .select('id, fecha_inicio, estado, descripcion, origen, tipo, sucursales(nombrefantasia)')
+    .eq('sucursal_id', sucursalId)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (!esAdmin) {
+    invTotalQuery = invTotalQuery.in('tipo', ['diario', 'ocasional_sucursal']);
+    invMesQuery = invMesQuery.in('tipo', ['diario', 'ocasional_sucursal']);
+    invDetallesQuery = invDetallesQuery.in('controles_inventario.tipo', ['diario', 'ocasional_sucursal']);
+    ultimosInvQuery = ultimosInvQuery.in('tipo', ['diario', 'ocasional_sucursal']);
+  }
+
+  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc] =
     await Promise.all([
-      admin.from('controles_inventario').select('id', { count: 'exact', head: true }).eq('sucursal_id', sucursalId),
-      admin.from('controles_inventario').select('id', { count: 'exact', head: true }).eq('sucursal_id', sucursalId).gte('created_at', inicioMes),
-      admin.from('controles_inventario_detalle')
-        .select('diferencia, controles_inventario!inner(sucursal_id)')
-        .eq('controles_inventario.sucursal_id', sucursalId)
-        .neq('diferencia', 0),
+      invTotalQuery,
+      invMesQuery,
+      invDetallesQuery,
       admin.from('controles_vencimientos').select('id', { count: 'exact', head: true }).eq('sucursal_id', sucursalId),
       admin.from('controles_vencimientos_detalle')
         .select('id', { count: 'exact', head: true })
@@ -40,13 +70,13 @@ export async function GET() {
         .select('id', { count: 'exact', head: true })
         .gte('fecha_vencimiento', hoyStr)
         .lte('fecha_vencimiento', en60dias),
-      admin.from('controles_inventario')
-        .select('id, fecha_inicio, estado, descripcion, sucursales(nombrefantasia)')
-        .eq('sucursal_id', sucursalId)
-        .order('created_at', { ascending: false })
-        .limit(5),
+      admin.from('controles_vencimientos_detalle')
+        .select('id', { count: 'exact', head: true })
+        .gte('fecha_vencimiento', hoyStr)
+        .lte('fecha_vencimiento', en90dias),
+      ultimosInvQuery,
       admin.from('controles_vencimientos')
-        .select('id, fecha_inicio, estado, sucursales(nombrefantasia)')
+        .select('id, fecha_inicio, estado, observaciones, categoria_macro, sucursales(nombrefantasia)')
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),
@@ -62,6 +92,7 @@ export async function GET() {
       productos_vencidos: vencidos.count ?? 0,
       productos_por_vencer_30: porVencer30.count ?? 0,
       productos_por_vencer_60: porVencer60.count ?? 0,
+      productos_por_vencer_90: porVencer90.count ?? 0,
       ultimos_inventarios: ultimosInv.data ?? [],
       ultimos_vencimientos: ultimosVenc.data ?? [],
     },

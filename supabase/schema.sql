@@ -125,6 +125,25 @@ create index idx_stock_idproducto on stock(IDProducto);
 
 
 -- ------------------------------------------------------------
+-- BASE DE PRODUCTOS POR SUCURSAL / CATEGORÍA / TRIMESTRE
+-- ------------------------------------------------------------
+create table base_productos (
+  idSucursal        integer    not null references sucursales(Sucursal),
+  idProducto        bigint     not null,
+  categoriamacro    text       not null,
+  trimestre         text       not null,
+  fechaInicio       date       not null,
+  fechaFin          date       not null,
+  orden             integer    not null default 0,
+  vecesInventariado integer    not null default 0,
+  primary key (idSucursal, idProducto, categoriamacro, trimestre)
+);
+create index idx_baseprod_producto  on base_productos(idProducto);
+create index idx_baseprod_categoriamacro on base_productos(categoriamacro);
+create index idx_baseprod_trimestre on base_productos(trimestre);
+
+
+-- ------------------------------------------------------------
 -- PRODUCTOS ↔ CODEBARS (múltiples códigos por producto, desde Quantio)
 -- ------------------------------------------------------------
 create table productoscodebars (
@@ -145,14 +164,33 @@ create table controles_inventario (
   fecha_inicio timestamptz not null default now(),
   fecha_fin    timestamptz,
   estado       estado_control not null default 'en_progreso',
+  origen       text not null default 'Sucursal',
+  tipo         text not null default 'ocasional_sucursal',
   descripcion  text,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+
+-- Categoría macro opcional para el inventario (FARMA / BIENESTAR / PSICOTROPICOS)
+alter table controles_inventario
+  add column if not exists categoria_macro text;
+alter table controles_inventario
+  add column if not exists tipo text;
 create index idx_ci_sucursal on controles_inventario(sucursal_id);
 create index idx_ci_estado   on controles_inventario(estado);
 create index idx_ci_usuario on controles_inventario(usuario_id);
 create index idx_ci_fecha_inicio on controles_inventario(fecha_inicio);
+create index if not exists idx_ci_tipo on controles_inventario(tipo);
+
+update controles_inventario
+set tipo = case
+  when categoria_macro is not null then 'diario'
+  when origen = 'Auditoria' and coalesce(lower(descripcion), '') like '%ocasional%' then 'ocasional_auditoria'
+  when origen = 'Auditoria' then 'auditoria'
+  else 'ocasional_sucursal'
+end
+where tipo is null
+   or tipo not in ('diario', 'ocasional_sucursal', 'ocasional_auditoria', 'auditoria');
 
 -- ------------------------------------------------------------
 -- CONTROLES DE INVENTARIO  (detalle)
@@ -175,11 +213,58 @@ create table controles_inventario_detalle (
   stock_real_unidades numeric(12,2),
   -- Total contado en unidades (cajas*unidades_por_caja + unidades_sueltas)
   stock_real          numeric(12,2) not null default 0,
+  estado              text not null default 'en_progreso',
+  con_diferencias     smallint not null default 0,
+  auditado            smallint not null default 0,
+  ajustado            smallint not null default 0,
   diferencia          numeric(12,2) generated always as (stock_real - stock_sistema) stored,
   fecha_registro      timestamptz not null default now()
 );
 create index idx_cid_control on controles_inventario_detalle(control_id);
 create index idx_cid_producto_sistema on controles_inventario_detalle(producto_id_sistema);
+
+alter table controles_inventario_detalle
+  add column if not exists estado text;
+alter table controles_inventario_detalle
+  add column if not exists con_diferencias smallint not null default 0;
+alter table controles_inventario_detalle
+  add column if not exists auditado smallint not null default 0;
+alter table controles_inventario_detalle
+  add column if not exists ajustado smallint not null default 0;
+
+update controles_inventario_detalle
+set estado = case
+  when ajustado = 1 and auditado = 1 then 'ajustado_auditoria'
+  when ajustado = 1 then 'ajustado_sucursal'
+  when auditado = 1 then 'auditado'
+  when con_diferencias = 1 then 'con_diferencia'
+  else 'sin_diferencias'
+end
+where estado is null
+   or estado not in (
+     'en_progreso',
+     'con_diferencia',
+     'sin_diferencias',
+     'auditado',
+     'ajustado_auditoria',
+     'ajustado_sucursal'
+   );
+
+alter table controles_inventario_detalle
+  drop constraint if exists chk_cid_estado;
+
+alter table controles_inventario_detalle
+  add constraint chk_cid_estado
+  check (
+    estado in (
+      'en_progreso',
+      'con_diferencia',
+      'sin_diferencias',
+      'auditado',
+      'ajustado_auditoria',
+      'ajustado_sucursal'
+    )
+  );
 
 -- ------------------------------------------------------------
 -- CONTROLES DE VENCIMIENTOS  (cabecera)
@@ -195,6 +280,9 @@ create table controles_vencimientos (
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+-- Categoría macro opcional para el control de vencimientos (FARMA / BIENESTAR / PSICOTROPICOS)
+alter table controles_vencimientos
+  add column if not exists categoria_macro text;
 create index idx_cv_sucursal on controles_vencimientos(sucursal_id);
 create index idx_cv_estado   on controles_vencimientos(estado);
 create index idx_cv_usuario on controles_vencimientos(usuario_id);
@@ -218,6 +306,53 @@ create table controles_vencimientos_detalle (
 create index idx_cvd_control    on controles_vencimientos_detalle(control_id);
 create index idx_cvd_vencimiento on controles_vencimientos_detalle(fecha_vencimiento);
 create index idx_cvd_producto_sistema on controles_vencimientos_detalle(producto_id_sistema);
+
+-- Flag para marcar un registro como vendido en la vista "por vencer" sin borrarlo del control
+alter table controles_vencimientos_detalle
+  add column if not exists vendido smallint not null default 0;
+
+-- Flag para marcar un registro como devuelto (devolución registrada)
+alter table controles_vencimientos_detalle
+  add column if not exists devuelto smallint not null default 0;
+
+-- ------------------------------------------------------------
+-- DEVOLUCIONES DE VENCIMIENTOS
+-- ------------------------------------------------------------
+create table if not exists devoluciones_vencimientos (
+  id           uuid primary key default gen_random_uuid(),
+  sucursal_id  integer not null references sucursales(Sucursal),
+  usuario_id   integer not null references operadores(IDOperador),
+  fecha        timestamptz not null default now()
+);
+
+create table if not exists devoluciones_vencimientos_detalle (
+  id                       uuid primary key default gen_random_uuid(),
+  devolucion_id            uuid not null references devoluciones_vencimientos(id) on delete cascade,
+  detalle_vencimiento_id   uuid not null references controles_vencimientos_detalle(id),
+  control_id               uuid not null references controles_vencimientos(id) on delete cascade,
+  producto_id_sistema      text not null,
+  codigo_barras            text not null,
+  descripcion              text not null,
+  presentacion             text,
+  laboratorio              text,
+  fecha_vencimiento        date not null,
+  cantidad                 numeric(12,2) not null,
+  categoria_macro          text
+);
+
+-- ------------------------------------------------------------
+-- REGLAS DE DESCUENTOS POR VENCIMIENTOS
+-- ------------------------------------------------------------
+create table if not exists descuentos_vencimientos_reglas (
+  id             serial primary key,
+  id_subrubro    integer references subrubros(IDSubRubro),
+  categoria_macro text,
+  dias_min       integer not null,
+  dias_max       integer not null,
+  descuento      numeric(5,2) not null,
+  activo         smallint not null default 1
+);
+create index if not exists idx_dvr_subrubro on descuentos_vencimientos_reglas(id_subrubro);
 
 -- ------------------------------------------------------------
 -- SYNC LEGACY → SUPABASE  (estado y auditoría)
@@ -264,6 +399,28 @@ alter table controles_inventario         enable row level security;
 alter table controles_inventario_detalle enable row level security;
 alter table controles_vencimientos       enable row level security;
 alter table controles_vencimientos_detalle enable row level security;
+
+-- ------------------------------------------------------------
+-- FUNCIÓN: incrementar vecesInventariado al cerrar un inventario diario
+-- ------------------------------------------------------------
+create or replace function incrementar_veces_inventariado(
+  p_sucursal_id integer,
+  p_categoria_macro text,
+  p_trimestre text,
+  p_id_productos bigint[]
+)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update base_productos
+  set vecesinventariado = vecesinventariado + 1
+  where idsucursal = p_sucursal_id
+    and categoriamacro = p_categoria_macro
+    and trimestre = p_trimestre
+    and idproducto = any(p_id_productos);
+$$;
 
 -- Políticas: el service_role bypassa RLS automáticamente.
 -- (Operadores se gestiona por sync legacy; sin tabla usuarios no hay política por auth.uid.)

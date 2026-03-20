@@ -11,6 +11,7 @@ import Link from 'next/link';
 export default function NuevoVencimientoPage() {
   const router = useRouter();
   const [observaciones, setObservaciones] = useState('');
+  const [categoriaMacro, setCategoriaMacro] = useState<'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | ''>('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
@@ -23,7 +24,10 @@ export default function NuevoVencimientoPage() {
       const res = await fetch('/api/vencimientos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ observaciones: observaciones.trim() || undefined }),
+        body: JSON.stringify({
+          observaciones: observaciones.trim() || undefined,
+          categoria_macro: categoriaMacro || null,
+        }),
       });
       const json = await res.json() as { data?: { id: string }; error?: string };
 
@@ -72,6 +76,25 @@ export default function NuevoVencimientoPage() {
               placeholder="Ej: Medicamentos, Perfumeria..."
               hint="Podés agregar una descripción para identificar este control"
             />
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium text-gray-700">
+                Categoría macro
+              </label>
+              <select
+                value={categoriaMacro}
+                onChange={(e) => setCategoriaMacro(e.target.value as any)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                required
+              >
+                <option value="">Seleccionar categoría</option>
+                <option value="FARMA">FARMA</option>
+                <option value="BIENESTAR">BIENESTAR</option>
+                <option value="PSICOTROPICOS">PSICOTROPICOS</option>
+              </select>
+              <p className="text-xs text-gray-500">
+                Define el tipo de control de vencimientos (macro-categoría).
+              </p>
+            </div>
 
             {error && (
               <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">

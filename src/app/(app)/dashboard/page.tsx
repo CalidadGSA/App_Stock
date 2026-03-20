@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ClipboardList, AlertTriangle, CalendarClock, TrendingDown,
   ChevronRight, CheckCircle2, Clock
@@ -10,17 +11,31 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
+import { etiquetaTipoControlInventario, inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats } from '@/types';
 
 function KpiCard({
-  icon: Icon, label, value, sublabel, color,
+  icon: Icon,
+  label,
+  value,
+  sublabel,
+  color,
+  onClick,
 }: {
-  icon: React.ElementType; label: string; value: number | string;
-  sublabel?: string; color: string;
+  icon: React.ElementType;
+  label: string;
+  value: number | string;
+  sublabel?: string;
+  color: string;
+  onClick?: () => void;
 }) {
+  const clickable = !!onClick;
   return (
-    <Card className="flex flex-col">
+    <Card
+      className={`flex flex-col ${clickable ? 'cursor-pointer transition-shadow hover:shadow-md' : ''}`}
+      onClick={onClick}
+    >
       <CardContent className="flex items-center gap-4 py-5">
         <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${color}`}>
           <Icon className="h-6 w-6" />
@@ -36,6 +51,7 @@ function KpiCard({
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -69,24 +85,65 @@ export default function DashboardPage() {
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
             icon={ClipboardList}
-            label="Inventarios totales"
+            label="Inventarios"
             value={stats?.inventarios_total ?? 0}
-            sublabel={`${stats?.inventarios_mes ?? 0} este mes`}
+            sublabel="este mes"
             color="bg-blue-100 text-blue-600"
+            onClick={() => {
+              const hoy = new Date();
+              const year = hoy.getFullYear();
+              const month = hoy.getMonth(); // 0-11
+              const first = new Date(year, month, 1);
+              const last = new Date(year, month + 1, 0);
+              const toYmd = (d: Date) => {
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${dd}`;
+              };
+              const desde = toYmd(first);
+              const hasta = toYmd(last);
+              router.push(`/inventario?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`);
+            }}
           />
           <KpiCard
             icon={TrendingDown}
             label="Items con diferencia"
             value={stats?.items_con_diferencia ?? 0}
-            sublabel="En todos los controles"
+            sublabel="en los últimos 60 días"
             color="bg-orange-100 text-orange-600"
+            onClick={() => {
+              const hoy = new Date();
+              // Últimos 60 días (incluyendo hoy)
+              const last = hoy;
+              const first = new Date(hoy);
+              first.setDate(first.getDate() - 59);
+              const toYmd = (d: Date) => {
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${dd}`;
+              };
+              const desdeActual = toYmd(first);
+              const hastaActual = toYmd(last);
+              router.push(
+                `/inventario/diferencias-resumen?desdeActual=${encodeURIComponent(
+                  desdeActual
+                )}&hastaActual=${encodeURIComponent(
+                  hastaActual
+                )}`
+              );
+            }}
           />
           <KpiCard
             icon={CalendarClock}
-            label="Por vencer (30 días)"
+            label="Por vencer en 30 días"
             value={stats?.productos_por_vencer_30 ?? 0}
-            sublabel={`${stats?.productos_por_vencer_60 ?? 0} en 60 días`}
+            sublabel={`${stats?.productos_por_vencer_60 ?? 0} en 60 días · ${stats?.productos_por_vencer_90 ?? 0} en 90 días`}
             color="bg-yellow-100 text-yellow-600"
+            onClick={() => {
+              router.push('/vencimientos/por-vencer?days=30');
+            }}
           />
           <KpiCard
             icon={AlertTriangle}
@@ -94,9 +151,26 @@ export default function DashboardPage() {
             value={stats?.productos_vencidos ?? 0}
             sublabel="Requieren atención"
             color="bg-red-100 text-red-600"
+            onClick={() => {
+              router.push('/vencimientos/vencidos');
+            }}
           />
         </div>
       </div>
+
+      {/* Ajustes (solo admin) */}
+      {stats?.rol === 'admin' && (
+        <div className="flex justify-end">
+          <Button
+            size="lg"
+            variant="secondary"
+            className="border border-gray-300 text-gray-800 px-6 shadow-sm"
+            onClick={() => (window.location.href = '/ajustes')}
+          >
+            Ajustes
+          </Button>
+        </div>
+      )}
 
       {/* Últimas actividades */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -105,7 +179,12 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos inventarios</h3>
-              {/* Acciones principales están en el Navbar; acá solo listamos. */}
+              <Link
+                href="/inventario"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Ver todos
+              </Link>
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -113,35 +192,51 @@ export default function DashboardPage() {
               <p className="px-5 py-4 text-sm text-gray-400">Sin controles registrados aún.</p>
             ) : (
               <ul className="divide-y divide-gray-100">
-                {stats?.ultimos_inventarios.map(inv => (
-                  <li key={inv.id}>
-                    <Link
-                      href={`/inventario/${inv.id}`}
-                      className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        {inv.estado === 'cerrado'
-                          ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                          : <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
-                        }
-                        <div>
-                          <p className="text-sm font-medium text-gray-800">{formatDateTime(inv.fecha_inicio)}</p>
-                          {inv.descripcion && (
-                            <p className="text-xs text-gray-500 truncate max-w-[220px]">
-                              {inv.descripcion}
-                            </p>
+                {stats?.ultimos_inventarios.map(inv => {
+                  const tipo = etiquetaTipoControlInventario(
+                    inferirTipoControlInventario(inv)
+                  );
+                  return (
+                    <li key={inv.id}>
+                      <Link
+                        href={`/inventario/${inv.id}`}
+                        className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          {inv.estado === 'cerrado' ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                          ) : (
+                            <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
                           )}
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">
+                              {formatDateTime(inv.fecha_inicio)}
+                            </p>
+                            <div className="mt-0.5 flex items-center gap-2">
+                              <Badge
+                                variant="default"
+                                className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                              >
+                                {tipo}
+                              </Badge>
+                              {inv.descripcion && (
+                                <p className="text-xs text-gray-500 truncate max-w-[180px]">
+                                  {inv.descripcion}
+                                </p>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={inv.estado === 'cerrado' ? 'success' : 'warning'}>
-                          {inv.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
-                        </Badge>
-                        <ChevronRight className="h-4 w-4 text-gray-400" />
-                      </div>
-                    </Link>
-                  </li>
-                ))}
+                        <div className="flex items-center gap-2">
+                          <Badge variant={inv.estado === 'cerrado' ? 'success' : 'warning'}>
+                            {inv.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
+                          </Badge>
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardContent>
@@ -152,11 +247,12 @@ export default function DashboardPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Últimos controles de vencimientos</h3>
-              {stats?.rol !== 'admin' && (
-                <Link href="/vencimientos/nuevo" className="text-xs text-blue-600 hover:underline">
-                  Nuevo control
-                </Link>
-              )}
+              <Link
+                href="/vencimientos"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Ver todos
+              </Link>
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -164,28 +260,61 @@ export default function DashboardPage() {
               <p className="px-5 py-4 text-sm text-gray-400">Sin controles registrados aún.</p>
             ) : (
               <ul className="divide-y divide-gray-100">
-                {stats?.ultimos_vencimientos.map(v => (
-                  <li key={v.id}>
-                    <Link
-                      href={`/vencimientos/${v.id}`}
-                      className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        {v.estado === 'cerrado'
-                          ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                          : <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
-                        }
-                        <p className="text-sm font-medium text-gray-800">{formatDateTime(v.fecha_inicio)}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={v.estado === 'cerrado' ? 'success' : 'warning'}>
-                          {v.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
-                        </Badge>
-                        <ChevronRight className="h-4 w-4 text-gray-400" />
-                      </div>
-                    </Link>
-                  </li>
-                ))}
+                {stats?.ultimos_vencimientos.map((v) => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const op = (v as any).operadores;
+                  const nombreCompleto =
+                    (op?.nombrecompleto as string | undefined) ??
+                    (op?.nombreCompleto as string | undefined) ??
+                    '';
+                  return (
+                    <li key={v.id}>
+                      <Link
+                        href={`/vencimientos/${v.id}`}
+                        className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          {v.estado === 'cerrado' ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                          ) : (
+                            <Clock className="h-4 w-4 text-yellow-500 shrink-0" />
+                          )}
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">
+                              {formatDateTime(v.fecha_inicio)}
+                            </p>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                              {v.categoria_macro && (
+                                <Badge
+                                  variant="default"
+                                  className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                                >
+                                  {v.categoria_macro}
+                                </Badge>
+                              )}
+                              {v.observaciones && (
+                                <p className="text-xs text-gray-500 truncate max-w-[180px]">
+                                  {v.observaciones}
+                                </p>
+                              )}
+                            </div>
+                            {nombreCompleto && (
+                              <p className="text-[11px] text-gray-500">
+                                Operador: {nombreCompleto}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={v.estado === 'cerrado' ? 'success' : 'warning'}>
+                            {v.estado === 'cerrado' ? 'Cerrado' : 'En progreso'}
+                          </Badge>
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardContent>

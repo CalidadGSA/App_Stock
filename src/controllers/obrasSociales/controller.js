@@ -36,10 +36,13 @@ const {
   syncLaboratoriosState,
 } = require('./synclaboratorios');
 const {
+  testQuantioConnection,
   syncProductosCodebarsFromQuantio,
+  syncProductosCodebarsState,
 } = require('./syncproductoscodebars');
 const {
   syncMedicamentosCodebars,
+  syncMedicamentosCodebarsState,
 } = require('./syncmedicamentosCodebars');
 
 /* ======================================================
@@ -103,17 +106,53 @@ exports.getdatos = async (req, res) => {
 };
 
 /* ======================================================
-   🔄 POST /api/sync/productoscodebars (Quantio → Supabase)
+   🔎 GET /api/datos/productoscodebars/test-connection
+   👉 Prueba la conexión a Quantio y valida acceso a la tabla productoscodebars
+====================================================== */
+exports.testproductoscodebarsconnection = async (_req, res) => {
+  try {
+    const result = await testQuantioConnection();
+    res.status(result.ok ? 200 : 503).json(result);
+  } catch (e) {
+    console.error('💥 Error testeando conexión Quantio:', e);
+    res.status(500).json({
+      ok: false,
+      message: 'Error inesperado al probar la conexión con Quantio.',
+      error: e.message,
+    });
+  }
+};
+
+/* ======================================================
+   🔄 POST /api/datos/productoscodebars/sync (Quantio → Supabase)
    👉 Copia IDProducto + codebar desde Quantio a la tabla productoscodebars
 ====================================================== */
-exports.syncproductoscodebars = async (req, res) => {
-  try {
-    const result = await syncProductosCodebarsFromQuantio();
-    res.json({ ok: true, ...result });
-  } catch (e) {
-    console.error('💥 Error sync productoscodebars:', e);
-    res.status(500).json({ ok: false, error: e.message });
+exports.syncproductoscodebars = (req, res) => {
+  const limit =
+    typeof req.body?.limit === 'number'
+      ? req.body.limit
+      : req.body?.limit
+      ? parseInt(req.body.limit, 10)
+      : undefined;
+
+  if (syncProductosCodebarsState.inProgress) {
+    return res.status(409).json({
+      success: false,
+      message: 'Sync de productoscodebars ya en progreso',
+      state: syncProductosCodebarsState,
+    });
   }
+
+  void syncProductosCodebarsFromQuantio({ limit }).catch(e => {
+    console.error('❌ Error sync background productoscodebars:', e);
+  });
+
+  res.json({
+    success: true,
+    message: 'Sync productoscodebars iniciado',
+    limit: limit || null,
+    state: syncProductosCodebarsState,
+  });
 };
 
 /* ======================================================
@@ -122,13 +161,23 @@ exports.syncproductoscodebars = async (req, res) => {
       rellena codebar2, codebar3 y codebar4
 ====================================================== */
 exports.syncmedicamentoscodebars = async (req, res) => {
-  try {
-    const result = await syncMedicamentosCodebars();
-    res.json({ ok: true, ...result });
-  } catch (e) {
-    console.error('💥 Error sync medicamentos codebars:', e);
-    res.status(500).json({ ok: false, error: e.message });
+  if (syncMedicamentosCodebarsState.inProgress) {
+    return res.status(409).json({
+      success: false,
+      message: 'Sync de medicamentos codebars ya en progreso',
+      state: syncMedicamentosCodebarsState,
+    });
   }
+
+  void syncMedicamentosCodebars().catch(e => {
+    console.error('❌ Error sync background medicamentos codebars:', e);
+  });
+
+  res.json({
+    success: true,
+    message: 'Sync medicamentos codebars iniciado',
+    state: syncMedicamentosCodebarsState,
+  });
 };
 
 /* ======================================================

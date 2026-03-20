@@ -1,5 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  esTipoAuditoria,
+  esTipoControlVisibleParaOperadorSucursal,
+  inferirTipoControlInventario,
+} from '@/lib/inventario/tipo-control';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -33,18 +38,21 @@ export async function POST(
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const admin = await createAdminClient();
 
   // Verificar que el control pertenece a la sucursal y está en progreso
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id')
+    .select('estado, sucursal_id, origen, tipo, categoria_macro, descripcion')
     .eq('id', controlId)
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
   if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  const tipoControl = inferirTipoControlInventario(control);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'El control ya está cerrado' }, { status: 400 });
 
   const body = await request.json() as DetalleBody;
@@ -58,6 +66,37 @@ export async function POST(
       ? body.stock_real_unidades
       : null;
 
+  const sistCajas =
+    typeof body.stock_sist_cajas === 'number' && !Number.isNaN(body.stock_sist_cajas)
+      ? body.stock_sist_cajas
+      : null;
+  const sistUnidades =
+    typeof body.stock_sist_unidades === 'number' && !Number.isNaN(body.stock_sist_unidades)
+      ? body.stock_sist_unidades
+      : null;
+
+  const deltaC =
+    cajas != null && sistCajas != null ? cajas - sistCajas : 0;
+  const deltaU =
+    unidadesSueltas != null && sistUnidades != null
+      ? unidadesSueltas - sistUnidades
+      : 0;
+
+  let estado = 'en_progreso';
+  let conDiferencias = 0;
+  let auditado = 0;
+  if (esTipoAuditoria(tipoControl)) {
+    estado = 'auditado';
+    auditado = 1;
+    conDiferencias = deltaC === 0 && deltaU === 0 ? 0 : 1;
+  } else if (deltaC === 0 && deltaU === 0) {
+    estado = 'sin_diferencias';
+    conDiferencias = 0;
+  } else {
+    estado = 'con_diferencia';
+    conDiferencias = 1;
+  }
+
   const { data, error } = await admin
     .from('controles_inventario_detalle')
     .insert({
@@ -68,17 +107,15 @@ export async function POST(
       presentacion: body.presentacion ?? null,
       laboratorio: body.laboratorio ?? null,
       stock_sistema: body.stock_sistema,
-      stock_sist_cajas:
-        typeof body.stock_sist_cajas === 'number' && !Number.isNaN(body.stock_sist_cajas)
-          ? body.stock_sist_cajas
-          : null,
-      stock_sist_unidades:
-        typeof body.stock_sist_unidades === 'number' && !Number.isNaN(body.stock_sist_unidades)
-          ? body.stock_sist_unidades
-          : null,
+      stock_sist_cajas: sistCajas,
+      stock_sist_unidades: sistUnidades,
       stock_real_cajas: cajas,
       stock_real_unidades: unidadesSueltas,
       stock_real: body.stock_real,
+      estado,
+      con_diferencias: conDiferencias,
+      auditado,
+      ajustado: 0,
     })
     .select()
     .single();
@@ -102,17 +139,20 @@ export async function PATCH(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const admin = await createAdminClient();
 
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id')
+    .select('estado, sucursal_id, origen, tipo, categoria_macro, descripcion')
     .eq('id', controlId)
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
   if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  const tipoControl = inferirTipoControlInventario(control);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'El control ya está cerrado' }, { status: 400 });
 
   const body = await request.json() as {
@@ -120,6 +160,8 @@ export async function PATCH(
     stock_real_cajas?: number | null;
     stock_real_unidades?: number | null;
     stock_real: number;
+    stock_sist_cajas?: number | null;
+    stock_sist_unidades?: number | null;
   };
 
   if (!body.detalle_id) {
@@ -134,13 +176,54 @@ export async function PATCH(
     typeof body.stock_real_unidades === 'number' && !Number.isNaN(body.stock_real_unidades)
       ? body.stock_real_unidades
       : null;
+  // Obtener stock de sistema actual de la fila para recalcular diferencias
+  const { data: detalleActual } = await admin
+    .from('controles_inventario_detalle')
+    .select('stock_sist_cajas, stock_sist_unidades')
+    .eq('id', body.detalle_id)
+    .maybeSingle();
+
+  let sistCajas = detalleActual?.stock_sist_cajas ?? 0;
+  let sistUnidades = detalleActual?.stock_sist_unidades ?? 0;
+
+  if (typeof body.stock_sist_cajas === 'number' && !Number.isNaN(body.stock_sist_cajas)) {
+    sistCajas = body.stock_sist_cajas;
+  }
+  if (typeof body.stock_sist_unidades === 'number' && !Number.isNaN(body.stock_sist_unidades)) {
+    sistUnidades = body.stock_sist_unidades;
+  }
+
+  const deltaC =
+    cajas != null ? cajas - sistCajas : 0;
+  const deltaU =
+    unidadesSueltas != null ? unidadesSueltas - sistUnidades : 0;
+
+  let estado = 'en_progreso';
+  let conDiferencias = 0;
+  let auditado = 0;
+  if (esTipoAuditoria(tipoControl)) {
+    estado = 'auditado';
+    auditado = 1;
+    conDiferencias = deltaC === 0 && deltaU === 0 ? 0 : 1;
+  } else if (deltaC === 0 && deltaU === 0) {
+    estado = 'sin_diferencias';
+    conDiferencias = 0;
+  } else {
+    estado = 'con_diferencia';
+    conDiferencias = 1;
+  }
 
   const { data, error } = await admin
     .from('controles_inventario_detalle')
     .update({
+      stock_sist_cajas: sistCajas,
+      stock_sist_unidades: sistUnidades,
       stock_real_cajas: cajas,
       stock_real_unidades: unidadesSueltas,
       stock_real: body.stock_real,
+      estado,
+      con_diferencias: conDiferencias,
+      auditado,
     })
     .eq('id', body.detalle_id)
     .select()
@@ -165,6 +248,7 @@ export async function DELETE(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const esAdmin = operador.rol === 'admin';
 
   const detalleId = new URL(request.url).searchParams.get('detalle_id');
   if (!detalleId) return NextResponse.json({ error: 'detalle_id requerido' }, { status: 400 });
@@ -172,11 +256,13 @@ export async function DELETE(
   const admin = await createAdminClient();
   const { data: control } = await admin
     .from('controles_inventario')
-    .select('estado, sucursal_id')
+    .select('estado, sucursal_id, origen, tipo, categoria_macro, descripcion')
     .eq('id', controlId)
     .single();
 
   if (!control || String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  const tipoControl = inferirTipoControlInventario(control);
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'Control cerrado' }, { status: 400 });
 
   const { error } = await admin.from('controles_inventario_detalle').delete().eq('id', detalleId);
