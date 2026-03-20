@@ -5,7 +5,7 @@ import { getOperadorSession } from '@/lib/auth/session';
 
 export async function GET(
   _request: NextRequest,
-  context: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   const operador = await getOperadorSession();
   if (!operador) {
@@ -18,7 +18,7 @@ export async function GET(
     return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
   }
 
-  const devolucionId = context.params.id;
+  const { id: devolucionId } = await context.params;
   const admin = await createAdminClient();
 
   // Verificamos que la devolución pertenezca a la sucursal actual

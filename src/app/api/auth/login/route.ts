@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
     if (!Number.isNaN(sucursalIdNum)) {
       const { data: sucursal, error: sucError } = await admin
         .from('sucursales')
-        .select('sucursal, nombrefantasia, contraseña, activa')
+        .select('*')
         .eq('sucursal', sucursalIdNum)
         .single();
 
