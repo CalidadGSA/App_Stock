@@ -70,7 +70,7 @@ export default function VencimientoDetailPage() {
 
   useEffect(() => { cargarControl(); }, [cargarControl]);
 
-  async function handleScan(barcode: string) {
+  async function handleScan(barcode: string): Promise<boolean> {
     setErrorProducto('');
     setProductoEscaneado(null);
     setLotes([LOTE_VACIO]);
@@ -78,7 +78,7 @@ export default function VencimientoDetailPage() {
     setResultadosBusqueda([]);
 
     const query = barcode.trim();
-    if (!query) return;
+    if (!query) return false;
 
     // Si contiene letras, lo interpretamos como búsqueda por nombre (producto + presentación)
     if (/[a-zA-Z]/.test(query)) {
@@ -98,19 +98,22 @@ export default function VencimientoDetailPage() {
         };
         if (!res.ok) {
           setErrorProducto(json.error ?? 'Error al buscar productos en medicamentos.');
-          return;
+          return false;
         }
         const lista = json.data ?? [];
         setResultadosBusqueda(lista);
         if (lista.length === 0) {
           setErrorProducto('No se encontraron productos para ese texto.');
+          return false;
         }
+        return true;
       } catch {
         setErrorProducto('Error al buscar productos en medicamentos.');
+        return false;
       } finally {
         setBuscandoProducto(false);
       }
-      return;
+      
     }
 
     // Caso código de barras: usamos la versión básica sin stock.
@@ -120,11 +123,13 @@ export default function VencimientoDetailPage() {
       const json = await res.json() as { data?: ProductoLegacy; error?: string };
       if (!res.ok) {
         setErrorProducto(json.error ?? 'Producto no encontrado');
-        return;
+        return false;
       }
       setProductoEscaneado(json.data!);
+      return true;
     } catch {
       setErrorProducto('Error al buscar el producto');
+      return false;
     } finally {
       setBuscandoProducto(false);
     }

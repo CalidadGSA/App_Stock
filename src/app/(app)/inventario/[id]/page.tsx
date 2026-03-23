@@ -441,17 +441,17 @@ export default function InventarioDetailPage() {
     }
   }
 
-  async function handleScan(barcode: string) {
+  async function handleScan(barcode: string): Promise<boolean> {
     setErrorProducto('');
 
     const query = barcode.trim();
-    if (!query) return;
+    if (!query) return false;
 
     // Si hay una card abierta, no permitir usar el buscador para cambiar de producto.
     // Solo se permiten nuevos escaneos numéricos del mismo producto (ya manejados más abajo).
     if (productoEscaneado && /[a-zA-Z]/.test(query)) {
       setErrorProducto('Cerrá la card del producto actual antes de buscar otro.');
-      return;
+      return false;
     }
 
     // Si contiene letras y es un inventario guiado (diario con categoria_macro),
@@ -469,15 +469,16 @@ export default function InventarioDetailPage() {
         if (coincidencias.length === 0) {
           setErrorProducto('No se encontraron productos con ese nombre en este control.');
           setFiltroNombre('');
+          return false;
         } else {
           setFiltroNombre(query);
           setDetalleSeleccionadoId(null);
           setProductoEscaneado(null);
           setStockRealCajas('');
           setStockRealUnidades('');
+          return true;
         }
         setBuscandoProducto(false);
-        return;
       }
 
       // En inventarios ocasionales / auditoría: buscar directamente en medicamentos.
@@ -503,26 +504,30 @@ export default function InventarioDetailPage() {
           setResultadosBusqueda(lista);
           if (lista.length === 0) {
             setErrorProducto('No se encontraron productos en medicamentos para esa búsqueda.');
+            return false;
           }
+          return true;
         }
       } catch {
         setErrorProducto('Error al buscar productos en medicamentos.');
+        return false;
       } finally {
         setBuscandoEnMedicamentos(false);
       }
 
       setBuscandoProducto(false);
-      return;
+      return false;
     }
 
     // Si la card está abierta, cualquier barcode del mismo producto suma 1 caja.
     if (productoEscaneado) {
       if (productoAceptaBarcode(productoEscaneado, barcode)) {
         setStockRealCajas((prev) => String((parseInt(prev || '0', 10) || 0) + 1));
+        return true;
       } else {
         setErrorProducto('Este código no pertenece al producto seleccionado.');
+        return false;
       }
-      return;
     }
 
     setProductoEscaneado(null);
@@ -554,7 +559,7 @@ export default function InventarioDetailPage() {
       if (!detalle) {
         setErrorProducto('Este producto no forma parte de los productos asignados a este inventario diario.');
         setBuscandoProducto(false);
-        return;
+        return false;
       }
 
       const cargado = await cargarProductoParaDetalle(detalle);
@@ -566,10 +571,10 @@ export default function InventarioDetailPage() {
         setFiltroCodigo('');
       }
       setBuscandoProducto(false);
-      return;
+      return cargado;
     }
 
-    async function fetchProducto(intento: number): Promise<void> {
+    async function fetchProducto(intento: number): Promise<boolean> {
       try {
         const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
         const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
@@ -577,11 +582,10 @@ export default function InventarioDetailPage() {
         if (!res.ok) {
           // Si es el primer intento y hay error de servidor/red, reintentar una vez.
           if (intento === 1 && (res.status >= 500 || res.status === 408)) {
-            await fetchProducto(2);
-            return;
+            return fetchProducto(2);
           }
           setErrorProducto(json.error ?? 'Producto no encontrado');
-          return;
+          return false;
         }
         const producto = json.data!;
         const detallesControl = control?.controles_inventario_detalle ?? [];
@@ -611,17 +615,19 @@ export default function InventarioDetailPage() {
           setStockRealCajas('');
           setStockRealUnidades('');
         }
+        return true;
       } catch {
         if (intento === 1) {
-          await fetchProducto(2);
-          return;
+          return fetchProducto(2);
         }
         setErrorProducto('Error al buscar el producto');
+        return false;
       }
     }
 
-    await fetchProducto(1);
+    const encontrado = await fetchProducto(1);
     setBuscandoProducto(false);
+    return encontrado;
   }
 
   async function handleGuardarLinea() {
