@@ -85,6 +85,7 @@ export default function InventarioDetailPage() {
   const pendingManualFieldRef = useRef<'cajas' | 'unidades' | null>(null);
   const scanRequestIdRef = useRef(0);
   const scanAbortRef = useRef<AbortController | null>(null);
+  const lastConfirmedBarcodeRef = useRef<{ value: string; at: number } | null>(null);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -556,6 +557,12 @@ export default function InventarioDetailPage() {
 
     const query = barcode.trim();
     if (!query) return false;
+    const now = Date.now();
+    const lastConfirmed = lastConfirmedBarcodeRef.current;
+    // Evita rebote de cámara: justo después de confirmar, puede reemitir el último código.
+    if (lastConfirmed && query === lastConfirmed.value && now - lastConfirmed.at < 1500) {
+      return false;
+    }
     if (!/[a-zA-Z]/.test(query)) {
       setResultadosBusqueda([]);
       // Si ya existe una línea con ese barcode, abrirla directo para editar.
@@ -888,6 +895,7 @@ export default function InventarioDetailPage() {
       setStockRealCajas('');
       setStockRealUnidades('');
       stopCardCamera();
+      lastConfirmedBarcodeRef.current = { value: productoEscaneado.codigo_barras, at: Date.now() };
       setDetalleSeleccionadoId(null);
       setFiltroCodigo('');
 
