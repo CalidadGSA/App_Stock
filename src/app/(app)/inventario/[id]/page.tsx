@@ -521,7 +521,7 @@ export default function InventarioDetailPage() {
   ) {
     // Solo abrimos la card si pudimos obtener el stock actual.
     try {
-      const res = await fetch(`/api/productos/${encodeURIComponent(detalle.codigo_barras)}`, { signal });
+      const res = await fetch(`/api/productos/id/${encodeURIComponent(detalle.producto_id_sistema)}`, { signal });
       const json = await res.json() as { data?: ProductoLegacy; error?: string };
       if (!canApply()) return false;
       if (res.ok && json.data) {
@@ -816,6 +816,64 @@ export default function InventarioDetailPage() {
     return encontrado;
   }
 
+  async function handleAgregarDesdeBusqueda(resultado: {
+    producto_id_sistema: string;
+    codigo_barras: string | null;
+  }) {
+    setErrorProducto('');
+    scanAbortRef.current?.abort();
+    scanRequestIdRef.current += 1;
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+    const signal = controller.signal;
+
+    // 1) Si ya existe en el inventario por ID, reabrimos su card por ID.
+    const detalleExistente =
+      (control?.controles_inventario_detalle ?? []).find(
+        (d) => d.producto_id_sistema === resultado.producto_id_sistema
+      ) ?? null;
+
+    if (detalleExistente) {
+      const opened = await cargarProductoParaDetalle(detalleExistente, () => true, signal);
+      if (opened) {
+        setDetalleSeleccionadoId(detalleExistente.id);
+        if (control?.categoria_macro) {
+          setFiltroCodigo(detalleExistente.codigo_barras);
+        }
+        setResultadosBusqueda([]);
+      }
+      return;
+    }
+
+    // 2) Si no existe aún, intentamos abrir por ID de producto.
+    try {
+      const res = await fetch(
+        `/api/productos/id/${encodeURIComponent(resultado.producto_id_sistema)}`,
+        { signal }
+      );
+      const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+      if (!res.ok || !json.data) {
+        setErrorProducto(json.error ?? 'No se pudo cargar el producto por ID.');
+        return;
+      }
+
+      const producto = json.data;
+      setProductoEscaneado(producto);
+      setDetalleSeleccionadoId(null);
+      setStockRealCajas('');
+      setStockRealUnidades('');
+      setResultadosBusqueda([]);
+      return;
+    } catch {
+      // 3) Fallback final: usar barcode si existe.
+      if (resultado.codigo_barras) {
+        await handleScan(resultado.codigo_barras);
+        return;
+      }
+      setErrorProducto('No se pudo cargar el producto seleccionado.');
+    }
+  }
+
   async function handleGuardarLinea() {
     if (!productoEscaneado) return;
     // Cancelar cualquier lookup pendiente para que no reabra cards viejas.
@@ -825,7 +883,7 @@ export default function InventarioDetailPage() {
     if (control?.categoria_macro) {
       try {
         const res = await fetch(
-          `/api/productos/${encodeURIComponent(productoEscaneado.codigo_barras)}`
+          `/api/productos/id/${encodeURIComponent(productoEscaneado.producto_id_sistema)}`
         );
         const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
         if (res.ok && json.data) {
@@ -1136,12 +1194,12 @@ export default function InventarioDetailPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={!r.codigo_barras}
-                        title={r.codigo_barras ? 'Agregar al inventario' : 'No se puede agregar sin código de barras'}
+                        title="Agregar al inventario"
                         onClick={() => {
-                          if (!r.codigo_barras) return;
-                          // Reutilizamos el flujo normal de escaneo para que traiga stock y abra la card.
-                          void handleScan(r.codigo_barras);
+                          void handleAgregarDesdeBusqueda({
+                            producto_id_sistema: r.producto_id_sistema,
+                            codigo_barras: r.codigo_barras,
+                          });
                         }}
                       >
                         Agregar
