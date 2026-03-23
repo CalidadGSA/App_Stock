@@ -14,7 +14,7 @@ import { Camera, CameraOff, ScanBarcode } from 'lucide-react';
 import { Button } from './ui/button';
 
 interface BarcodeScannerProps {
-  onScan: (barcode: string) => void;
+  onScan: (barcode: string) => boolean | void | Promise<boolean | void>;
   disabled?: boolean;
   placeholder?: string;
   /** Si true, mantiene el foco en el input del escáner (ideal para lector USB). */
@@ -38,6 +38,7 @@ export default function BarcodeScanner({
   const readerRef = useRef<unknown>(null);
   const cameraScanLockedRef = useRef(false);
   const lastCameraBarcodeRef = useRef<{ value: string; at: number } | null>(null);
+  const skipRefocusOnceRef = useRef(false);
   const globalBufferRef = useRef('');
   const globalTimerRef = useRef<number | null>(null);
 
@@ -82,7 +83,7 @@ export default function BarcodeScanner({
           e.preventDefault();
           e.stopPropagation();
           clearBuffer();
-          onScan(barcode);
+          void processScan(barcode);
         }
         return;
       }
@@ -100,10 +101,22 @@ export default function BarcodeScanner({
       window.removeEventListener('keydown', handleGlobalKeyDown, true);
       clearBuffer();
     };
-  }, [captureGlobally, disabled, cameraActive, onScan]);
+  }, [captureGlobally, disabled, cameraActive, processScan]);
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     setInputValue(e.target.value);
+  }
+
+  async function processScan(barcode: string) {
+    const result = await onScan(barcode);
+    const found = result === true;
+    if (found) {
+      // En mobile, si encontramos producto ocultamos teclado.
+      skipRefocusOnceRef.current = true;
+      inputRef.current?.blur();
+      return;
+    }
+    refocus();
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -111,8 +124,7 @@ export default function BarcodeScanner({
     if (e.key === 'Enter' && inputValue.trim()) {
       const barcode = inputValue.trim();
       setInputValue('');
-      onScan(barcode);
-      refocus();
+      void processScan(barcode);
     }
   }
 
@@ -140,7 +152,7 @@ export default function BarcodeScanner({
 
           cameraScanLockedRef.current = true;
           stopCamera();
-          onScan(barcode);
+          void processScan(barcode);
         });
       }
     } catch (err) {
@@ -175,7 +187,17 @@ export default function BarcodeScanner({
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            onBlur={autoFocusInput ? refocus : undefined}
+            onBlur={
+              autoFocusInput
+                ? () => {
+                    if (skipRefocusOnceRef.current) {
+                      skipRefocusOnceRef.current = false;
+                      return;
+                    }
+                    refocus();
+                  }
+                : undefined
+            }
             disabled={disabled || cameraActive}
             placeholder={placeholder}
             className="w-full rounded-xl border-2 border-blue-200 bg-blue-50 pl-10 pr-4 py-4 text-lg font-mono
