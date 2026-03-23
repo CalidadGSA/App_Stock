@@ -72,7 +72,7 @@ export default function InventarioDetailPage() {
   const cardCameraLockedRef = useRef(false);
   const cardCameraLastScanRef = useRef<{ value: string; at: number } | null>(null);
   const cardCameraVisibleBarcodeRef = useRef<string | null>(null);
-  const cardCameraRearmTimerRef = useRef<number | null>(null);
+  const cardCameraLastValidMsRef = useRef(0);
   const cardCameraArmedRef = useRef(true);
   const inputCajasRef = useRef<HTMLInputElement>(null);
   const inputUnidadesRef = useRef<HTMLInputElement>(null);
@@ -295,11 +295,8 @@ export default function InventarioDetailPage() {
     cardCameraSessionRef.current = sessionId;
     cardCameraLockedRef.current = false;
     cardCameraVisibleBarcodeRef.current = null;
+    cardCameraLastValidMsRef.current = 0;
     cardCameraArmedRef.current = true;
-    if (cardCameraRearmTimerRef.current != null) {
-      window.clearTimeout(cardCameraRearmTimerRef.current);
-      cardCameraRearmTimerRef.current = null;
-    }
     try {
       const { BrowserMultiFormatReader } = await import('@zxing/browser');
       const reader = new BrowserMultiFormatReader();
@@ -308,19 +305,17 @@ export default function InventarioDetailPage() {
         await reader.decodeFromVideoDevice(undefined, cardCameraVideoRef.current, (result) => {
           if (sessionId !== cardCameraSessionRef.current) return;
           if (!result) {
-            cardCameraVisibleBarcodeRef.current = null;
-            // Solo rearmamos cuando deja de haber lectura un pequeño instante.
-            if (cardCameraRearmTimerRef.current != null) {
-              window.clearTimeout(cardCameraRearmTimerRef.current);
-            }
-            cardCameraRearmTimerRef.current = window.setTimeout(() => {
+            // Re-armado robusto: solo tras ausencia sostenida de lectura.
+            if (Date.now() - cardCameraLastValidMsRef.current > 1200) {
+              cardCameraVisibleBarcodeRef.current = null;
               cardCameraArmedRef.current = true;
-            }, 500);
+            }
             return;
           }
           if (cardCameraLockedRef.current || !productoEscaneado) return;
           const barcode = result.getText().trim();
           if (!barcode) return;
+          cardCameraLastValidMsRef.current = Date.now();
 
           const now = Date.now();
           const prev = cardCameraLastScanRef.current;
@@ -358,10 +353,6 @@ export default function InventarioDetailPage() {
 
   function stopCardCamera() {
     cardCameraSessionRef.current += 1;
-    if (cardCameraRearmTimerRef.current != null) {
-      window.clearTimeout(cardCameraRearmTimerRef.current);
-      cardCameraRearmTimerRef.current = null;
-    }
     try {
       if (cardCameraReaderRef.current) {
         const reader = cardCameraReaderRef.current as { reset?: () => void };
@@ -373,6 +364,7 @@ export default function InventarioDetailPage() {
     }
     cardCameraLockedRef.current = false;
     cardCameraVisibleBarcodeRef.current = null;
+    cardCameraLastValidMsRef.current = 0;
     cardCameraArmedRef.current = true;
     setCardCameraActive(false);
   }
@@ -601,17 +593,15 @@ export default function InventarioDetailPage() {
     if (!/[a-zA-Z]/.test(query)) {
       setResultadosBusqueda([]);
       // Si ya existe una línea con ese barcode, abrirla directo para editar.
-      if (!control?.categoria_macro) {
-        const detalleByBarcode =
-          (control?.controles_inventario_detalle ?? []).find((d) => d.codigo_barras === query) ?? null;
-        if (detalleByBarcode) {
-          const opened = await cargarProductoParaDetalle(detalleByBarcode, () => !isStale(), signal);
-          if (isStale()) return false;
-          if (opened) {
-            setDetalleSeleccionadoId(detalleByBarcode.id);
-          }
-          return opened;
+      const detalleByBarcode =
+        (control?.controles_inventario_detalle ?? []).find((d) => d.codigo_barras === query) ?? null;
+      if (detalleByBarcode) {
+        const opened = await cargarProductoParaDetalle(detalleByBarcode, () => !isStale(), signal);
+        if (isStale()) return false;
+        if (opened) {
+          setDetalleSeleccionadoId(detalleByBarcode.id);
         }
+        return opened;
       }
     }
 
