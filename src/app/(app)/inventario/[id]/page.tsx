@@ -70,6 +70,8 @@ export default function InventarioDetailPage() {
   const cardCameraReaderRef = useRef<unknown>(null);
   const cardCameraLockedRef = useRef(false);
   const cardCameraLastScanRef = useRef<{ value: string; at: number } | null>(null);
+  const cardCameraRearmTimerRef = useRef<number | null>(null);
+  const cardCameraArmedRef = useRef(true);
   const inputCajasRef = useRef<HTMLInputElement>(null);
   const inputUnidadesRef = useRef<HTMLInputElement>(null);
   const ultimoKeyMsRef = useRef(0);
@@ -81,6 +83,7 @@ export default function InventarioDetailPage() {
   const sequenceStartUnidadesRef = useRef('');
   const pendingManualTimerRef = useRef<number | null>(null);
   const pendingManualFieldRef = useRef<'cajas' | 'unidades' | null>(null);
+  const scanRequestIdRef = useRef(0);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -283,13 +286,28 @@ export default function InventarioDetailPage() {
     setCardCameraError('');
     setCardCameraActive(true);
     cardCameraLockedRef.current = false;
+    cardCameraArmedRef.current = true;
+    if (cardCameraRearmTimerRef.current != null) {
+      window.clearTimeout(cardCameraRearmTimerRef.current);
+      cardCameraRearmTimerRef.current = null;
+    }
     try {
       const { BrowserMultiFormatReader } = await import('@zxing/browser');
       const reader = new BrowserMultiFormatReader();
       cardCameraReaderRef.current = reader;
       if (cardCameraVideoRef.current) {
         await reader.decodeFromVideoDevice(undefined, cardCameraVideoRef.current, (result) => {
-          if (!result || cardCameraLockedRef.current || !productoEscaneado) return;
+          if (!result) {
+            // Solo rearmamos cuando deja de haber lectura un pequeño instante.
+            if (cardCameraRearmTimerRef.current != null) {
+              window.clearTimeout(cardCameraRearmTimerRef.current);
+            }
+            cardCameraRearmTimerRef.current = window.setTimeout(() => {
+              cardCameraArmedRef.current = true;
+            }, 500);
+            return;
+          }
+          if (cardCameraLockedRef.current || !productoEscaneado) return;
           const barcode = result.getText().trim();
           if (!barcode) return;
 
@@ -303,8 +321,13 @@ export default function InventarioDetailPage() {
             setErrorProducto('Este código no pertenece al producto seleccionado.');
             return;
           }
+          if (!cardCameraArmedRef.current) {
+            // Mismo código sostenido en cámara: ignorar hasta perder lectura.
+            return;
+          }
 
           cardCameraLockedRef.current = true;
+          cardCameraArmedRef.current = false;
           setStockRealCajas((prevCajas) => String((parseInt(prevCajas || '0', 10) || 0) + 1));
           setTimeout(() => {
             cardCameraLockedRef.current = false;
@@ -318,6 +341,10 @@ export default function InventarioDetailPage() {
   }
 
   function stopCardCamera() {
+    if (cardCameraRearmTimerRef.current != null) {
+      window.clearTimeout(cardCameraRearmTimerRef.current);
+      cardCameraRearmTimerRef.current = null;
+    }
     try {
       if (cardCameraReaderRef.current) {
         const reader = cardCameraReaderRef.current as { reset?: () => void };
@@ -328,6 +355,7 @@ export default function InventarioDetailPage() {
       // ignore
     }
     cardCameraLockedRef.current = false;
+    cardCameraArmedRef.current = true;
     setCardCameraActive(false);
   }
 
@@ -508,6 +536,8 @@ export default function InventarioDetailPage() {
   }
 
   async function handleScan(barcode: string): Promise<boolean> {
+    const requestId = ++scanRequestIdRef.current;
+    const isStale = () => requestId !== scanRequestIdRef.current;
     setErrorProducto('');
 
     const query = barcode.trim();
@@ -556,6 +586,7 @@ export default function InventarioDetailPage() {
       try {
         const params = new URLSearchParams({ q: query });
         const res = await fetch(`/api/productos/buscar?${params.toString()}`);
+        if (isStale()) return false;
         const json = await res.json() as {
           data?: {
             producto_id_sistema: string;
@@ -567,8 +598,10 @@ export default function InventarioDetailPage() {
           error?: string;
         };
         if (!res.ok) {
+          if (isStale()) return false;
           setErrorProducto(json.error ?? 'Error al buscar productos en medicamentos.');
         } else {
+          if (isStale()) return false;
           const lista = json.data ?? [];
           setResultadosBusqueda(lista);
           if (lista.length === 0) {
@@ -578,9 +611,11 @@ export default function InventarioDetailPage() {
           return true;
         }
       } catch {
+        if (isStale()) return false;
         setErrorProducto('Error al buscar productos en medicamentos.');
         return false;
       } finally {
+        if (isStale()) return false;
         setBuscandoEnMedicamentos(false);
       }
 
@@ -614,6 +649,7 @@ export default function InventarioDetailPage() {
       if (!detalle) {
         try {
           const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
+          if (isStale()) return false;
           const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
           if (res.ok && json.data) {
             detalle =
@@ -633,6 +669,7 @@ export default function InventarioDetailPage() {
       }
 
       const cargado = await cargarProductoParaDetalle(detalle);
+      if (isStale()) return false;
       if (cargado) {
         setDetalleSeleccionadoId(detalle.id);
         setFiltroCodigo(detalle.codigo_barras);
@@ -647,9 +684,11 @@ export default function InventarioDetailPage() {
     async function fetchProducto(intento: number): Promise<boolean> {
       try {
         const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
+        if (isStale()) return false;
         const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
 
         if (!res.ok) {
+          if (isStale()) return false;
           // Si es el primer intento y hay error de servidor/red, reintentar una vez.
           if (intento === 1 && (res.status >= 500 || res.status === 408)) {
             return fetchProducto(2);
@@ -666,6 +705,7 @@ export default function InventarioDetailPage() {
           detallesControl.find((d) => detalleCoincideConBarcode(d, barcode)) ??
           null;
 
+        if (isStale()) return false;
         setProductoEscaneado(producto);
 
         if (detalleExistente) {
@@ -687,6 +727,7 @@ export default function InventarioDetailPage() {
         }
         return true;
       } catch {
+        if (isStale()) return false;
         if (intento === 1) {
           return fetchProducto(2);
         }
@@ -696,6 +737,7 @@ export default function InventarioDetailPage() {
     }
 
     const encontrado = await fetchProducto(1);
+    if (isStale()) return false;
     setBuscandoProducto(false);
     return encontrado;
   }
