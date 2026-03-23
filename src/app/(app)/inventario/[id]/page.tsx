@@ -68,8 +68,10 @@ export default function InventarioDetailPage() {
   const [cardCameraError, setCardCameraError] = useState('');
   const cardCameraVideoRef = useRef<HTMLVideoElement>(null);
   const cardCameraReaderRef = useRef<unknown>(null);
+  const cardCameraSessionRef = useRef(0);
   const cardCameraLockedRef = useRef(false);
   const cardCameraLastScanRef = useRef<{ value: string; at: number } | null>(null);
+  const cardCameraVisibleBarcodeRef = useRef<string | null>(null);
   const cardCameraRearmTimerRef = useRef<number | null>(null);
   const cardCameraArmedRef = useRef(true);
   const inputCajasRef = useRef<HTMLInputElement>(null);
@@ -289,7 +291,10 @@ export default function InventarioDetailPage() {
     if (!productoEscaneado) return;
     setCardCameraError('');
     setCardCameraActive(true);
+    const sessionId = cardCameraSessionRef.current + 1;
+    cardCameraSessionRef.current = sessionId;
     cardCameraLockedRef.current = false;
+    cardCameraVisibleBarcodeRef.current = null;
     cardCameraArmedRef.current = true;
     if (cardCameraRearmTimerRef.current != null) {
       window.clearTimeout(cardCameraRearmTimerRef.current);
@@ -301,7 +306,9 @@ export default function InventarioDetailPage() {
       cardCameraReaderRef.current = reader;
       if (cardCameraVideoRef.current) {
         await reader.decodeFromVideoDevice(undefined, cardCameraVideoRef.current, (result) => {
+          if (sessionId !== cardCameraSessionRef.current) return;
           if (!result) {
+            cardCameraVisibleBarcodeRef.current = null;
             // Solo rearmamos cuando deja de haber lectura un pequeño instante.
             if (cardCameraRearmTimerRef.current != null) {
               window.clearTimeout(cardCameraRearmTimerRef.current);
@@ -325,6 +332,11 @@ export default function InventarioDetailPage() {
             setErrorProducto('Este código no pertenece al producto seleccionado.');
             return;
           }
+          // Anti-bucle: mientras siga visible el mismo código, no vuelve a sumar.
+          if (cardCameraVisibleBarcodeRef.current === barcode) {
+            return;
+          }
+          cardCameraVisibleBarcodeRef.current = barcode;
           if (!cardCameraArmedRef.current) {
             // Mismo código sostenido en cámara: ignorar hasta perder lectura.
             return;
@@ -345,6 +357,7 @@ export default function InventarioDetailPage() {
   }
 
   function stopCardCamera() {
+    cardCameraSessionRef.current += 1;
     if (cardCameraRearmTimerRef.current != null) {
       window.clearTimeout(cardCameraRearmTimerRef.current);
       cardCameraRearmTimerRef.current = null;
@@ -359,6 +372,7 @@ export default function InventarioDetailPage() {
       // ignore
     }
     cardCameraLockedRef.current = false;
+    cardCameraVisibleBarcodeRef.current = null;
     cardCameraArmedRef.current = true;
     setCardCameraActive(false);
   }
