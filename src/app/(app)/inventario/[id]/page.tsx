@@ -73,6 +73,7 @@ export default function InventarioDetailPage() {
   const cardCameraLastScanRef = useRef<{ value: string; at: number } | null>(null);
   const cardCameraVisibleBarcodeRef = useRef<string | null>(null);
   const cardCameraLastValidMsRef = useRef(0);
+  const cardCameraSuppressUntilRef = useRef(0);
   const cardCameraArmedRef = useRef(true);
   const inputCajasRef = useRef<HTMLInputElement>(null);
   const inputUnidadesRef = useRef<HTMLInputElement>(null);
@@ -293,6 +294,7 @@ export default function InventarioDetailPage() {
     setCardCameraActive(true);
     const sessionId = cardCameraSessionRef.current + 1;
     cardCameraSessionRef.current = sessionId;
+    cardCameraSuppressUntilRef.current = Date.now() + 700;
     cardCameraLockedRef.current = false;
     cardCameraVisibleBarcodeRef.current = null;
     cardCameraLastValidMsRef.current = 0;
@@ -304,6 +306,7 @@ export default function InventarioDetailPage() {
       if (cardCameraVideoRef.current) {
         await reader.decodeFromVideoDevice(undefined, cardCameraVideoRef.current, (result) => {
           if (sessionId !== cardCameraSessionRef.current) return;
+          if (Date.now() < cardCameraSuppressUntilRef.current) return;
           if (!result) {
             // Re-armado robusto: solo tras ausencia sostenida de lectura.
             if (Date.now() - cardCameraLastValidMsRef.current > 1200) {
@@ -353,6 +356,7 @@ export default function InventarioDetailPage() {
 
   function stopCardCamera() {
     cardCameraSessionRef.current += 1;
+    cardCameraSuppressUntilRef.current = Date.now() + 700;
     try {
       if (cardCameraReaderRef.current) {
         const reader = cardCameraReaderRef.current as { reset?: () => void };
@@ -565,6 +569,24 @@ export default function InventarioDetailPage() {
 
     const query = barcode.trim();
     if (!query) return false;
+    const esBarcode = !/[a-zA-Z]/.test(query);
+    // Prioridad alta: si el producto ya está en el inventario, reabrir su card.
+    // Esto debe ocurrir antes de filtros anti-rebote.
+    if (esBarcode && !productoEscaneado) {
+      const detalleExistentePorBarcode =
+        (control?.controles_inventario_detalle ?? []).find((d) => d.codigo_barras === query) ?? null;
+      if (detalleExistentePorBarcode) {
+        const opened = await cargarProductoParaDetalle(detalleExistentePorBarcode, () => !isStale(), signal);
+        if (isStale()) return false;
+        if (opened) {
+          setDetalleSeleccionadoId(detalleExistentePorBarcode.id);
+          if (control?.categoria_macro) {
+            setFiltroCodigo(detalleExistentePorBarcode.codigo_barras);
+          }
+        }
+        return opened;
+      }
+    }
     const now = Date.now();
     // Ignorar códigos recién confirmados (rebote/residuo de cámara).
     // Se limpia automáticamente por tiempo para no bloquear edición normal.
@@ -590,19 +612,8 @@ export default function InventarioDetailPage() {
     if (lastConfirmed && query === lastConfirmed.value && now - lastConfirmed.at < 1500) {
       return false;
     }
-    if (!/[a-zA-Z]/.test(query)) {
+    if (esBarcode) {
       setResultadosBusqueda([]);
-      // Si ya existe una línea con ese barcode, abrirla directo para editar.
-      const detalleByBarcode =
-        (control?.controles_inventario_detalle ?? []).find((d) => d.codigo_barras === query) ?? null;
-      if (detalleByBarcode) {
-        const opened = await cargarProductoParaDetalle(detalleByBarcode, () => !isStale(), signal);
-        if (isStale()) return false;
-        if (opened) {
-          setDetalleSeleccionadoId(detalleByBarcode.id);
-        }
-        return opened;
-      }
     }
 
     // Si hay una card abierta, no permitir usar el buscador para cambiar de producto.
