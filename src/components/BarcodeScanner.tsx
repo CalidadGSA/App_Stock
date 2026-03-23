@@ -38,6 +38,8 @@ export default function BarcodeScanner({
   const readerRef = useRef<unknown>(null);
   const cameraScanLockedRef = useRef(false);
   const lastCameraBarcodeRef = useRef<{ value: string; at: number } | null>(null);
+  const cameraStartedAtRef = useRef(0);
+  const lastSubmittedBarcodeRef = useRef<{ value: string; at: number } | null>(null);
   const skipRefocusOnceRef = useRef(false);
   const globalBufferRef = useRef('');
   const globalTimerRef = useRef<number | null>(null);
@@ -132,6 +134,7 @@ export default function BarcodeScanner({
     setCameraError(null);
     setCameraActive(true);
     cameraScanLockedRef.current = false;
+    cameraStartedAtRef.current = Date.now();
     try {
       const { BrowserMultiFormatReader } = await import('@zxing/browser');
       const reader = new BrowserMultiFormatReader();
@@ -145,12 +148,21 @@ export default function BarcodeScanner({
           if (!barcode) return;
 
           const now = Date.now();
+          // Ignora lecturas residuales inmediatas al encender cámara.
+          if (now - cameraStartedAtRef.current < 250) return;
           const last = lastCameraBarcodeRef.current;
           // Evita duplicados consecutivos del mismo frame/código.
           if (last && last.value === barcode && now - last.at < 1500) return;
           lastCameraBarcodeRef.current = { value: barcode, at: now };
 
+          // Evita re-disparar el último código recién escaneado al reabrir cámara.
+          const lastSubmitted = lastSubmittedBarcodeRef.current;
+          if (lastSubmitted && lastSubmitted.value === barcode && now - lastSubmitted.at < 2000) {
+            return;
+          }
+
           cameraScanLockedRef.current = true;
+          lastSubmittedBarcodeRef.current = { value: barcode, at: now };
           stopCamera();
           void processScan(barcode);
         });
