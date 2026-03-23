@@ -40,6 +40,8 @@ export default function BarcodeScanner({
   const lastCameraBarcodeRef = useRef<{ value: string; at: number } | null>(null);
   const cameraStartedAtRef = useRef(0);
   const lastSubmittedBarcodeRef = useRef<{ value: string; at: number } | null>(null);
+  const blockedPreviousBarcodeRef = useRef<string | null>(null);
+  const clearPreviousTimerRef = useRef<number | null>(null);
   const skipRefocusOnceRef = useRef(false);
   const globalBufferRef = useRef('');
   const globalTimerRef = useRef<number | null>(null);
@@ -135,6 +137,11 @@ export default function BarcodeScanner({
     setCameraActive(true);
     cameraScanLockedRef.current = false;
     cameraStartedAtRef.current = Date.now();
+    blockedPreviousBarcodeRef.current = lastSubmittedBarcodeRef.current?.value ?? null;
+    if (clearPreviousTimerRef.current != null) {
+      window.clearTimeout(clearPreviousTimerRef.current);
+      clearPreviousTimerRef.current = null;
+    }
     try {
       const { BrowserMultiFormatReader } = await import('@zxing/browser');
       const reader = new BrowserMultiFormatReader();
@@ -142,7 +149,17 @@ export default function BarcodeScanner({
 
       if (videoRef.current) {
         await reader.decodeFromVideoDevice(undefined, videoRef.current, (result) => {
-          if (!result || cameraScanLockedRef.current) return;
+          if (!result) {
+            // Cuando se pierde lectura un instante, habilitamos nuevamente cualquier código.
+            if (clearPreviousTimerRef.current != null) {
+              window.clearTimeout(clearPreviousTimerRef.current);
+            }
+            clearPreviousTimerRef.current = window.setTimeout(() => {
+              blockedPreviousBarcodeRef.current = null;
+            }, 350);
+            return;
+          }
+          if (cameraScanLockedRef.current) return;
 
           const barcode = result.getText().trim();
           if (!barcode) return;
@@ -154,6 +171,11 @@ export default function BarcodeScanner({
           // Evita duplicados consecutivos del mismo frame/código.
           if (last && last.value === barcode && now - last.at < 1500) return;
           lastCameraBarcodeRef.current = { value: barcode, at: now };
+
+          // Evita que al reabrir la cámara se vuelva a tomar el código anterior.
+          if (blockedPreviousBarcodeRef.current && barcode === blockedPreviousBarcodeRef.current) {
+            return;
+          }
 
           // Evita re-disparar el último código recién escaneado al reabrir cámara.
           const lastSubmitted = lastSubmittedBarcodeRef.current;
@@ -175,6 +197,10 @@ export default function BarcodeScanner({
   }
 
   function stopCamera() {
+    if (clearPreviousTimerRef.current != null) {
+      window.clearTimeout(clearPreviousTimerRef.current);
+      clearPreviousTimerRef.current = null;
+    }
     try {
       if (readerRef.current) {
         const reader = readerRef.current as { reset?: () => void };
