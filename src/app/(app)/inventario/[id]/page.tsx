@@ -87,6 +87,7 @@ export default function InventarioDetailPage() {
   const scanAbortRef = useRef<AbortController | null>(null);
   const lastConfirmedBarcodeRef = useRef<{ value: string; at: number } | null>(null);
   const mustScanDifferentBarcodeRef = useRef<string | null>(null);
+  const recentlyConfirmedBarcodesRef = useRef<Map<string, number>>(new Map());
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -558,6 +559,18 @@ export default function InventarioDetailPage() {
 
     const query = barcode.trim();
     if (!query) return false;
+    const now = Date.now();
+    // Ignorar códigos recién confirmados (rebote/residuo de cámara).
+    // Se limpia automáticamente por tiempo para no bloquear edición normal.
+    const recentTs = recentlyConfirmedBarcodesRef.current.get(query);
+    if (recentTs && now - recentTs < 4000) {
+      return false;
+    }
+    for (const [code, ts] of recentlyConfirmedBarcodesRef.current.entries()) {
+      if (now - ts >= 4000) {
+        recentlyConfirmedBarcodesRef.current.delete(code);
+      }
+    }
     // Después de confirmar una card, exigimos un código distinto al anterior
     // para evitar reaperturas fantasma por rebote/residuo de cámara.
     if (mustScanDifferentBarcodeRef.current && query === mustScanDifferentBarcodeRef.current) {
@@ -566,7 +579,6 @@ export default function InventarioDetailPage() {
     if (mustScanDifferentBarcodeRef.current && query !== mustScanDifferentBarcodeRef.current) {
       mustScanDifferentBarcodeRef.current = null;
     }
-    const now = Date.now();
     const lastConfirmed = lastConfirmedBarcodeRef.current;
     // Evita rebote de cámara: justo después de confirmar, puede reemitir el último código.
     if (lastConfirmed && query === lastConfirmed.value && now - lastConfirmed.at < 1500) {
@@ -904,6 +916,7 @@ export default function InventarioDetailPage() {
       setStockRealCajas('');
       setStockRealUnidades('');
       stopCardCamera();
+      recentlyConfirmedBarcodesRef.current.set(productoEscaneado.codigo_barras, Date.now());
       lastConfirmedBarcodeRef.current = { value: productoEscaneado.codigo_barras, at: Date.now() };
       mustScanDifferentBarcodeRef.current = productoEscaneado.codigo_barras;
       setDetalleSeleccionadoId(null);
