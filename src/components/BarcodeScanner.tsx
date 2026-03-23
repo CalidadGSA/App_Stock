@@ -163,7 +163,6 @@ export default function BarcodeScanner({
   }
 
   function stopCamera() {
-    cameraScanLockedRef.current = false;
     try {
       if (readerRef.current) {
         const reader = readerRef.current as { reset?: () => void };
