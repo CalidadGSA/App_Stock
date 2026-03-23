@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, CheckCircle2, Trash2, Package, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Trash2, Package, TrendingUp, TrendingDown, Minus, Camera, CameraOff } from 'lucide-react';
 import BarcodeScanner from '@/components/BarcodeScanner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -64,6 +64,12 @@ export default function InventarioDetailPage() {
   >([]);
   const [buscandoEnMedicamentos, setBuscandoEnMedicamentos] = useState(false);
   const [editandoCard, setEditandoCard] = useState(false);
+  const [cardCameraActive, setCardCameraActive] = useState(false);
+  const [cardCameraError, setCardCameraError] = useState('');
+  const cardCameraVideoRef = useRef<HTMLVideoElement>(null);
+  const cardCameraReaderRef = useRef<unknown>(null);
+  const cardCameraLockedRef = useRef(false);
+  const cardCameraLastScanRef = useRef<{ value: string; at: number } | null>(null);
   const inputCajasRef = useRef<HTMLInputElement>(null);
   const inputUnidadesRef = useRef<HTMLInputElement>(null);
   const ultimoKeyMsRef = useRef(0);
@@ -272,6 +278,59 @@ export default function InventarioDetailPage() {
     }
   }
 
+  async function startCardCamera() {
+    if (!productoEscaneado) return;
+    setCardCameraError('');
+    setCardCameraActive(true);
+    cardCameraLockedRef.current = false;
+    try {
+      const { BrowserMultiFormatReader } = await import('@zxing/browser');
+      const reader = new BrowserMultiFormatReader();
+      cardCameraReaderRef.current = reader;
+      if (cardCameraVideoRef.current) {
+        await reader.decodeFromVideoDevice(undefined, cardCameraVideoRef.current, (result) => {
+          if (!result || cardCameraLockedRef.current || !productoEscaneado) return;
+          const barcode = result.getText().trim();
+          if (!barcode) return;
+
+          const now = Date.now();
+          const prev = cardCameraLastScanRef.current;
+          // Evita lecturas duplicadas del mismo frame.
+          if (prev && prev.value === barcode && now - prev.at < 1000) return;
+          cardCameraLastScanRef.current = { value: barcode, at: now };
+
+          if (!productoAceptaBarcode(productoEscaneado, barcode)) {
+            setErrorProducto('Este código no pertenece al producto seleccionado.');
+            return;
+          }
+
+          cardCameraLockedRef.current = true;
+          setStockRealCajas((prevCajas) => String((parseInt(prevCajas || '0', 10) || 0) + 1));
+          setTimeout(() => {
+            cardCameraLockedRef.current = false;
+          }, 250);
+        });
+      }
+    } catch {
+      setCardCameraError('No se pudo acceder a la cámara.');
+      setCardCameraActive(false);
+    }
+  }
+
+  function stopCardCamera() {
+    try {
+      if (cardCameraReaderRef.current) {
+        const reader = cardCameraReaderRef.current as { reset?: () => void };
+        reader.reset?.();
+        cardCameraReaderRef.current = null;
+      }
+    } catch {
+      // ignore
+    }
+    cardCameraLockedRef.current = false;
+    setCardCameraActive(false);
+  }
+
   const cargarControl = useCallback(async () => {
     try {
       const res = await fetch(`/api/inventario/${id}`);
@@ -286,6 +345,13 @@ export default function InventarioDetailPage() {
   }, [id]);
 
   useEffect(() => { cargarControl(); }, [cargarControl]);
+
+  useEffect(() => {
+    return () => {
+      stopCardCamera();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!productoEscaneado) return;
@@ -446,6 +512,9 @@ export default function InventarioDetailPage() {
 
     const query = barcode.trim();
     if (!query) return false;
+    if (!/[a-zA-Z]/.test(query)) {
+      setResultadosBusqueda([]);
+    }
 
     // Si hay una card abierta, no permitir usar el buscador para cambiar de producto.
     // Solo se permiten nuevos escaneos numéricos del mismo producto (ya manejados más abajo).
@@ -533,6 +602,7 @@ export default function InventarioDetailPage() {
     setProductoEscaneado(null);
     setStockRealCajas('');
     setStockRealUnidades('');
+      stopCardCamera();
     setBuscandoProducto(true);
 
     // En inventarios diarios con categoría macro (FARMA/BIENESTAR/PSICOTROPICOS),
@@ -741,6 +811,7 @@ export default function InventarioDetailPage() {
       setProductoEscaneado(null);
       setStockRealCajas('');
       setStockRealUnidades('');
+      stopCardCamera();
       setDetalleSeleccionadoId(null);
       setFiltroCodigo('');
 
@@ -1098,6 +1169,8 @@ export default function InventarioDetailPage() {
                       setProductoEscaneado(null);
                       setStockRealCajas('');
                       setStockRealUnidades('');
+                      stopCardCamera();
+                      setCardCameraError('');
                       setErrorProducto('');
                       setDetalleSeleccionadoId(null);
           setFiltroCodigo('');
@@ -1116,6 +1189,43 @@ export default function InventarioDetailPage() {
                   >
                     Confirmar
                   </Button>
+                </div>
+
+                <div className="mt-2 flex flex-col gap-2">
+                  <Button
+                    type="button"
+                    variant={cardCameraActive ? 'danger' : 'outline'}
+                    size="sm"
+                    onClick={() => {
+                      if (cardCameraActive) {
+                        stopCardCamera();
+                      } else {
+                        void startCardCamera();
+                      }
+                    }}
+                  >
+                    {cardCameraActive ? <CameraOff className="h-4 w-4" /> : <Camera className="h-4 w-4" />}
+                    {cardCameraActive ? 'Detener cámara (sumar cajas)' : 'Usar cámara para sumar cajas'}
+                  </Button>
+                  {cardCameraActive && (
+                    <div className="overflow-hidden rounded-xl border-2 border-blue-300 bg-black">
+                      <video
+                        ref={cardCameraVideoRef}
+                        className="w-full max-h-56 object-cover"
+                        autoPlay
+                        muted
+                        playsInline
+                      />
+                      <p className="px-3 py-2 text-center text-xs text-white/70">
+                        Escaneá el código del producto de esta card para sumar +1 caja
+                      </p>
+                    </div>
+                  )}
+                  {cardCameraError && (
+                    <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                      {cardCameraError}
+                    </p>
+                  )}
                 </div>
               </div>
             )}
