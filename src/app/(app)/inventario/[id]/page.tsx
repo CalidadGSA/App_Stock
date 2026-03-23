@@ -84,6 +84,7 @@ export default function InventarioDetailPage() {
   const pendingManualTimerRef = useRef<number | null>(null);
   const pendingManualFieldRef = useRef<'cajas' | 'unidades' | null>(null);
   const scanRequestIdRef = useRef(0);
+  const scanAbortRef = useRef<AbortController | null>(null);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -502,11 +503,12 @@ export default function InventarioDetailPage() {
 
   async function cargarProductoParaDetalle(
     detalle: ControlInventarioDetalle,
-    canApply: () => boolean = () => true
+    canApply: () => boolean = () => true,
+    signal?: AbortSignal
   ) {
     // Solo abrimos la card si pudimos obtener el stock actual.
     try {
-      const res = await fetch(`/api/productos/${encodeURIComponent(detalle.codigo_barras)}`);
+      const res = await fetch(`/api/productos/${encodeURIComponent(detalle.codigo_barras)}`, { signal });
       const json = await res.json() as { data?: ProductoLegacy; error?: string };
       if (!canApply()) return false;
       if (res.ok && json.data) {
@@ -531,6 +533,7 @@ export default function InventarioDetailPage() {
       );
       return false;
     } catch {
+      if (signal?.aborted) return false;
       if (!canApply()) return false;
       setProductoEscaneado(null);
       setStockRealCajas('');
@@ -545,12 +548,29 @@ export default function InventarioDetailPage() {
   async function handleScan(barcode: string): Promise<boolean> {
     const requestId = ++scanRequestIdRef.current;
     const isStale = () => requestId !== scanRequestIdRef.current;
+    scanAbortRef.current?.abort();
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+    const signal = controller.signal;
     setErrorProducto('');
 
     const query = barcode.trim();
     if (!query) return false;
     if (!/[a-zA-Z]/.test(query)) {
       setResultadosBusqueda([]);
+      // Si ya existe una línea con ese barcode, abrirla directo para editar.
+      if (!control?.categoria_macro) {
+        const detalleByBarcode =
+          (control?.controles_inventario_detalle ?? []).find((d) => d.codigo_barras === query) ?? null;
+        if (detalleByBarcode) {
+          const opened = await cargarProductoParaDetalle(detalleByBarcode, () => !isStale(), signal);
+          if (isStale()) return false;
+          if (opened) {
+            setDetalleSeleccionadoId(detalleByBarcode.id);
+          }
+          return opened;
+        }
+      }
     }
 
     // Si hay una card abierta, no permitir usar el buscador para cambiar de producto.
@@ -592,7 +612,7 @@ export default function InventarioDetailPage() {
       setResultadosBusqueda([]);
       try {
         const params = new URLSearchParams({ q: query });
-        const res = await fetch(`/api/productos/buscar?${params.toString()}`);
+        const res = await fetch(`/api/productos/buscar?${params.toString()}`, { signal });
         if (isStale()) return false;
         const json = await res.json() as {
           data?: {
@@ -618,6 +638,7 @@ export default function InventarioDetailPage() {
           return true;
         }
       } catch {
+        if (signal.aborted) return false;
         if (isStale()) return false;
         setErrorProducto('Error al buscar productos en medicamentos.');
         return false;
@@ -655,7 +676,8 @@ export default function InventarioDetailPage() {
 
       if (!detalle) {
         try {
-          const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
+          const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`, { signal });
+          if (signal.aborted) return false;
           if (isStale()) return false;
           const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
           if (res.ok && json.data) {
@@ -675,7 +697,7 @@ export default function InventarioDetailPage() {
         return false;
       }
 
-      const cargado = await cargarProductoParaDetalle(detalle, () => !isStale());
+      const cargado = await cargarProductoParaDetalle(detalle, () => !isStale(), signal);
       if (isStale()) return false;
       if (cargado) {
         setDetalleSeleccionadoId(detalle.id);
@@ -690,7 +712,8 @@ export default function InventarioDetailPage() {
 
     async function fetchProducto(intento: number): Promise<boolean> {
       try {
-        const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`);
+        const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`, { signal });
+        if (signal.aborted) return false;
         if (isStale()) return false;
         const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
 
@@ -734,6 +757,7 @@ export default function InventarioDetailPage() {
         }
         return true;
       } catch {
+        if (signal.aborted) return false;
         if (isStale()) return false;
         if (intento === 1) {
           return fetchProducto(2);
@@ -751,6 +775,9 @@ export default function InventarioDetailPage() {
 
   async function handleGuardarLinea() {
     if (!productoEscaneado) return;
+    // Cancelar cualquier lookup pendiente para que no reabra cards viejas.
+    scanAbortRef.current?.abort();
+    scanRequestIdRef.current += 1;
     // Antes de guardar, validar que el stock de sistema no haya cambiado mientras se hacía el conteo
     if (control?.categoria_macro) {
       try {
@@ -1215,6 +1242,8 @@ export default function InventarioDetailPage() {
                     variant="outline"
                     size="md"
                     onClick={() => {
+                      scanAbortRef.current?.abort();
+                      scanRequestIdRef.current += 1;
                       setProductoEscaneado(null);
                       setStockRealCajas('');
                       setStockRealUnidades('');
