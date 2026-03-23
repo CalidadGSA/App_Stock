@@ -36,6 +36,7 @@ export default function BarcodeScanner({
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const readerRef = useRef<unknown>(null);
+  const cameraSessionRef = useRef(0);
   const cameraScanLockedRef = useRef(false);
   const lastCameraBarcodeRef = useRef<{ value: string; at: number } | null>(null);
   const cameraStartedAtRef = useRef(0);
@@ -136,6 +137,8 @@ export default function BarcodeScanner({
     setCameraError(null);
     setCameraActive(true);
     cameraScanLockedRef.current = false;
+    const sessionId = cameraSessionRef.current + 1;
+    cameraSessionRef.current = sessionId;
     cameraStartedAtRef.current = Date.now();
     blockedPreviousBarcodeRef.current = lastSubmittedBarcodeRef.current?.value ?? null;
     if (clearPreviousTimerRef.current != null) {
@@ -149,6 +152,8 @@ export default function BarcodeScanner({
 
       if (videoRef.current) {
         await reader.decodeFromVideoDevice(undefined, videoRef.current, (result) => {
+          // Ignorar callbacks de sesiones anteriores (rebote residual).
+          if (sessionId !== cameraSessionRef.current) return;
           if (!result) {
             // Cuando se pierde lectura un instante, habilitamos nuevamente cualquier código.
             if (clearPreviousTimerRef.current != null) {
@@ -197,6 +202,8 @@ export default function BarcodeScanner({
   }
 
   function stopCamera() {
+    // Invalidar callbacks de la sesión actual.
+    cameraSessionRef.current += 1;
     if (clearPreviousTimerRef.current != null) {
       window.clearTimeout(clearPreviousTimerRef.current);
       clearPreviousTimerRef.current = null;
