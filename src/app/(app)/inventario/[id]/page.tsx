@@ -86,6 +86,7 @@ export default function InventarioDetailPage() {
   const scanRequestIdRef = useRef(0);
   const scanAbortRef = useRef<AbortController | null>(null);
   const lastConfirmedBarcodeRef = useRef<{ value: string; at: number } | null>(null);
+  const mustScanDifferentBarcodeRef = useRef<string | null>(null);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -557,6 +558,14 @@ export default function InventarioDetailPage() {
 
     const query = barcode.trim();
     if (!query) return false;
+    // Después de confirmar una card, exigimos un código distinto al anterior
+    // para evitar reaperturas fantasma por rebote/residuo de cámara.
+    if (mustScanDifferentBarcodeRef.current && query === mustScanDifferentBarcodeRef.current) {
+      return false;
+    }
+    if (mustScanDifferentBarcodeRef.current && query !== mustScanDifferentBarcodeRef.current) {
+      mustScanDifferentBarcodeRef.current = null;
+    }
     const now = Date.now();
     const lastConfirmed = lastConfirmedBarcodeRef.current;
     // Evita rebote de cámara: justo después de confirmar, puede reemitir el último código.
@@ -896,6 +905,7 @@ export default function InventarioDetailPage() {
       setStockRealUnidades('');
       stopCardCamera();
       lastConfirmedBarcodeRef.current = { value: productoEscaneado.codigo_barras, at: Date.now() };
+      mustScanDifferentBarcodeRef.current = productoEscaneado.codigo_barras;
       setDetalleSeleccionadoId(null);
       setFiltroCodigo('');
 
