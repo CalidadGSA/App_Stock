@@ -294,7 +294,7 @@ export default function InventarioDetailPage() {
     setCardCameraActive(true);
     const sessionId = cardCameraSessionRef.current + 1;
     cardCameraSessionRef.current = sessionId;
-    cardCameraSuppressUntilRef.current = Date.now() + 700;
+    cardCameraSuppressUntilRef.current = Date.now() + 180;
     cardCameraLockedRef.current = false;
     cardCameraVisibleBarcodeRef.current = null;
     cardCameraLastValidMsRef.current = 0;
@@ -356,7 +356,7 @@ export default function InventarioDetailPage() {
 
   function stopCardCamera() {
     cardCameraSessionRef.current += 1;
-    cardCameraSuppressUntilRef.current = Date.now() + 700;
+    cardCameraSuppressUntilRef.current = Date.now() + 180;
     try {
       if (cardCameraReaderRef.current) {
         const reader = cardCameraReaderRef.current as { reset?: () => void };
