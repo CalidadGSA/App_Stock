@@ -121,18 +121,38 @@ export default function PorVencerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, categoriaFiltro]);
 
-  async function eliminarRegistro(id: string) {
-    if (!confirm('¿Eliminar este registro?')) return;
+  async function eliminarRegistro(id: string, cantidadDisponible: number) {
+    const max = Math.max(0, Math.floor(Number(cantidadDisponible) || 0));
+    if (max <= 0) {
+      setError('El registro no tiene cantidad disponible para marcar como vendido.');
+      return;
+    }
+    const ingresado = window.prompt(`¿Cuántas unidades se vendieron? (1 a ${max})`, '1');
+    if (ingresado == null) return;
+    const cantidad = parseInt(ingresado, 10);
+    if (!Number.isFinite(cantidad) || cantidad <= 0 || cantidad > max) {
+      setError(`Ingresá una cantidad válida entre 1 y ${max}.`);
+      return;
+    }
     try {
-      const res = await fetch(`/api/vencimientos/por-vencer?id=${encodeURIComponent(id)}`, {
+      const params = new URLSearchParams({
+        id,
+        cantidad: String(cantidad),
+      });
+      const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`, {
         method: 'DELETE',
       });
-      const json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as { error?: string; cantidad_restante?: number };
       if (!res.ok) {
         setError(json.error ?? 'Error al eliminar el registro');
         return;
       }
-      setItems((prev) => prev.filter((x) => x.id !== id));
+      const restante = Number(json.cantidad_restante ?? 0);
+      setItems((prev) =>
+        prev
+          .map((x) => (x.id === id ? { ...x, cantidad: restante } : x))
+          .filter((x) => x.cantidad > 0)
+      );
     } catch {
       setError('Error al eliminar el registro');
     }
@@ -323,7 +343,7 @@ export default function PorVencerPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => void eliminarRegistro(r.id)}
+                            onClick={() => void eliminarRegistro(r.id, Number(r.cantidad ?? 0))}
                           >
                             Vendido
                           </Button>
