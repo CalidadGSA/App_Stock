@@ -309,7 +309,7 @@ export default function InventarioDetailPage() {
           if (Date.now() < cardCameraSuppressUntilRef.current) return;
           if (!result) {
             // Re-armado robusto: solo tras ausencia sostenida de lectura.
-            if (Date.now() - cardCameraLastValidMsRef.current > 1200) {
+            if (Date.now() - cardCameraLastValidMsRef.current > 350) {
               cardCameraVisibleBarcodeRef.current = null;
               cardCameraArmedRef.current = true;
             }
@@ -1158,10 +1158,11 @@ export default function InventarioDetailPage() {
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
               onScan={handleScan}
-              // En inventarios diarios guiados, el escáner sigue activo con la card abierta para sumar cajas
+              // Si hay card abierta, se bloquea el buscador/escáner principal.
               disabled={
                 buscandoProducto ||
-                guardando
+                guardando ||
+                !!productoEscaneado
               }
               placeholder="Escanear código o escribir nombre de producto..."
               // En inventarios diarios guiados mantenemos el foco en el escáner;
