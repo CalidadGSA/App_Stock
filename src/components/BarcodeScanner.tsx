@@ -36,6 +36,8 @@ export default function BarcodeScanner({
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const readerRef = useRef<unknown>(null);
+  const cameraScanLockedRef = useRef(false);
+  const lastCameraBarcodeRef = useRef<{ value: string; at: number } | null>(null);
   const globalBufferRef = useRef('');
   const globalTimerRef = useRef<number | null>(null);
 
@@ -117,6 +119,7 @@ export default function BarcodeScanner({
   async function startCamera() {
     setCameraError(null);
     setCameraActive(true);
+    cameraScanLockedRef.current = false;
     try {
       const { BrowserMultiFormatReader } = await import('@zxing/browser');
       const reader = new BrowserMultiFormatReader();
@@ -124,11 +127,20 @@ export default function BarcodeScanner({
 
       if (videoRef.current) {
         await reader.decodeFromVideoDevice(undefined, videoRef.current, (result) => {
-          if (result) {
-            const barcode = result.getText();
-            stopCamera();
-            onScan(barcode);
-          }
+          if (!result || cameraScanLockedRef.current) return;
+
+          const barcode = result.getText().trim();
+          if (!barcode) return;
+
+          const now = Date.now();
+          const last = lastCameraBarcodeRef.current;
+          // Evita duplicados consecutivos del mismo frame/código.
+          if (last && last.value === barcode && now - last.at < 1500) return;
+          lastCameraBarcodeRef.current = { value: barcode, at: now };
+
+          cameraScanLockedRef.current = true;
+          stopCamera();
+          onScan(barcode);
         });
       }
     } catch (err) {
@@ -139,6 +151,7 @@ export default function BarcodeScanner({
   }
 
   function stopCamera() {
+    cameraScanLockedRef.current = false;
     try {
       if (readerRef.current) {
         const reader = readerRef.current as { reset?: () => void };
@@ -170,7 +183,7 @@ export default function BarcodeScanner({
               disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-gray-400"
             autoFocus={autoFocusInput}
             autoComplete="off"
-            inputMode="none"
+            inputMode="text"
           />
         </div>
         <Button

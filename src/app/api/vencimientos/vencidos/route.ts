@@ -108,6 +108,11 @@ export async function PATCH(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
   const devolverTodos = searchParams.get('devolver_todos') === '1';
+  const cantidadParam = searchParams.get('cantidad');
+  const cantidadVenta = cantidadParam ? parseInt(cantidadParam, 10) : null;
+  if (cantidadParam && (!Number.isFinite(cantidadVenta) || (cantidadVenta ?? 0) <= 0)) {
+    return NextResponse.json({ error: 'cantidad inválida' }, { status: 400 });
+  }
 
   const admin = await createAdminClient();
 
@@ -115,7 +120,7 @@ export async function PATCH(request: NextRequest) {
     // Marcar un solo registro como vendido
     const { data: row, error: rowError } = await admin
       .from('controles_vencimientos_detalle')
-      .select('id, controles_vencimientos!inner(sucursal_id)')
+      .select('id, cantidad, controles_vencimientos!inner(sucursal_id)')
       .eq('id', id)
       .maybeSingle();
 
@@ -129,15 +134,38 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
     }
 
+    const cantidadActual = Number((row as any).cantidad ?? 0);
+    if (!Number.isFinite(cantidadActual) || cantidadActual <= 0) {
+      return NextResponse.json({ error: 'El registro no tiene cantidad disponible' }, { status: 400 });
+    }
+
+    const cantidadAplicar = cantidadVenta ?? cantidadActual;
+    if (cantidadAplicar > cantidadActual) {
+      return NextResponse.json(
+        { error: `La cantidad a vender no puede ser mayor a ${cantidadActual}` },
+        { status: 400 }
+      );
+    }
+
+    const nuevoRestante = cantidadActual - cantidadAplicar;
+    const payload =
+      nuevoRestante <= 0
+        ? { vendido: 1, cantidad: 0 }
+        : { cantidad: nuevoRestante };
+
     const { error } = await admin
       .from('controles_vencimientos_detalle')
-      .update({ vendido: 1 })
+      .update(payload)
       .eq('id', id);
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      cantidad_vendida: cantidadAplicar,
+      cantidad_restante: Math.max(0, nuevoRestante),
+    });
   }
 
   if (devolverTodos) {

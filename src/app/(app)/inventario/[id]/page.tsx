@@ -1152,14 +1152,19 @@ export default function InventarioDetailPage() {
                     const difCajas = realCajas - sistCajas;
                     const difUnidades = realUnidades - sistUnidades;
                     const isSelected = detalleSeleccionadoId === det.id;
-                    // Consideramos inventariado solo si se cargó explícitamente algún stock real
+                    // Consideramos inventariado solo si se cargó explícitamente algún stock real.
                     const yaInventariado =
                       det.stock_real_cajas != null || det.stock_real_unidades != null;
+                    const conDiferencia = difCajas !== 0 || difUnidades !== 0;
                     return (
                       <tr
                         key={det.id}
                         className={`hover:bg-gray-50 cursor-pointer ${
-                          yaInventariado ? 'bg-green-50' : ''
+                          !yaInventariado
+                            ? ''
+                            : conDiferencia
+                              ? 'bg-red-50'
+                              : 'bg-green-50'
                         } ${isSelected ? 'ring-2 ring-blue-300' : ''}`}
                         onClick={async () => {
                           setErrorProducto('');

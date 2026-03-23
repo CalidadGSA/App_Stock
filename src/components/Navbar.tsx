@@ -63,9 +63,14 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
       <div className="flex h-14 items-center justify-between gap-4 px-4">
         {/* Logo + app name */}
         <div className="flex items-center gap-3 shrink-0">
-          <div className="flex h-8 w-8 items-center justify-center shrink-0">
+          <Link
+            href="/dashboard"
+            className="flex h-8 w-8 items-center justify-center shrink-0"
+            onClick={() => setMenuOpen(false)}
+            aria-label="Ir al dashboard"
+          >
             <img src="/logogsa800.png" alt="Logo" className="h-8 w-8 object-contain rounded-lg" />
-          </div>
+          </Link>
           <Link href="/dashboard" className="hidden sm:block">
             <p className="text-sm font-semibold text-gray-900 leading-tight">Gestión Stock</p>
           </Link>
