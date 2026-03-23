@@ -500,13 +500,18 @@ export default function InventarioDetailPage() {
     stockRealUnidades,
   ]);
 
-  async function cargarProductoParaDetalle(detalle: ControlInventarioDetalle) {
+  async function cargarProductoParaDetalle(
+    detalle: ControlInventarioDetalle,
+    canApply: () => boolean = () => true
+  ) {
     // Solo abrimos la card si pudimos obtener el stock actual.
     try {
       const res = await fetch(`/api/productos/${encodeURIComponent(detalle.codigo_barras)}`);
       const json = await res.json() as { data?: ProductoLegacy; error?: string };
+      if (!canApply()) return false;
       if (res.ok && json.data) {
         const prod = json.data;
+        if (!canApply()) return false;
         setProductoEscaneado(prod);
         setStockRealCajas(
           detalle.stock_real_cajas != null ? String(detalle.stock_real_cajas) : ''
@@ -516,6 +521,7 @@ export default function InventarioDetailPage() {
         );
         return true;
       }
+      if (!canApply()) return false;
       setProductoEscaneado(null);
       setStockRealCajas('');
       setStockRealUnidades('');
@@ -525,6 +531,7 @@ export default function InventarioDetailPage() {
       );
       return false;
     } catch {
+      if (!canApply()) return false;
       setProductoEscaneado(null);
       setStockRealCajas('');
       setStockRealUnidades('');
@@ -668,7 +675,7 @@ export default function InventarioDetailPage() {
         return false;
       }
 
-      const cargado = await cargarProductoParaDetalle(detalle);
+      const cargado = await cargarProductoParaDetalle(detalle, () => !isStale());
       if (isStale()) return false;
       if (cargado) {
         setDetalleSeleccionadoId(detalle.id);
