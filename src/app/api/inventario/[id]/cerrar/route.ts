@@ -54,7 +54,7 @@ export async function POST(
       .from('base_productos')
       .select('trimestre')
       .eq('idsucursal', sucursalNum)
-      .eq('categoriamacro', categoriaMacro)
+      .ilike('categoriamacro', categoriaMacro)
       .lte('fechainicio', fechaControl)
       .gte('fechafin', fechaControl)
       .limit(1);

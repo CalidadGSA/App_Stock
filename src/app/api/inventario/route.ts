@@ -48,7 +48,7 @@ async function seleccionarIdsInventarioDiario(
         .from('base_productos')
         .select('idproducto')
         .eq('idsucursal', sucursalNum)
-        .eq('categoriamacro', categoriaMacro)
+        .ilike('categoriamacro', categoriaMacro)
         .eq('trimestre', trimestreActual)
         .eq('vecesinventariado', 0)
         .order('orden', { ascending: true })
@@ -85,7 +85,7 @@ async function seleccionarIdsInventarioDiario(
     .from('base_productos')
     .select('idproducto, vecesinventariado')
     .eq('idsucursal', sucursalNum)
-    .eq('categoriamacro', categoriaMacro)
+    .ilike('categoriamacro', categoriaMacro)
     .eq('trimestre', trimestreActual)
     .order('vecesinventariado', { ascending: true })
     .order('orden', { ascending: true });
@@ -251,7 +251,7 @@ export async function POST(request: NextRequest) {
     .from('base_productos')
     .select('trimestre, fechainicio, fechafin')
     .eq('idsucursal', sucursalNum)
-    .eq('categoriamacro', categoriaMacro)
+    .ilike('categoriamacro', categoriaMacro)
     .lte('fechainicio', hoy)
     .gte('fechafin', hoy)
     .limit(1);

@@ -417,7 +417,7 @@ as $$
   update base_productos
   set vecesinventariado = vecesinventariado + 1
   where idsucursal = p_sucursal_id
-    and categoriamacro = p_categoria_macro
+    and lower(categoriamacro) = lower(p_categoria_macro)
     and trimestre = p_trimestre
     and idproducto = any(p_id_productos);
 $$;
