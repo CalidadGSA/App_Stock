@@ -23,13 +23,19 @@ export async function GET() {
   let invTotalQuery = admin
     .from('controles_inventario')
     .select('id', { count: 'exact', head: true })
-    .eq('sucursal_id', sucursalId);
+    .eq('sucursal_id', sucursalId)
+    // No contamos inventarios de auditoría en los KPIs.
+    .neq('tipo', 'auditoria')
+    .neq('tipo', 'ocasional_auditoria');
 
   let invMesQuery = admin
     .from('controles_inventario')
     .select('id', { count: 'exact', head: true })
     .eq('sucursal_id', sucursalId)
-    .gte('created_at', inicioMes);
+    .gte('created_at', inicioMes)
+    // No contamos inventarios de auditoría en los KPIs.
+    .neq('tipo', 'auditoria')
+    .neq('tipo', 'ocasional_auditoria');
 
   let invDetallesQuery = admin
     .from('controles_inventario_detalle')
@@ -39,7 +45,9 @@ export async function GET() {
 
   let ultimosInvQuery = admin
     .from('controles_inventario')
-    .select('id, fecha_inicio, estado, descripcion, origen, tipo, sucursales(nombrefantasia)')
+    .select(
+      'id, fecha_inicio, estado, descripcion, origen, tipo, categoria_macro, sucursales(nombrefantasia), operadores(nombrecompleto)'
+    )
     .eq('sucursal_id', sucursalId)
     .order('created_at', { ascending: false })
     .limit(5);
@@ -76,7 +84,9 @@ export async function GET() {
         .lte('fecha_vencimiento', en90dias),
       ultimosInvQuery,
       admin.from('controles_vencimientos')
-        .select('id, fecha_inicio, estado, observaciones, categoria_macro, sucursales(nombrefantasia)')
+        .select(
+          'id, fecha_inicio, estado, observaciones, categoria_macro, sucursales(nombrefantasia), operadores(nombrecompleto)'
+        )
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),

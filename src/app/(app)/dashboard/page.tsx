@@ -193,6 +193,12 @@ export default function DashboardPage() {
             ) : (
               <ul className="divide-y divide-gray-100">
                 {stats?.ultimos_inventarios.map(inv => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const op = (inv as any).operadores;
+                  const operadorNombreCompleto =
+                    (op?.nombrecompleto as string | undefined) ??
+                    (op?.nombreCompleto as string | undefined) ??
+                    '';
                   const tipo = etiquetaTipoControlInventario(
                     inferirTipoControlInventario(inv)
                   );
@@ -212,16 +218,29 @@ export default function DashboardPage() {
                             <p className="text-sm font-medium text-gray-800">
                               {formatDateTime(inv.fecha_inicio)}
                             </p>
-                            <div className="mt-0.5 flex items-center gap-2">
+                            <div className="mt-0.5 flex flex-wrap items-center gap-2">
                               <Badge
-                                variant="default"
+                                variant="outline"
                                 className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
                               >
                                 {tipo}
                               </Badge>
+                              {inv.categoria_macro && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
+                                >
+                                  {inv.categoria_macro}
+                                </Badge>
+                              )}
                               {inv.descripcion && (
                                 <p className="text-xs text-gray-500 truncate max-w-[180px]">
                                   {inv.descripcion}
+                                </p>
+                              )}
+                              {operadorNombreCompleto && (
+                                <p className="text-[11px] text-gray-500">
+                                  Operador: {operadorNombreCompleto}
                                 </p>
                               )}
                             </div>
@@ -286,7 +305,7 @@ export default function DashboardPage() {
                             <div className="mt-0.5 flex flex-wrap items-center gap-2">
                               {v.categoria_macro && (
                                 <Badge
-                                  variant="default"
+                                  variant="outline"
                                   className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
                                 >
                                   {v.categoria_macro}

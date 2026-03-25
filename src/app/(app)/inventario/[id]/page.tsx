@@ -988,12 +988,16 @@ export default function InventarioDetailPage() {
       setProductoEscaneado(null);
       setStockRealCajas('');
       setStockRealUnidades('');
+      // Si venís de una búsqueda manual, limpiamos resultados para que
+      // no quede visible solo el panel de resultados.
+      setResultadosBusqueda([]);
       stopCardCamera();
       recentlyConfirmedBarcodesRef.current.set(productoEscaneado.codigo_barras, Date.now());
       lastConfirmedBarcodeRef.current = { value: productoEscaneado.codigo_barras, at: Date.now() };
       mustScanDifferentBarcodeRef.current = productoEscaneado.codigo_barras;
       setDetalleSeleccionadoId(null);
       setFiltroCodigo('');
+      setFiltroNombre('');
 
       // Si actualizamos un detalle existente en un inventario diario, lo reflejamos en memoria
       // para no romper el orden original de la lista.
@@ -1158,17 +1162,19 @@ export default function InventarioDetailPage() {
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
               onScan={handleScan}
-              // Si hay card abierta, se bloquea el buscador/escáner principal.
+              // Con card abierta dejamos que el lector sume el mismo producto.
+              // (La lógica de `handleScan` valida si el barcode pertenece al producto seleccionado.)
               disabled={
                 buscandoProducto ||
-                guardando ||
-                !!productoEscaneado
+                guardando
               }
               placeholder="Escanear código o escribir nombre de producto..."
               // En inventarios diarios guiados mantenemos el foco en el escáner;
               // en ocasionales/auditoría dejamos que el usuario use el buscador manual.
               autoFocusInput={esControlGuiado && !productoEscaneado}
-              captureGlobally={esControlGuiado && !!productoEscaneado && !editandoCard}
+              // Si hay card abierta y no se está editando manualmente, capturamos globalmente
+              // para que el lector USB funcione aunque no esté enfocado el input del scanner.
+              captureGlobally={!!productoEscaneado && !editandoCard}
             />
 
             {/* Resultados de búsqueda manual en medicamentos (para ocasional / auditoría) */}
