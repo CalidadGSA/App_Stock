@@ -1162,11 +1162,12 @@ export default function InventarioDetailPage() {
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
               onScan={handleScan}
-              // Con card abierta dejamos que el lector sume el mismo producto.
-              // (La lógica de `handleScan` valida si el barcode pertenece al producto seleccionado.)
+              // Si hay card abierta, bloqueamos buscador y cámara principal.
+              // El lector USB sigue activo por captura global para sumar cajas.
               disabled={
                 buscandoProducto ||
-                guardando
+                guardando ||
+                !!productoEscaneado
               }
               placeholder="Escanear código o escribir nombre de producto..."
               // En inventarios diarios guiados mantenemos el foco en el escáner;

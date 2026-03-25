@@ -60,7 +60,10 @@ export default function BarcodeScanner({
   }, [refocus]);
 
   useEffect(() => {
-    if (!captureGlobally || disabled || cameraActive) return;
+    // Nota: permitimos captura global incluso con `disabled=true` para soportar
+    // flujos donde el buscador/cámara principal se bloquean pero el lector USB
+    // debe seguir activo (ej: card de producto abierta para sumar cajas).
+    if (!captureGlobally || cameraActive) return;
 
     function clearBuffer() {
       globalBufferRef.current = '';
@@ -106,7 +109,7 @@ export default function BarcodeScanner({
       window.removeEventListener('keydown', handleGlobalKeyDown, true);
       clearBuffer();
     };
-  }, [captureGlobally, disabled, cameraActive, processScan]);
+  }, [captureGlobally, cameraActive, processScan]);
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     setInputValue(e.target.value);
