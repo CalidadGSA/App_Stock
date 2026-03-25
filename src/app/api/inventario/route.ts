@@ -35,7 +35,53 @@ async function seleccionarIdsInventarioDiario(
   trimestreActual: string,
   idsExcluidos: Set<number>
 ) {
-  const objetivo = categoriaMacro === 'PSICOTROPICOS' ? 15 : 50;
+  // Límite dinámico desde cantidad_inventario (cantidad).
+  // Fallback a 50/15 si por algún motivo no hay fila o hay error de esquema.
+  async function obtenerObjetivoDesdeCantidadInventario(): Promise<number> {
+    const fallback = categoriaMacro === 'PSICOTROPICOS' ? 15 : 50;
+
+    const attempts: Array<{
+      idField: string;
+      categoriaField: string;
+    }> = [
+      { idField: 'idSucursal', categoriaField: 'categoriaMacro' },
+      { idField: 'idsucursal', categoriaField: 'categoriamacro' },
+      { idField: 'id_sucursal', categoriaField: 'categoria_macro' },
+    ];
+
+    let lastError: unknown = null;
+    for (const a of attempts) {
+      const { data, error } = await admin
+        .from('cantidad_inventario')
+        .select('cantidad, cantidadTotal')
+        .eq(a.idField, sucursalNum)
+        .ilike(a.categoriaField, categoriaMacro)
+        .eq('trimestre', trimestreActual)
+        .maybeSingle();
+
+      if (error) {
+        lastError = error;
+        continue;
+      }
+      const cantidad = data?.cantidad == null ? NaN : Number(data.cantidad);
+      const cantidadTotal = data?.cantidadTotal == null ? NaN : Number(data.cantidadTotal);
+
+      if (Number.isFinite(cantidad)) return cantidad;
+      if (Number.isFinite(cantidadTotal)) return cantidadTotal;
+    }
+
+    // Si no pudimos obtener el objetivo, usamos el comportamiento anterior.
+    console.warn('No se pudo obtener cantidad_inventario; usando fallback 50/15', {
+      sucursalNum,
+      categoriaMacro,
+      trimestreActual,
+      lastError: (lastError as { message?: string } | null)?.message ?? lastError,
+    });
+    return fallback;
+  }
+
+  const objetivo = await obtenerObjetivoDesdeCantidadInventario();
+  if (objetivo <= 0) return [];
   const seleccionados: number[] = [];
   const vistos = new Set<number>();
 

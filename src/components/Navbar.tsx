@@ -78,7 +78,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
 
         {/* Derecha: sucursal, operador, botones Inventario / Vencimientos, Salir */}
         <div className="flex flex-1 items-center justify-end gap-2 min-w-0">
-          <div className="hidden lg:flex items-center gap-4 shrink-0">
+          <div className="hidden xl:flex items-center gap-4 shrink-0">
             <span className="text-sm text-gray-600 truncate max-w-[180px]" title={nombreSucursal}>
               {nombreSucursal || codigoSucursal}
             </span>
@@ -86,7 +86,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
               {nombreUsuario}
             </span>
           </div>
-          <div className="hidden md:flex items-center gap-2">
+          <div className="hidden xl:flex items-center gap-2">
             {!ocultarAccionesOperativas && (
               <>
             {rol === 'admin' ? (
@@ -148,7 +148,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
           {rol === 'admin' && !ocultarAccionesOperativas && (
             <button
               onClick={handleCambiarSucursal}
-              className="hidden md:flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
+              className="hidden xl:flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
             >
               Cambiar sucursal
             </button>
@@ -164,7 +164,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
             </button>
           )}
           <button
-            className="md:hidden rounded-lg p-1.5 text-gray-600 hover:bg-gray-100 shrink-0"
+            className="xl:hidden rounded-lg p-1.5 text-gray-600 hover:bg-gray-100 shrink-0"
             onClick={() => setMenuOpen(!menuOpen)}
           >
             {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -174,7 +174,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
 
       {/* Menú mobile */}
       {menuOpen && (
-        <div className="border-t border-gray-100 bg-white px-4 pb-3 pt-2 md:hidden">
+        <div className="border-t border-gray-100 bg-white px-4 pb-3 pt-2 xl:hidden">
           <div className="mb-3 space-y-1">
             <p className="text-sm font-medium text-gray-800">{nombreSucursal || codigoSucursal}</p>
             <p className="text-xs text-gray-500">{nombreUsuario}</p>
