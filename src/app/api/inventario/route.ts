@@ -43,17 +43,46 @@ async function seleccionarIdsInventarioDiario(
     const attempts: Array<{
       idField: string;
       categoriaField: string;
+      cantidadDiariaField: string;
+      cantidadTotalField: string;
     }> = [
-      { idField: 'idSucursal', categoriaField: 'categoriaMacro' },
-      { idField: 'idsucursal', categoriaField: 'categoriamacro' },
-      { idField: 'id_sucursal', categoriaField: 'categoria_macro' },
+      {
+        idField: 'idSucursal',
+        categoriaField: 'categoriaMacro',
+        cantidadDiariaField: 'cantidadDiaria',
+        cantidadTotalField: 'cantidadTotal',
+      },
+      {
+        idField: 'idsucursal',
+        categoriaField: 'categoriamacro',
+        cantidadDiariaField: 'cantidaddiaria',
+        cantidadTotalField: 'cantidadtotal',
+      },
+      {
+        idField: 'id_sucursal',
+        categoriaField: 'categoria_macro',
+        cantidadDiariaField: 'cantidad_diaria',
+        cantidadTotalField: 'cantidad_total',
+      },
+      {
+        idField: 'idsucursal',
+        categoriaField: 'categoriamacro',
+        cantidadDiariaField: 'cantidad',
+        cantidadTotalField: 'cantidadtotal',
+      },
+      {
+        idField: 'idSucursal',
+        categoriaField: 'categoriaMacro',
+        cantidadDiariaField: 'cantidad',
+        cantidadTotalField: 'cantidadTotal',
+      },
     ];
 
     let lastError: unknown = null;
     for (const a of attempts) {
       const { data, error } = await admin
         .from('cantidad_inventario')
-        .select('cantidadDiaria, cantidad, cantidadTotal')
+        .select(`${a.cantidadDiariaField}, ${a.cantidadTotalField}`)
         .eq(a.idField, sucursalNum)
         .ilike(a.categoriaField, categoriaMacro)
         .eq('trimestre', trimestreActual)
@@ -63,14 +92,14 @@ async function seleccionarIdsInventarioDiario(
         lastError = error;
         continue;
       }
-      const cantidadDiaria =
-        data?.cantidadDiaria == null ? NaN : Number(data.cantidadDiaria);
-      const cantidad = data?.cantidad == null ? NaN : Number(data.cantidad);
-      const cantidadTotal = data?.cantidadTotal == null ? NaN : Number(data.cantidadTotal);
+      const row = (data ?? {}) as Record<string, unknown>;
+      const cantidadDiariaValor =
+        row[a.cantidadDiariaField] == null ? NaN : Number(row[a.cantidadDiariaField]);
+      const cantidadTotalValor =
+        row[a.cantidadTotalField] == null ? NaN : Number(row[a.cantidadTotalField]);
 
-      if (Number.isFinite(cantidadDiaria)) return cantidadDiaria;
-      if (Number.isFinite(cantidad)) return cantidad;
-      if (Number.isFinite(cantidadTotal)) return cantidadTotal;
+      if (Number.isFinite(cantidadDiariaValor)) return cantidadDiariaValor;
+      if (Number.isFinite(cantidadTotalValor)) return cantidadTotalValor;
     }
 
     // Si no pudimos obtener el objetivo, usamos el comportamiento anterior.
