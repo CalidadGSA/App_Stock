@@ -296,6 +296,86 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const sinProductosMsg = 'No hay productos para inventariar';
+  const sucursalNum = parseInt(sucursalId, 10);
+
+  const esDiarioGuiado =
+    !!categoriaMacro &&
+    (categoriaMacro === 'FARMA' ||
+      categoriaMacro === 'BIENESTAR' ||
+      categoriaMacro === 'PSICOTROPICOS');
+
+  let idsProductosPrecargados: number[] = [];
+
+  // Inventario diario guiado: validar trimestre y que haya productos antes de crear el control
+  if (esDiarioGuiado) {
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    const { data: trRows, error: trError } = await admin
+      .from('base_productos')
+      .select('trimestre, fechainicio, fechafin')
+      .eq('idsucursal', sucursalNum)
+      .ilike('categoriamacro', categoriaMacro!)
+      .lte('fechainicio', hoy)
+      .gte('fechafin', hoy)
+      .limit(1);
+
+    if (trError) {
+      console.error('Error obteniendo trimestre base_productos:', trError);
+      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
+    }
+
+    const trimestreActual =
+      trRows && trRows.length > 0 ? (trRows[0] as { trimestre: string }).trimestre : null;
+    if (!trimestreActual) {
+      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
+    }
+
+    let idsExcluidos = new Set<number>();
+    if ((controlesAbiertosMismaCategoria?.length ?? 0) > 0) {
+      const idsControlesAbiertos = controlesAbiertosMismaCategoria!.map(
+        (row: { id: string }) => row.id
+      );
+
+      const { data: detallesAbiertos, error: detallesAbiertosError } = await admin
+        .from('controles_inventario_detalle')
+        .select('producto_id_sistema')
+        .in('control_id', idsControlesAbiertos);
+
+      if (detallesAbiertosError) {
+        console.error(
+          'Error obteniendo productos ya asignados en inventarios diarios abiertos:',
+          detallesAbiertosError
+        );
+      } else {
+        idsExcluidos = new Set(
+          (detallesAbiertos ?? [])
+            .map((row: { producto_id_sistema: string }) =>
+              Number(row.producto_id_sistema)
+            )
+            .filter((n) => !Number.isNaN(n))
+        );
+      }
+    }
+
+    try {
+      idsProductosPrecargados = await seleccionarIdsInventarioDiario(
+        admin,
+        sucursalNum,
+        categoriaMacro!,
+        trimestreActual,
+        idsExcluidos
+      );
+    } catch (selectionError) {
+      console.error('Error seleccionando productos para inventario diario:', selectionError);
+      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
+    }
+
+    if (idsProductosPrecargados.length === 0) {
+      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
+    }
+  }
+
   // 1) Crear el control de inventario
   const { data: control, error: createError } = await admin
     .from('controles_inventario')
@@ -316,138 +396,83 @@ export async function POST(request: NextRequest) {
 
   const controlId = control.id as string;
 
-  // 2) Si no se eligió categoría macro, devolvemos solo el control (inventario libre)
-  if (!categoriaMacro || (categoriaMacro !== 'FARMA' && categoriaMacro !== 'BIENESTAR' && categoriaMacro !== 'PSICOTROPICOS')) {
+  // 2) Si no se eligió categoría macro guiada, devolvemos solo el control (inventario libre)
+  if (!esDiarioGuiado) {
     return NextResponse.json({ data: control, warning }, { status: 201 });
   }
 
-  // 3) Determinar trimestre actual para la sucursal según base_productos (fecha hoy dentro de [fechainicio, fechafin])
-  const hoy = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
-  const sucursalNum = parseInt(sucursalId, 10);
+  const idsProductos = idsProductosPrecargados;
 
-  const { data: trRows, error: trError } = await admin
-    .from('base_productos')
-    .select('trimestre, fechainicio, fechafin')
-    .eq('idsucursal', sucursalNum)
-    .ilike('categoriamacro', categoriaMacro)
-    .lte('fechainicio', hoy)
-    .gte('fechafin', hoy)
-    .limit(1);
-
-  if (trError) {
-    console.error('Error obteniendo trimestre base_productos:', trError);
-    return NextResponse.json({ data: control }, { status: 201 });
-  }
-
-  const trimestreActual = trRows && trRows.length > 0 ? (trRows[0] as { trimestre: string }).trimestre : null;
-  if (!trimestreActual) {
-    return NextResponse.json({ data: control, warning }, { status: 201 });
-  }
-
-  // 4) Seleccionar productos según categoría macro
-  let idsProductos: number[] = [];
-  let idsExcluidos = new Set<number>();
-
-  if ((controlesAbiertosMismaCategoria?.length ?? 0) > 0) {
-    const idsControlesAbiertos = controlesAbiertosMismaCategoria!.map(
-      (row: { id: string }) => row.id
-    );
-
-    const { data: detallesAbiertos, error: detallesAbiertosError } = await admin
-      .from('controles_inventario_detalle')
-      .select('producto_id_sistema')
-      .in('control_id', idsControlesAbiertos);
-
-    if (detallesAbiertosError) {
-      console.error(
-        'Error obteniendo productos ya asignados en inventarios diarios abiertos:',
-        detallesAbiertosError
-      );
-    } else {
-      idsExcluidos = new Set(
-        (detallesAbiertos ?? [])
-          .map((row: { producto_id_sistema: string }) =>
-            Number(row.producto_id_sistema)
-          )
-          .filter((n) => !Number.isNaN(n))
-      );
-    }
-  }
-
-  try {
-    idsProductos = await seleccionarIdsInventarioDiario(
-      admin,
-      sucursalNum,
-      categoriaMacro,
-      trimestreActual,
-      idsExcluidos
-    );
-  } catch (selectionError) {
-    console.error('Error seleccionando productos para inventario diario:', selectionError);
-  }
-
-  // 5) Precrear líneas de detalle para esos productos desde medicamentos + nombre de laboratorio
+  // 3) Precrear líneas de detalle para esos productos desde medicamentos + nombre de laboratorio
   if (idsProductos.length > 0) {
     const { data: meds, error: medsError } = await admin
       .from('medicamentos')
       .select('codplex, codebar, producto, presentaci, codlab')
       .in('codplex', idsProductos);
 
-    if (!medsError && meds && meds.length > 0) {
-      const medsOrdenados = idsProductos
-        .map((idProducto) =>
-          meds.find((m: { codplex: number }) => Number(m.codplex) === idProducto) ?? null
-        )
-        .filter(Boolean) as Array<{
-          codplex: number;
-          codebar: string | null;
-          producto: string | null;
-          presentaci: string | null;
-          codlab: number | null;
-        }>;
-
-      // Resolver nombre de laboratorio para cada CodLab
-      const codlabs = Array.from(
-        new Set(
-          medsOrdenados
-            .map((m: { codlab: number | null }) => m.codlab)
-            .filter((v): v is number => v != null)
-        )
-      );
-
-      const labMap = new Map<number, string>();
-      if (codlabs.length > 0) {
-        const { data: labs } = await admin
-          .from('laboratorios')
-          .select('codlab, laborato')
-          .in('codlab', codlabs);
-
-        (labs ?? []).forEach((l: { codlab: number; laborato: string | null }) => {
-          labMap.set(l.codlab, l.laborato ?? String(l.codlab));
-        });
-      }
-
-      const filas = medsOrdenados.map((m) => ({
-          control_id: controlId,
-          producto_id_sistema: String(m.codplex),
-          codigo_barras: m.codebar ?? '',
-          descripcion: m.producto ?? '',
-          presentacion: m.presentaci ?? null,
-          laboratorio:
-            m.codlab != null
-              ? labMap.get(m.codlab) ?? String(m.codlab)
-              : null,
-          stock_sistema: 0,
-          stock_sist_cajas: null,
-          stock_sist_unidades: null,
-          stock_real_cajas: null,
-          stock_real_unidades: null,
-          stock_real: 0,
-        })
-      );
-
-      await admin.from('controles_inventario_detalle').insert(filas);
+    if (medsError || !meds || meds.length === 0) {
+      await admin.from('controles_inventario').delete().eq('id', controlId);
+      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
     }
+
+    const medsOrdenados = idsProductos
+      .map((idProducto) =>
+        meds.find((m: { codplex: number }) => Number(m.codplex) === idProducto) ?? null
+      )
+      .filter(Boolean) as Array<{
+        codplex: number;
+        codebar: string | null;
+        producto: string | null;
+        presentaci: string | null;
+        codlab: number | null;
+      }>;
+
+    if (medsOrdenados.length === 0) {
+      await admin.from('controles_inventario').delete().eq('id', controlId);
+      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
+    }
+
+    // Resolver nombre de laboratorio para cada CodLab
+    const codlabs = Array.from(
+      new Set(
+        medsOrdenados
+          .map((m: { codlab: number | null }) => m.codlab)
+          .filter((v): v is number => v != null)
+      )
+    );
+
+    const labMap = new Map<number, string>();
+    if (codlabs.length > 0) {
+      const { data: labs } = await admin
+        .from('laboratorios')
+        .select('codlab, laborato')
+        .in('codlab', codlabs);
+
+      (labs ?? []).forEach((l: { codlab: number; laborato: string | null }) => {
+        labMap.set(l.codlab, l.laborato ?? String(l.codlab));
+      });
+    }
+
+    const filas = medsOrdenados.map((m) => ({
+        control_id: controlId,
+        producto_id_sistema: String(m.codplex),
+        codigo_barras: m.codebar ?? '',
+        descripcion: m.producto ?? '',
+        presentacion: m.presentaci ?? null,
+        laboratorio:
+          m.codlab != null
+            ? labMap.get(m.codlab) ?? String(m.codlab)
+            : null,
+        stock_sistema: 0,
+        stock_sist_cajas: null,
+        stock_sist_unidades: null,
+        stock_real_cajas: null,
+        stock_real_unidades: null,
+        stock_real: 0,
+      })
+    );
+
+    await admin.from('controles_inventario_detalle').insert(filas);
   }
 
   return NextResponse.json({ data: control, warning }, { status: 201 });
