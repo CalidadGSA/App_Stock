@@ -35,7 +35,7 @@ async function seleccionarIdsInventarioDiario(
   trimestreActual: string,
   idsExcluidos: Set<number>
 ) {
-  // Límite dinámico desde cantidad_inventario (cantidad).
+  // Límite dinámico desde cantidad_inventario (cantidadDiaria).
   // Fallback a 50/15 si por algún motivo no hay fila o hay error de esquema.
   async function obtenerObjetivoDesdeCantidadInventario(): Promise<number> {
     const fallback = categoriaMacro === 'PSICOTROPICOS' ? 15 : 50;
@@ -53,7 +53,7 @@ async function seleccionarIdsInventarioDiario(
     for (const a of attempts) {
       const { data, error } = await admin
         .from('cantidad_inventario')
-        .select('cantidad, cantidadTotal')
+        .select('cantidadDiaria, cantidad, cantidadTotal')
         .eq(a.idField, sucursalNum)
         .ilike(a.categoriaField, categoriaMacro)
         .eq('trimestre', trimestreActual)
@@ -63,9 +63,12 @@ async function seleccionarIdsInventarioDiario(
         lastError = error;
         continue;
       }
+      const cantidadDiaria =
+        data?.cantidadDiaria == null ? NaN : Number(data.cantidadDiaria);
       const cantidad = data?.cantidad == null ? NaN : Number(data.cantidad);
       const cantidadTotal = data?.cantidadTotal == null ? NaN : Number(data.cantidadTotal);
 
+      if (Number.isFinite(cantidadDiaria)) return cantidadDiaria;
       if (Number.isFinite(cantidad)) return cantidad;
       if (Number.isFinite(cantidadTotal)) return cantidadTotal;
     }
