@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, CheckCircle2, Trash2, Package, TrendingUp, TrendingDown, Minus, Camera, CameraOff } from 'lucide-react';
@@ -91,6 +91,14 @@ export default function InventarioDetailPage() {
   const lastConfirmedBarcodeRef = useRef<{ value: string; at: number } | null>(null);
   const mustScanDifferentBarcodeRef = useRef<string | null>(null);
   const recentlyConfirmedBarcodesRef = useRef<Map<string, number>>(new Map());
+
+  // Índice local para acelerar búsquedas por nombre en inventario diario guiado.
+  const indiceBusquedaDiaria = useMemo(() => {
+    return (control?.controles_inventario_detalle ?? []).map((d) => ({
+      detalle: d,
+      texto: `${d.descripcion ?? ''} ${d.presentacion ?? ''}`.toLowerCase(),
+    }));
+  }, [control?.controles_inventario_detalle]);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -628,12 +636,8 @@ export default function InventarioDetailPage() {
     if (/[a-zA-Z]/.test(query)) {
       // Con categoría macro (inventario diario guiado): solo buscar dentro de los productos asignados.
       if (esControlGuiado) {
-        const detallesControl = control?.controles_inventario_detalle ?? [];
         const q = query.toLowerCase();
-        const coincidencias = detallesControl.filter((d) => {
-          const nombreCompleto = `${d.descripcion ?? ''} ${d.presentacion ?? ''}`.toLowerCase();
-          return nombreCompleto.includes(q);
-        });
+        const coincidencias = indiceBusquedaDiaria.filter((i) => i.texto.includes(q));
 
         if (coincidencias.length === 0) {
           setErrorProducto('No se encontraron productos con ese nombre en este control.');
@@ -1157,7 +1161,7 @@ export default function InventarioDetailPage() {
       {enProgreso && (
         <Card>
           <CardHeader>
-            <h2 className="font-semibold text-gray-900">Escanear producto</h2>
+            <h2 className="font-semibold text-gray-900">Buscar producto</h2>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
@@ -1215,6 +1219,24 @@ export default function InventarioDetailPage() {
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+            {esControlGuiado && filtroNombre.trim() && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+                <div className="flex items-center justify-between gap-2">
+                  <p>Mostrando resultados para: <span className="font-semibold">{filtroNombre}</span></p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setFiltroNombre('');
+                      setErrorProducto('');
+                      setDetalleSeleccionadoId(null);
+                    }}
+                  >
+                    Volver al listado
+                  </Button>
+                </div>
               </div>
             )}
 
