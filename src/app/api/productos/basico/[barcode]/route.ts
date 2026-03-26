@@ -37,7 +37,7 @@ export async function GET(
   if (idProductoFromBarcode != null) {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab, activo')
+      .select('codplex, codebar, producto, presentaci, codlab, refrigeracion, activo')
       .eq('codplex', idProductoFromBarcode)
       .maybeSingle();
 
@@ -49,7 +49,7 @@ export async function GET(
   } else {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab, activo')
+      .select('codplex, codebar, producto, presentaci, codlab, refrigeracion, activo')
       .eq('codebar', barcode)
       .limit(1)
       .maybeSingle();
@@ -94,6 +94,7 @@ export async function GET(
     stock_unidades: undefined,
     unidades_por_caja: undefined,
     fraccionable: undefined,
+    refrigerado: String(med.refrigeracion ?? '').toUpperCase() === 'S',
   };
 
   return NextResponse.json({ data: producto });

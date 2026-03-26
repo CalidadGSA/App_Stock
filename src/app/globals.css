@@ -22,3 +22,30 @@ button, a, input, select, textarea {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+/* Ajuste global de legibilidad:
+   - letras chicas un poco más grandes
+   - textos grises más oscuros */
+@layer utilities {
+  .text-xs {
+    font-size: 0.875rem !important; /* antes ~12px */
+    line-height: 1.25rem !important;
+  }
+
+  .text-sm {
+    font-size: 1rem !important; /* antes ~14px */
+    line-height: 1.5rem !important;
+  }
+
+  .text-gray-400 {
+    color: #4b5563 !important;
+  }
+
+  .text-gray-500 {
+    color: #374151 !important;
+  }
+
+  .text-gray-600 {
+    color: #1f2937 !important;
+  }
+}

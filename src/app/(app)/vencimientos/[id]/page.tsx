@@ -355,7 +355,7 @@ export default function VencimientoDetailPage() {
       {enProgreso && (
         <Card>
           <CardHeader>
-            <h2 className="font-semibold text-gray-900">Escanear producto</h2>
+            <h2 className="font-semibold text-gray-900">Buscar producto</h2>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
@@ -393,10 +393,10 @@ export default function VencimientoDetailPage() {
                         <p className="truncate font-medium">
                           {r.descripcion}
                         </p>
-                        <p className="truncate text-[11px] text-gray-500">
+                        <p className="truncate text-sm text-gray-900">
                           {r.presentacion} · {r.laboratorio}
                         </p>
-                        <p className="font-mono text-[11px] text-gray-500">
+                        <p className="font-mono text-sm text-gray-900">
                           {r.codigo_barras ?? 'Sin código de barras'}
                         </p>
                       </div>
@@ -442,8 +442,8 @@ export default function VencimientoDetailPage() {
                   </div>
                   <div>
                     <p className="font-semibold text-gray-900">{productoEscaneado.descripcion}</p>
-                    <p className="text-sm text-gray-600">{productoEscaneado.presentacion} · {productoEscaneado.laboratorio}</p>
-                    <p className="text-xs font-mono text-gray-400">{productoEscaneado.codigo_barras}</p>
+                    <p className="text-base text-gray-900">{productoEscaneado.presentacion} · {productoEscaneado.laboratorio}</p>
+                    <p className="text-sm font-mono text-gray-900">{productoEscaneado.codigo_barras}</p>
                   </div>
                 </div>
 
@@ -571,7 +571,7 @@ export default function VencimientoDetailPage() {
                       >
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-900">{det.descripcion}</p>
-                          <p className="text-xs text-gray-400">{det.presentacion} · {det.laboratorio}</p>
+                          <p className="text-sm text-gray-900">{det.presentacion} · {det.laboratorio}</p>
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${colorClass}`}>

@@ -233,16 +233,16 @@ export default function DescuentosVencimientosPage() {
                             {i.descripcion}
                           </span>
                           {i.presentacion && (
-                            <span className="text-xs text-gray-500">
+                            <span className="text-sm text-gray-900">
                               {i.presentacion}
                             </span>
                           )}
                           {i.laboratorio && (
-                            <span className="text-[11px] text-gray-400">
+                            <span className="text-sm text-gray-900">
                               {i.laboratorio}
                             </span>
                           )}
-                          <span className="text-[11px] text-gray-400 mt-0.5">
+                          <span className="text-sm text-gray-900 mt-0.5">
                             Código: {i.codigo_barras}
                           </span>
                         </div>

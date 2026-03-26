@@ -318,10 +318,10 @@ export default function PorVencerPage() {
                       <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-4 py-2 align-top">
                           <p className="font-medium text-gray-900">{r.descripcion}</p>
-                          <p className="text-xs text-gray-500">
+                          <p className="text-sm text-gray-900">
                             {r.presentacion} · {r.laboratorio}
                           </p>
-                          <p className="text-[11px] text-gray-400 mt-0.5 font-mono">
+                          <p className="text-sm text-gray-900 mt-0.5 font-mono">
                             {r.codigo_barras}
                           </p>
                         </td>

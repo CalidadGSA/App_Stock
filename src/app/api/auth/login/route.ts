@@ -53,7 +53,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Cuerpo inválido' }, { status: 400 });
   }
 
-  const operador = typeof body.operador === 'string' ? body.operador.trim() : '';
+  const operadorInput = typeof body.operador === 'string' ? body.operador.trim() : '';
+  const operador = operadorInput.toUpperCase();
   const codigo = typeof body.codigo === 'number' ? body.codigo : typeof body.codigo === 'string' ? parseInt(body.codigo, 10) : NaN;
 
   if (!operador || Number.isNaN(codigo)) {

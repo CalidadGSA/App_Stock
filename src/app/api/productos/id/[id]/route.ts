@@ -20,7 +20,7 @@ export async function GET(
 
   const { data: med, error } = await admin
     .from('medicamentos')
-    .select('codplex, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, fraccionable, activo')
+    .select('codplex, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, fraccionable, refrigeracion, activo')
     .eq('codplex', idProducto)
     .maybeSingle();
 
@@ -115,6 +115,7 @@ export async function GET(
     stock_unidades,
     unidades_por_caja,
     fraccionable: med.fraccionable != null ? Number(med.fraccionable) : undefined,
+    refrigerado: String(med.refrigeracion ?? '').toUpperCase() === 'S',
   };
 
   return NextResponse.json({ data: producto });

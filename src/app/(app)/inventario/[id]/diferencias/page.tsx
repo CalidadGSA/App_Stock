@@ -392,19 +392,21 @@ export default function InventarioDiferenciasPage() {
                     return (
                       <tr
                         key={det.id}
-                        className="border-b border-gray-50"
+                        className={`border-b border-gray-50 ${
+                          det.verificado === 1 ? 'bg-blue-50' : ''
+                        }`}
                       >
                         <td className="px-4 py-3 align-top">
                           <div className="font-medium text-gray-900">
                             {det.descripcion}
                           </div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-sm text-gray-900">
                             {det.presentacion}{' '}
                             {det.laboratorio
                               ? `· ${det.laboratorio}`
                               : ''}
                           </div>
-                          <div className="text-[11px] text-gray-400 mt-0.5">
+                          <div className="text-sm text-gray-900 mt-0.5">
                             {det.codigo_barras}
                           </div>
                         </td>

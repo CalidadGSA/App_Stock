@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, CheckCircle2, Trash2, Package, TrendingUp, TrendingDown, Minus, Camera, CameraOff } from 'lucide-react';
+import { ArrowLeft, Check, CheckCircle2, Snowflake, Trash2, TrendingUp, TrendingDown, Minus, Camera, CameraOff } from 'lucide-react';
 import BarcodeScanner from '@/components/BarcodeScanner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -63,6 +63,7 @@ export default function InventarioDetailPage() {
     { producto_id_sistema: string; codigo_barras: string | null; descripcion: string; presentacion: string | null; laboratorio: string | null }[]
   >([]);
   const [buscandoEnMedicamentos, setBuscandoEnMedicamentos] = useState(false);
+  const [refrigeradoByBarcode, setRefrigeradoByBarcode] = useState<Record<string, boolean>>({});
   const [editandoCard, setEditandoCard] = useState(false);
   const [cardCameraActive, setCardCameraActive] = useState(false);
   const [cardCameraError, setCardCameraError] = useState('');
@@ -99,6 +100,37 @@ export default function InventarioDetailPage() {
       texto: `${d.descripcion ?? ''} ${d.presentacion ?? ''}`.toLowerCase(),
     }));
   }, [control?.controles_inventario_detalle]);
+
+  useEffect(() => {
+    async function cargarRefrigerados() {
+      const detalles = control?.controles_inventario_detalle ?? [];
+      const barcodes = Array.from(
+        new Set(
+          detalles
+            .map((d) => (d.codigo_barras ?? '').trim())
+            .filter((b) => b.length > 0)
+        )
+      );
+      const faltantes = barcodes.filter((bc) => refrigeradoByBarcode[bc] === undefined);
+      if (faltantes.length === 0) return;
+
+      const nuevos: Record<string, boolean> = {};
+      for (const bc of faltantes) {
+        try {
+          const res = await fetch(`/api/productos/basico/${encodeURIComponent(bc)}`);
+          const json = (await res.json()) as { data?: ProductoLegacy };
+          nuevos[bc] = !!json.data?.refrigerado;
+        } catch {
+          nuevos[bc] = false;
+        }
+      }
+      setRefrigeradoByBarcode((prev) => ({ ...prev, ...nuevos }));
+    }
+
+    if (control) {
+      void cargarRefrigerados();
+    }
+  }, [control, refrigeradoByBarcode]);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -1040,6 +1072,90 @@ export default function InventarioDetailPage() {
     }
   }
 
+  async function handleMarcarVerificado() {
+    if (!productoEscaneado || !detalleSeleccionadoId) return;
+    const detalleActual =
+      (control?.controles_inventario_detalle ?? []).find((d) => d.id === detalleSeleccionadoId) ?? null;
+    const nextVerificado = detalleActual?.verificado === 1 ? 0 : 1;
+
+    const cajasNum =
+      stockRealCajas.trim() === '' ? 0 : parseFloat(stockRealCajas);
+    const unidadesNum =
+      stockRealUnidades.trim() === '' ? 0 : parseFloat(stockRealUnidades);
+
+    if (isNaN(cajasNum) || cajasNum < 0 || isNaN(unidadesNum) || unidadesNum < 0) {
+      setErrorProducto('Ingresá cantidades válidas antes de marcar como verificado.');
+      return;
+    }
+
+    const noFraccionableSinUnidades =
+      productoEscaneado.fraccionable !== 1 &&
+      (productoEscaneado.stock_unidades ?? 0) === 0;
+    if (noFraccionableSinUnidades && unidadesNum !== 0) {
+      setErrorProducto(
+        'Este producto no es fraccionable y el stock de unidades es 0; no se pueden cargar unidades sueltas.'
+      );
+      return;
+    }
+    const unidadesFinal = noFraccionableSinUnidades ? 0 : unidadesNum;
+
+    const unidadesPorCaja = productoEscaneado.unidades_por_caja && !isNaN(productoEscaneado.unidades_por_caja)
+      ? productoEscaneado.unidades_por_caja
+      : 1;
+    const totalUnidades = cajasNum * unidadesPorCaja + unidadesFinal;
+
+    setGuardando(true);
+    try {
+      const res = await fetch(`/api/inventario/${id}/detalles`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          detalle_id: detalleSeleccionadoId,
+          stock_sist_cajas: productoEscaneado.stock_cajas ?? null,
+          stock_sist_unidades: productoEscaneado.stock_unidades ?? null,
+          stock_real_cajas: cajasNum,
+          stock_real_unidades: unidadesFinal,
+          stock_real: totalUnidades,
+          verificado: nextVerificado,
+        }),
+      });
+      const json = await res.json() as { error?: string };
+      if (!res.ok) {
+        setErrorProducto(json.error ?? 'Error al actualizar verificado');
+        return;
+      }
+
+      setControl(prev => {
+        if (!prev) return prev;
+        const detallesPrev = prev.controles_inventario_detalle ?? [];
+        const nuevosDetalles = detallesPrev.map(d => {
+          if (d.id !== detalleSeleccionadoId) return d;
+          const nuevoStockSistema = productoEscaneado.stock_sistema;
+          const nuevaDiferencia = totalUnidades - nuevoStockSistema;
+          return {
+            ...d,
+            stock_sistema: nuevoStockSistema,
+            stock_sist_cajas: productoEscaneado.stock_cajas ?? null,
+            stock_sist_unidades: productoEscaneado.stock_unidades ?? null,
+            stock_real_cajas: cajasNum,
+            stock_real_unidades: unidadesFinal,
+            stock_real: totalUnidades,
+            diferencia: nuevaDiferencia,
+            verificado: nextVerificado,
+          };
+        });
+        return {
+          ...prev,
+          controles_inventario_detalle: nuevosDetalles,
+        };
+      });
+    } catch {
+      setErrorProducto('Error al actualizar verificado');
+    } finally {
+      setGuardando(false);
+    }
+  }
+
   async function handleEliminarLinea(detalleId: string) {
     if (!confirm('¿Eliminar esta línea?')) return;
     await fetch(`/api/inventario/${id}/detalles?detalle_id=${detalleId}`, { method: 'DELETE' });
@@ -1070,11 +1186,17 @@ export default function InventarioDetailPage() {
     ((control as any).operadores?.nombreCompleto as string | undefined) ??
     '';
   const esControlGuiado = control.categoria_macro != null && tipoControl === 'diario';
-  const detalles = [...(control.controles_inventario_detalle ?? [])].sort(
-    (a, b) =>
-      new Date(a.fecha_registro).getTime() -
-      new Date(b.fecha_registro).getTime()
-  );
+  const detalles = [...(control.controles_inventario_detalle ?? [])].sort((a, b) => {
+    if (esControlGuiado) {
+      const aInventariado = a.stock_real_cajas != null || a.stock_real_unidades != null;
+      const bInventariado = b.stock_real_cajas != null || b.stock_real_unidades != null;
+      // En inventario diario guiado: primero los pendientes por recontar.
+      if (aInventariado !== bInventariado) {
+        return aInventariado ? 1 : -1;
+      }
+    }
+    return new Date(a.fecha_registro).getTime() - new Date(b.fecha_registro).getTime();
+  });
   let detallesFiltrados = detalles;
   if (control.categoria_macro && filtroCodigo) {
     detallesFiltrados = detallesFiltrados.filter((d) => d.codigo_barras === filtroCodigo);
@@ -1091,6 +1213,9 @@ export default function InventarioDetailPage() {
   let totalSobrantes = 0;
   let totalFaltantes = 0;
   let totalSinDiferencia = 0;
+  const totalInventariados = detalles.filter(
+    (d) => d.stock_real_cajas != null || d.stock_real_unidades != null
+  ).length;
   for (const d of detalles) {
     const sistC = d.stock_sist_cajas ?? 0;
     const sistU = d.stock_sist_unidades ?? 0;
@@ -1124,7 +1249,7 @@ export default function InventarioDetailPage() {
                 {enProgreso ? 'En progreso' : 'Cerrado'}
               </Badge>
               {control.categoria_macro && (
-                <span className="text-xs text-gray-600 border border-gray-200 rounded-full px-2 py-0.5">
+                <span className="text-sm text-gray-600 border border-gray-200 rounded-full px-2 py-0.5">
                   Categoría: {control.categoria_macro}
                 </span>
               )}
@@ -1134,12 +1259,12 @@ export default function InventarioDetailPage() {
               {control.fecha_fin && ` · Cierre: ${formatDateTime(control.fecha_fin)}`}
             </p>
             {operadorNombreCompleto && (
-              <p className="text-xs text-gray-500 mt-0.5">
+              <p className="text-sm text-gray-500 mt-0.5">
                 Operador: {operadorNombreCompleto}
               </p>
             )}
             {control.descripcion && (
-              <p className="text-xs text-gray-500 mt-0.5">Descripción: {control.descripcion}</p>
+              <p className="text-sm text-gray-500 mt-0.5">Descripción: {control.descripcion}</p>
             )}
           </div>
         </div>
@@ -1184,7 +1309,7 @@ export default function InventarioDetailPage() {
 
             {/* Resultados de búsqueda manual en medicamentos (para ocasional / auditoría) */}
             {!esControlGuiado && resultadosBusqueda.length > 0 && (
-              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 space-y-2">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-800 space-y-2">
                 <p className="font-semibold">Resultados:</p>
                 <ul className="max-h-48 space-y-1 overflow-y-auto">
                   {resultadosBusqueda.map((r) => (
@@ -1196,10 +1321,10 @@ export default function InventarioDetailPage() {
                         <p className="truncate font-medium">
                           {r.descripcion}
                         </p>
-                        <p className="truncate text-[11px] text-gray-500">
+                        <p className="truncate text-base text-gray-900">
                           {r.presentacion} · {r.laboratorio}
                         </p>
-                        <p className="font-mono text-[11px] text-gray-500">
+                        <p className="font-mono text-base text-gray-900">
                           {r.codigo_barras ?? 'Sin código de barras'}
                         </p>
                       </div>
@@ -1259,13 +1384,47 @@ export default function InventarioDetailPage() {
                 <div className="flex items-start justify-between gap-3 mb-4">
                   <div>
                     <p className="font-semibold text-gray-900 text-lg">{productoEscaneado.descripcion}</p>
-                    <p className="text-sm text-gray-600">{productoEscaneado.presentacion} . {productoEscaneado.laboratorio}</p>
+                    <p className="text-base text-gray-900">{productoEscaneado.presentacion} . {productoEscaneado.laboratorio}</p>
                     <p className="mt-2 font-mono text-base text-gray-800">
                       {productoEscaneado.codigo_barras}
                     </p>
+                    {productoEscaneado.refrigerado && (
+                      <div className="mt-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 border border-cyan-200" title="Producto refrigerado">
+                        <Snowflake className="h-4 w-4" />
+                      </div>
+                    )}
                   </div>
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-200">
-                    <Package className="h-5 w-5 text-blue-700" />
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    {(() => {
+                      if (!productoEscaneado || !detalleSeleccionadoId) return null;
+                      const hayCargaFisica = stockRealCajas.trim() !== '' || stockRealUnidades.trim() !== '';
+                      if (!hayCargaFisica) return null;
+                      const sistCajas = productoEscaneado.stock_cajas ?? 0;
+                      const sistUnidades = productoEscaneado.stock_unidades ?? 0;
+                      const cajasNum = stockRealCajas.trim() === '' ? 0 : parseFloat(stockRealCajas);
+                      const unidadesNum = stockRealUnidades.trim() === '' ? 0 : parseFloat(stockRealUnidades);
+                      const diffCajas = (isNaN(cajasNum) ? 0 : cajasNum) - sistCajas;
+                      const diffUnidades = (isNaN(unidadesNum) ? 0 : unidadesNum) - sistUnidades;
+                      const tieneDiferencia = diffCajas !== 0 || diffUnidades !== 0;
+                      if (!tieneDiferencia) return null;
+
+                      const detalleActual =
+                        (control?.controles_inventario_detalle ?? []).find((d) => d.id === detalleSeleccionadoId) ?? null;
+                      const yaVerificado = detalleActual?.verificado === 1;
+
+                      return (
+                        <Button
+                          variant={yaVerificado ? 'secondary' : 'outline'}
+                          size="sm"
+                          loading={guardando}
+                          onClick={handleMarcarVerificado}
+                          className="h-10 w-10 p-0"
+                          title={yaVerificado ? 'Verificado' : 'Marcar como verificado'}
+                        >
+                          <Check className="h-4 w-4" />
+                        </Button>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -1275,13 +1434,13 @@ export default function InventarioDetailPage() {
                     <p className="text-xs font-semibold text-gray-500 mb-1">Stock sistema</p>
                     <div className="space-y-1">
                       <div>
-                        <p className="text-[10px] uppercase tracking-wide text-gray-400">Cajas</p>
+                        <p className="text-xs uppercase tracking-wide text-gray-400">Cajas</p>
                         <p className="text-2xl font-extrabold text-gray-900 leading-tight">
                           {productoEscaneado.stock_cajas ?? 0}
                         </p>
                       </div>
                       <div>
-                        <p className="text-[10px] uppercase tracking-wide text-gray-400">Unidades</p>
+                        <p className="text-xs uppercase tracking-wide text-gray-400">Unidades</p>
                         <p className="text-xl font-bold text-gray-900 leading-tight">
                           {productoEscaneado.stock_unidades ?? 0}
                         </p>
@@ -1450,7 +1609,11 @@ export default function InventarioDetailPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-gray-900">Productos registrados</h2>
-            <Badge variant="info">{detalles.length} ítem{detalles.length !== 1 ? 's' : ''}</Badge>
+            <Badge variant="info">
+              {totalInventariados}/{detalles.length} ítem
+              {detalles.length !== 1 ? 's' : ''} inventariado
+              {detalles.length !== 1 ? 's' : ''}
+            </Badge>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -1510,12 +1673,17 @@ export default function InventarioDetailPage() {
                       >
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-900">{det.descripcion}</p>
-                          <p className="text-xs text-gray-400">
+                          <p className="text-base text-gray-900">
                             {det.presentacion} · {det.laboratorio}
                           </p>
                           <p className="mt-0.5 font-mono text-sm text-gray-700">
                             {det.codigo_barras}
                           </p>
+                          {refrigeradoByBarcode[(det.codigo_barras ?? '').trim()] && (
+                            <div className="mt-1 inline-flex h-7 w-7 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 border border-cyan-200" title="Producto refrigerado">
+                              <Snowflake className="h-3.5 w-3.5" />
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">
                           <div className="flex flex-col items-end gap-0.5">
@@ -1576,7 +1744,7 @@ export default function InventarioDetailPage() {
         </CardContent>
         {detalles.length > 0 && (
           <CardFooter>
-            <div className="flex gap-4 text-xs text-gray-500">
+            <div className="flex gap-4 text-sm text-gray-500">
               <span className="text-blue-600 font-medium">
                 +{totalSobrantes} sobrantes
               </span>

@@ -24,6 +24,8 @@ interface DetalleBody {
   stock_real_unidades?: number;
   /** Total contado en unidades (si el frontend lo calculó) */
   stock_real: number;
+  /** Marca manual de revisión de diferencia (1/0) */
+  verificado?: number | boolean | null;
 }
 
 /** POST /api/inventario/[id]/detalles - agregar una línea al control */
@@ -116,6 +118,7 @@ export async function POST(
       con_diferencias: conDiferencias,
       auditado,
       ajustado: 0,
+      verificado: 0,
     })
     .select()
     .single();
@@ -162,6 +165,7 @@ export async function PATCH(
     stock_real: number;
     stock_sist_cajas?: number | null;
     stock_sist_unidades?: number | null;
+    verificado?: number | boolean | null;
   };
 
   if (!body.detalle_id) {
@@ -179,7 +183,7 @@ export async function PATCH(
   // Obtener stock de sistema actual de la fila para recalcular diferencias
   const { data: detalleActual } = await admin
     .from('controles_inventario_detalle')
-    .select('stock_sist_cajas, stock_sist_unidades')
+    .select('stock_sist_cajas, stock_sist_unidades, verificado')
     .eq('id', body.detalle_id)
     .maybeSingle();
 
@@ -213,6 +217,20 @@ export async function PATCH(
     conDiferencias = 1;
   }
 
+  const verificadoSolicitado =
+    body.verificado == null
+      ? undefined
+      : (typeof body.verificado === 'boolean'
+          ? body.verificado
+          : Number(body.verificado) === 1);
+  // Si ya no hay diferencias, no corresponde mantener "verificado".
+  const verificadoFinal =
+    conDiferencias === 0
+      ? 0
+      : (verificadoSolicitado !== undefined
+          ? (verificadoSolicitado ? 1 : 0)
+          : (detalleActual?.verificado === 1 ? 1 : 0));
+
   const { data, error } = await admin
     .from('controles_inventario_detalle')
     .update({
@@ -224,6 +242,7 @@ export async function PATCH(
       estado,
       con_diferencias: conDiferencias,
       auditado,
+      verificado: verificadoFinal,
     })
     .eq('id', body.detalle_id)
     .select()

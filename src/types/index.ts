@@ -58,6 +58,8 @@ export interface ProductoLegacy {
   unidades_por_caja?: number;
   /** Si el producto admite venta por unidades sueltas (1) o no (0). Base externa: tinyint. */
   fraccionable?: number;
+  /** Si requiere cadena de frío (medicamentos.refrigeracion = 'S'). */
+  refrigerado?: boolean;
 }
 
 // ------------------------------------------------------------
@@ -101,6 +103,8 @@ export interface ControlInventarioDetalle {
   stock_real_unidades?: number | null;
   /** Total contado en unidades (cajas*unidades_por_caja + unidades_sueltas) */
   stock_real: number;
+  /** Marcado manual como revisado en pantalla de recuento */
+  verificado?: number | null;
   diferencia: number;
   fecha_registro: string;
 }
