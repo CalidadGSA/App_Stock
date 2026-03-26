@@ -28,6 +28,7 @@ export default function InventarioDiferenciasPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const [detalleSeleccionadoId, setDetalleSeleccionadoId] = useState<string | null>(null);
 
   const [productosPorBarcode, setProductosPorBarcode] = useState<
     Record<string, ProductoLegacy | null>
@@ -98,7 +99,8 @@ export default function InventarioDiferenciasPage() {
 
   const detallesConDiferencias = useMemo(() => {
     const todos = control?.controles_inventario_detalle ?? [];
-    return todos.filter((d) => {
+    return todos
+      .filter((d) => {
       // Si tenemos cajas/unidades desglosado, usamos esa diferencia.
       const sistC = d.stock_sist_cajas ?? null;
       const sistU = d.stock_sist_unidades ?? null;
@@ -118,8 +120,20 @@ export default function InventarioDiferenciasPage() {
 
       // Fallback: usar diferencia total si no hay desglose
       return (d.diferencia ?? 0) !== 0;
-    });
+      })
+      .sort((a, b) => {
+        const aVerificado = a.verificado === 1 ? 1 : 0;
+        const bVerificado = b.verificado === 1 ? 1 : 0;
+        if (aVerificado !== bVerificado) {
+          // verificados al final
+          return aVerificado - bVerificado;
+        }
+        return new Date(a.fecha_registro).getTime() - new Date(b.fecha_registro).getTime();
+      });
   }, [control]);
+
+  const detalleSeleccionado =
+    detallesConDiferencias.find((d) => d.id === detalleSeleccionadoId) ?? null;
 
   async function handleGuardarLinea(detalle: ControlInventarioDetalle) {
     const current = edits[detalle.id] ?? {
@@ -320,6 +334,124 @@ export default function InventarioDiferenciasPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {detalleSeleccionado && (
+            <div className="border-b border-gray-100 bg-blue-50/60 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-gray-900">
+                    {detalleSeleccionado.descripcion}
+                  </p>
+                  <p className="text-sm text-gray-700">
+                    {detalleSeleccionado.presentacion}{' '}
+                    {detalleSeleccionado.laboratorio
+                      ? `· ${detalleSeleccionado.laboratorio}`
+                      : ''}
+                  </p>
+                  <p className="text-sm text-gray-700 mt-0.5">
+                    {detalleSeleccionado.codigo_barras}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setDetalleSeleccionadoId(null)}
+                >
+                  Cerrar
+                </Button>
+              </div>
+
+              {(() => {
+                const det = detalleSeleccionado;
+                const edit = edits[det.id] ?? {
+                  cajas: det.stock_real_cajas != null ? String(det.stock_real_cajas) : '',
+                  unidades: det.stock_real_unidades != null ? String(det.stock_real_unidades) : '',
+                };
+                const prod = productosPorBarcode[det.codigo_barras];
+                const sistCajas = prod?.stock_cajas ?? det.stock_sist_cajas ?? 0;
+                const sistUnidades = prod?.stock_unidades ?? det.stock_sist_unidades ?? 0;
+                const realCajas = edit.cajas.trim() === '' ? 0 : Number(edit.cajas);
+                const realUnidades = edit.unidades.trim() === '' ? 0 : Number(edit.unidades);
+                const diffCajas = realCajas - sistCajas;
+                const diffUnidades = realUnidades - sistUnidades;
+                const noPermitirUnidades =
+                  !!prod && prod.fraccionable !== 1 && (prod.stock_unidades ?? 0) === 0;
+                return (
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                    <div className="rounded-md border border-gray-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Stock sistema</p>
+                      <p className="text-sm text-gray-900 mt-1">Cajas: {sistCajas}</p>
+                      <p className="text-sm text-gray-900">Unidades: {sistUnidades}</p>
+                    </div>
+                    <div className="rounded-md border border-gray-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Stock real</p>
+                      <div className="mt-1 space-y-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={edit.cajas}
+                          onChange={(e) =>
+                            setEdits((prev) => ({
+                              ...prev,
+                              [det.id]: { ...edit, cajas: e.target.value },
+                            }))
+                          }
+                          className="w-full text-center text-sm"
+                          placeholder="Cajas"
+                        />
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={noPermitirUnidades ? '0' : edit.unidades}
+                          onChange={(e) =>
+                            !noPermitirUnidades &&
+                            setEdits((prev) => ({
+                              ...prev,
+                              [det.id]: { ...edit, unidades: e.target.value },
+                            }))
+                          }
+                          className="w-full text-center text-sm"
+                          placeholder="Unidades"
+                          disabled={noPermitirUnidades}
+                        />
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-gray-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Diferencia</p>
+                      <p
+                        className={`text-sm mt-1 font-semibold ${
+                          diffCajas === 0 ? 'text-gray-700' : diffCajas > 0 ? 'text-blue-700' : 'text-red-700'
+                        }`}
+                      >
+                        Cajas: {diffCajas > 0 ? '+' : ''}
+                        {diffCajas.toFixed(0)}
+                      </p>
+                      <p
+                        className={`text-sm font-semibold ${
+                          diffUnidades === 0 ? 'text-gray-700' : diffUnidades > 0 ? 'text-blue-700' : 'text-red-700'
+                        }`}
+                      >
+                        Unidades: {diffUnidades > 0 ? '+' : ''}
+                        {diffUnidades.toFixed(0)}
+                      </p>
+                    </div>
+                    <div className="flex items-end">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => handleGuardarLinea(det)}
+                        loading={guardando}
+                        className="w-full"
+                      >
+                        Guardar cambios
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
           {detallesConDiferencias.length === 0 ? (
             <p className="px-5 py-6 text-center text-sm text-gray-400">
               No hay diferencias. Podés cerrar el control.
@@ -394,7 +526,8 @@ export default function InventarioDiferenciasPage() {
                         key={det.id}
                         className={`border-b border-gray-50 ${
                           det.verificado === 1 ? 'bg-blue-50' : ''
-                        }`}
+                        } cursor-pointer hover:bg-gray-50`}
+                        onClick={() => setDetalleSeleccionadoId(det.id)}
                       >
                         <td className="px-4 py-3 align-top">
                           <div className="font-medium text-gray-900">
@@ -411,8 +544,15 @@ export default function InventarioDiferenciasPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-center align-top">
-                          <div className="text-sm text-gray-900">
-                            {sistCajas} / {sistUnidades}
+                          <div className="inline-flex min-w-[140px] flex-col items-start text-sm text-gray-900">
+                            <div className="flex w-full items-center justify-between gap-3">
+                              <span className="text-xs uppercase tracking-wide text-gray-500">Cajas</span>
+                              <span>{sistCajas}</span>
+                            </div>
+                            <div className="flex w-full items-center justify-between gap-3">
+                              <span className="text-xs uppercase tracking-wide text-gray-500">Unidades</span>
+                              <span>{sistUnidades}</span>
+                            </div>
                           </div>
                           <div className="text-[11px] text-gray-400">
                             Total unidades sist.:{' '}
@@ -422,7 +562,7 @@ export default function InventarioDiferenciasPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-center align-top">
-                          <div className="flex flex-col gap-1 items-center">
+                          <div className="inline-flex min-w-[140px] flex-col gap-2 items-stretch">
                             <Input
                               type="number"
                               min="0"
@@ -437,7 +577,7 @@ export default function InventarioDiferenciasPage() {
                                   },
                                 }))
                               }
-                              className="w-20 text-center text-sm"
+                              className="w-full text-center text-sm"
                               placeholder="0"
                             />
                             <Input
@@ -459,7 +599,7 @@ export default function InventarioDiferenciasPage() {
                                   },
                                 }))
                               }
-                              className="w-20 text-center text-sm"
+                              className="w-full text-center text-sm"
                               placeholder="0"
                               disabled={!!noPermitirUnidades}
                               title={
@@ -471,18 +611,18 @@ export default function InventarioDiferenciasPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-center align-top">
-                          <div className="flex flex-col gap-1 text-xs">
+                          <div className="inline-flex min-w-[140px] flex-col gap-1 text-xs items-start">
                             <span
                               className={`font-semibold ${diffColorC}`}
                             >
-                              Dif. cajas:{' '}
+                              Cajas:{' '}
                               {diffCajas > 0 ? '+' : ''}
                               {diffCajas.toFixed(0)}
                             </span>
                             <span
                               className={`font-semibold ${diffColorU}`}
                             >
-                              Dif. unidades:{' '}
+                              Unidades:{' '}
                               {diffUnidades > 0 ? '+' : ''}
                               {diffUnidades.toFixed(0)}
                             </span>
@@ -492,9 +632,10 @@ export default function InventarioDiferenciasPage() {
                           <Button
                             size="sm"
                             variant="primary"
-                            onClick={() =>
-                              handleGuardarLinea(det)
-                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleGuardarLinea(det);
+                            }}
                             loading={guardando}
                           >
                             Guardar

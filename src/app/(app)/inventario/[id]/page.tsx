@@ -63,6 +63,7 @@ export default function InventarioDetailPage() {
     { producto_id_sistema: string; codigo_barras: string | null; descripcion: string; presentacion: string | null; laboratorio: string | null }[]
   >([]);
   const [buscandoEnMedicamentos, setBuscandoEnMedicamentos] = useState(false);
+  const [esDispositivoTactil, setEsDispositivoTactil] = useState(false);
   const [refrigeradoByBarcode, setRefrigeradoByBarcode] = useState<Record<string, boolean>>({});
   const [editandoCard, setEditandoCard] = useState(false);
   const [cardCameraActive, setCardCameraActive] = useState(false);
@@ -433,6 +434,18 @@ export default function InventarioDetailPage() {
       stopCardCamera();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    // En móviles/tablets táctiles evitamos autofocus para no abrir teclado al entrar.
+    const media = window.matchMedia('(hover: none) and (pointer: coarse)');
+    const apply = () => setEsDispositivoTactil(media.matches);
+    apply();
+    media.addEventListener?.('change', apply);
+    return () => {
+      media.removeEventListener?.('change', apply);
+    };
   }, []);
 
   useEffect(() => {
@@ -1301,7 +1314,7 @@ export default function InventarioDetailPage() {
               placeholder="Escanear código o escribir nombre de producto..."
               // En inventarios diarios guiados mantenemos el foco en el escáner;
               // en ocasionales/auditoría dejamos que el usuario use el buscador manual.
-              autoFocusInput={esControlGuiado && !productoEscaneado}
+              autoFocusInput={esControlGuiado && !productoEscaneado && !esDispositivoTactil}
               // Si hay card abierta y no se está editando manualmente, capturamos globalmente
               // para que el lector USB funcione aunque no esté enfocado el input del scanner.
               captureGlobally={!!productoEscaneado && !editandoCard}
@@ -1674,18 +1687,20 @@ export default function InventarioDetailPage() {
                         }}
                       >
                         <td className="px-4 py-3">
-                          <p className="font-medium text-gray-900">{det.descripcion}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-gray-900">{det.descripcion}</p>
+                            {refrigeradoByBarcode[(det.codigo_barras ?? '').trim()] && (
+                              <div className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 border border-cyan-200" title="Producto refrigerado">
+                                <Snowflake className="h-3.5 w-3.5" />
+                              </div>
+                            )}
+                          </div>
                           <p className="text-base text-gray-900">
                             {det.presentacion} · {det.laboratorio}
                           </p>
                           <p className="mt-0.5 font-mono text-sm text-gray-700">
                             {det.codigo_barras}
                           </p>
-                          {refrigeradoByBarcode[(det.codigo_barras ?? '').trim()] && (
-                            <div className="mt-1 inline-flex h-7 w-7 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 border border-cyan-200" title="Producto refrigerado">
-                              <Snowflake className="h-3.5 w-3.5" />
-                            </div>
-                          )}
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">
                           <div className="flex flex-col items-end gap-0.5">
