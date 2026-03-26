@@ -1383,16 +1383,18 @@ export default function InventarioDetailPage() {
               <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4">
                 <div className="flex items-start justify-between gap-3 mb-4">
                   <div>
-                    <p className="font-semibold text-gray-900 text-lg">{productoEscaneado.descripcion}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-gray-900 text-lg">{productoEscaneado.descripcion}</p>
+                      {productoEscaneado.refrigerado && (
+                        <div className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 border border-cyan-200" title="Producto refrigerado">
+                          <Snowflake className="h-3.5 w-3.5" />
+                        </div>
+                      )}
+                    </div>
                     <p className="text-base text-gray-900">{productoEscaneado.presentacion} . {productoEscaneado.laboratorio}</p>
                     <p className="mt-2 font-mono text-base text-gray-800">
                       {productoEscaneado.codigo_barras}
                     </p>
-                    {productoEscaneado.refrigerado && (
-                      <div className="mt-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 border border-cyan-200" title="Producto refrigerado">
-                        <Snowflake className="h-4 w-4" />
-                      </div>
-                    )}
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-2">
                     {(() => {
