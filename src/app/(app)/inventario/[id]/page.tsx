@@ -954,8 +954,36 @@ export default function InventarioDetailPage() {
           const unidadesNuevas = nuevo.stock_unidades ?? 0;
 
           if (cajasPrevias !== cajasNuevas || unidadesPrevias !== unidadesNuevas) {
+            // Refrescar stock del sistema en la card y en el listado para evitar confusión.
+            setProductoEscaneado((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                stock_sistema: nuevo.stock_sistema,
+                stock_cajas: nuevo.stock_cajas,
+                stock_unidades: nuevo.stock_unidades,
+                unidades_por_caja: nuevo.unidades_por_caja,
+              };
+            });
+            if (detalleSeleccionadoId) {
+              setControl((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  controles_inventario_detalle: prev.controles_inventario_detalle.map((d) => {
+                    if (d.id !== detalleSeleccionadoId) return d;
+                    return {
+                      ...d,
+                      stock_sistema: nuevo.stock_sistema,
+                      stock_sist_cajas: nuevo.stock_cajas ?? null,
+                      stock_sist_unidades: nuevo.stock_unidades ?? null,
+                    };
+                  }),
+                };
+              });
+            }
             setErrorProducto(
-              'El stock del sistema cambió mientras se hacía el conteo. Revisá nuevamente antes de confirmar.'
+              'El stock del sistema cambió mientras se hacía el conteo. Se actualizó en pantalla; revisá nuevamente antes de confirmar.'
             );
             return;
           }
