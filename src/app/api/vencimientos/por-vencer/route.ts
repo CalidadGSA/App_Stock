@@ -15,6 +15,12 @@ type ItemRow = {
   cantidad: number;
 };
 
+function parseFechaISOaUTC(fecha: string): number {
+  const [y, m, d] = String(fecha).split('-').map((n) => parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return NaN;
+  return Date.UTC(y, m - 1, d);
+}
+
 /** GET /api/vencimientos/por-vencer?days=30&cod_rubro=123
  * Lista productos por vencer en la sucursal actual, ordenados por fecha_vencimiento ASC.
  */
@@ -35,7 +41,7 @@ export async function GET(request: NextRequest) {
 
   const hoy = new Date();
   const hoyStr = hoy.toISOString().split('T')[0];
-  const hoyMid = new Date(`${hoyStr}T00:00:00.000Z`).getTime();
+  const hoyMid = parseFechaISOaUTC(hoyStr);
   const hasta = new Date(hoy.getTime() + days * 86400000).toISOString().split('T')[0];
 
   const admin = await createAdminClient();
@@ -58,7 +64,8 @@ export async function GET(request: NextRequest) {
 
   const rows = (detalles ?? []) as any[];
   const rowsDentroRango = rows.filter((r) => {
-    const fechaV = new Date(r.fecha_vencimiento).getTime();
+    const fechaV = parseFechaISOaUTC(String(r.fecha_vencimiento));
+    if (!Number.isFinite(fechaV)) return false;
     const dias = Math.floor((fechaV - hoyMid) / 86400000);
     return dias >= daysMin;
   });

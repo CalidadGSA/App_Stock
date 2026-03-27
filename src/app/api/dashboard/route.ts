@@ -14,6 +14,7 @@ export async function GET() {
   const admin = await createAdminClient();
   const hoy = new Date();
   const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
+  const inicio60dias = new Date(hoy.getTime() - 60 * 86400000).toISOString();
   const en30dias = new Date(hoy.getTime() + 30 * 86400000).toISOString().split('T')[0];
   const en60dias = new Date(hoy.getTime() + 60 * 86400000).toISOString().split('T')[0];
   const en90dias = new Date(hoy.getTime() + 90 * 86400000).toISOString().split('T')[0];
@@ -39,9 +40,11 @@ export async function GET() {
 
   let invDetallesQuery = admin
     .from('controles_inventario_detalle')
-    .select('diferencia, controles_inventario!inner(sucursal_id, origen)')
+    .select('producto_id_sistema, con_diferencias, estado, diferencia, controles_inventario!inner(sucursal_id, origen, tipo)')
     .eq('controles_inventario.sucursal_id', sucursalId)
-    .neq('diferencia', 0);
+    .gte('controles_inventario.fecha_inicio', inicio60dias)
+    .neq('controles_inventario.tipo', 'auditoria')
+    .neq('controles_inventario.tipo', 'ocasional_auditoria');
 
   let ultimosInvQuery = admin
     .from('controles_inventario')
@@ -92,12 +95,42 @@ export async function GET() {
         .limit(5),
     ]);
 
+  const itemsConDiferenciaUnicos = new Set<string>();
+  for (const det of invDetalles.data ?? []) {
+    const d = det as {
+      producto_id_sistema?: string | number | null;
+      con_diferencias?: number | null;
+      estado?: string | null;
+      diferencia?: number | null;
+    };
+    const productoId = String(d.producto_id_sistema ?? '').trim();
+    if (!productoId) continue;
+    const estadoNorm = String(d.estado ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase();
+    if (
+      estadoNorm === 'sin diferencias' ||
+      estadoNorm === 'ajustado' ||
+      estadoNorm === 'ajustado_sucursal' ||
+      estadoNorm === 'ajustado_auditoria'
+    ) {
+      continue;
+    }
+    const tieneDiferencia =
+      Number(d.con_diferencias ?? 0) === 1 ||
+      Number(d.diferencia ?? 0) !== 0;
+    if (!tieneDiferencia) continue;
+    itemsConDiferenciaUnicos.add(productoId);
+  }
+
   return NextResponse.json({
     data: {
       rol: operador.rol ?? 'operador_sucursal',
       inventarios_total: invTotal.count ?? 0,
       inventarios_mes: invMes.count ?? 0,
-      items_con_diferencia: invDetalles.data?.length ?? 0,
+      items_con_diferencia: itemsConDiferenciaUnicos.size,
       controles_vencimientos_total: vencTotal.count ?? 0,
       productos_vencidos: vencidos.count ?? 0,
       productos_por_vencer_30: porVencer30.count ?? 0,

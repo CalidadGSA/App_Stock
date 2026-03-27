@@ -40,5 +40,16 @@ export async function GET(
   if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) {
     return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   }
+  // Si el inventario está en progreso, solo puede ingresar el operador que lo abrió o un admin.
+  if (
+    !esAdmin &&
+    data.estado === 'en_progreso' &&
+    String(data.usuario_id ?? '') !== String(operador.idoperador ?? '')
+  ) {
+    return NextResponse.json(
+      { error: 'Este inventario en progreso solo puede abrirlo el operador que lo inició.' },
+      { status: 403 }
+    );
+  }
   return NextResponse.json({ data });
 }

@@ -79,6 +79,7 @@ export default function InventarioDetailPage() {
   const cardCameraArmedRef = useRef(true);
   const inputCajasRef = useRef<HTMLInputElement>(null);
   const inputUnidadesRef = useRef<HTMLInputElement>(null);
+  const cardProductoRef = useRef<HTMLDivElement>(null);
   const ultimoKeyMsRef = useRef(0);
   const scannerBufferRef = useRef('');
   const scannerEnInputRef = useRef(false);
@@ -132,6 +133,16 @@ export default function InventarioDetailPage() {
       void cargarRefrigerados();
     }
   }, [control, refrigeradoByBarcode]);
+
+  useEffect(() => {
+    if (!productoEscaneado) return;
+    const timer = window.setTimeout(() => {
+      cardProductoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      inputCajasRef.current?.focus();
+      inputCajasRef.current?.select();
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [productoEscaneado]);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -1244,6 +1255,25 @@ export default function InventarioDetailPage() {
       totalFaltantes += 1;
     }
   }
+  const tieneDiferencias = detalles.some((d) => {
+    const row = d as unknown as {
+      con_diferencias?: number | boolean | string | null;
+      estado?: string | null;
+    };
+    const conDif = Number(row.con_diferencias ?? 0) === 1 || row.con_diferencias === true;
+    if (conDif) return true;
+    const estadoNorm = String(row.estado ?? '')
+      .toLowerCase()
+      .replace(/[_\s]+/g, ' ')
+      .trim();
+    if (estadoNorm.includes('diferencia')) return true;
+
+    const sistC = d.stock_sist_cajas ?? 0;
+    const sistU = d.stock_sist_unidades ?? 0;
+    const realC = d.stock_real_cajas ?? 0;
+    const realU = d.stock_real_unidades ?? 0;
+    return realC !== sistC || realU !== sistU;
+  });
 
   return (
     <div className="flex flex-col gap-6">
@@ -1282,15 +1312,15 @@ export default function InventarioDetailPage() {
           </div>
         </div>
 
-        {enProgreso && (
+        {(enProgreso || (!enProgreso && tieneDiferencias)) && (
           <Button
-            variant="danger"
+            variant={enProgreso ? 'danger' : 'outline'}
             size="sm"
             onClick={() => router.push(`/inventario/${id}/diferencias`)}
             className="shrink-0 gap-1"
           >
             <CheckCircle2 className="h-4 w-4" />
-            Revisar diferencias
+            {enProgreso ? 'Revisar diferencias' : 'Ver diferencias'}
           </Button>
         )}
       </div>
@@ -1393,7 +1423,7 @@ export default function InventarioDetailPage() {
 
             {/* Ficha del producto escaneado */}
             {productoEscaneado && (
-              <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4">
+              <div ref={cardProductoRef} className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4">
                 <div className="flex items-start justify-between gap-3 mb-4">
                   <div>
                     <div className="flex items-center gap-2">

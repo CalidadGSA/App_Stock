@@ -27,10 +27,11 @@ export function formatDateTime(dateStr: string | null | undefined): string {
 
 export function diasHastaVencimiento(fechaVenc: string): number {
   const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  const venc = new Date(fechaVenc);
-  venc.setHours(0, 0, 0, 0);
-  return Math.ceil((venc.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+  const hoyUTC = Date.UTC(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const [y, m, d] = String(fechaVenc).split('-').map((n) => parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return 0;
+  const vencUTC = Date.UTC(y, m - 1, d);
+  return Math.ceil((vencUTC - hoyUTC) / 86400000);
 }
 
 export function colorVencimiento(dias: number): string {

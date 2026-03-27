@@ -55,8 +55,7 @@ export async function GET(request: NextRequest) {
       .eq('controles_inventario.sucursal_id', sucursalNum)
       .gte('controles_inventario.fecha_inicio', desdeIso)
       .lte('controles_inventario.fecha_inicio', hastaIso)
-      .eq('con_diferencias', 1)
-      .eq('ajustado', 0);
+      .eq('con_diferencias', 1);
 
     if (categoriaMacro) {
       query = query.eq('controles_inventario.categoria_macro', categoriaMacro);
@@ -96,7 +95,6 @@ export async function GET(request: NextRequest) {
     >();
 
     for (const d of ((data as Row[]) ?? [])) {
-      if (d.ajustado === 1) continue;
       const sistC = d.stock_sist_cajas ?? 0;
       const sistU = d.stock_sist_unidades ?? 0;
       const realC = d.stock_real_cajas ?? 0;

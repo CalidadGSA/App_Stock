@@ -138,10 +138,10 @@ export default function DiferenciasResumenPage() {
                     <th className="px-4 py-2 text-left font-medium text-gray-600">
                       Producto
                     </th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600">
+                    <th className="px-4 py-2 text-center font-medium text-gray-600">
                       Código barras
                     </th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600">
+                    <th className="px-4 py-2 text-center font-medium text-gray-600">
                       Mes actual (cajas / unid.)
                     </th>
                   </tr>
@@ -149,7 +149,7 @@ export default function DiferenciasResumenPage() {
                 <tbody className="divide-y divide-gray-100">
                   {items.map((r) => (
                     <tr key={`${r.producto_id_sistema}-${r.codigo_barras}`}>
-                      <td className="px-4 py-2 align-top">
+                      <td className="px-4 py-2 align-middle">
                         <p className="font-medium text-gray-900">
                           {r.descripcion}
                         </p>
@@ -160,10 +160,10 @@ export default function DiferenciasResumenPage() {
                           ID sistema: {r.producto_id_sistema}
                         </p>
                       </td>
-                      <td className="px-4 py-2 align-top font-mono text-xs text-gray-700">
+                      <td className="px-4 py-2 align-middle text-center font-mono text-xs text-gray-700">
                         {r.codigo_barras}
                       </td>
-                      <td className="px-4 py-2 align-top text-right text-xs text-gray-800">
+                      <td className="px-4 py-2 align-middle text-center text-xs text-gray-800">
                         {r.diffCajasActual.toFixed(0)} / {r.diffUnidadesActual.toFixed(0)}
                       </td>
                     </tr>

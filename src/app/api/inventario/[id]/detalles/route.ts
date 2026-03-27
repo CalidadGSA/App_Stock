@@ -55,7 +55,6 @@ export async function POST(
   if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   const tipoControl = inferirTipoControlInventario(control);
   if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
-  if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'El control ya está cerrado' }, { status: 400 });
 
   const body = await request.json() as DetalleBody;
 
@@ -183,9 +182,28 @@ export async function PATCH(
   // Obtener stock de sistema actual de la fila para recalcular diferencias
   const { data: detalleActual } = await admin
     .from('controles_inventario_detalle')
-    .select('stock_sist_cajas, stock_sist_unidades, verificado')
+    .select('stock_sist_cajas, stock_sist_unidades, verificado, estado, ajustado')
     .eq('id', body.detalle_id)
     .maybeSingle();
+
+  if (!detalleActual) {
+    return NextResponse.json({ error: 'Detalle no encontrado' }, { status: 404 });
+  }
+
+  const detalleEstado = (detalleActual as { estado?: string | null }).estado ?? null;
+  const detalleAjustado = (detalleActual as { ajustado?: number | null }).ajustado ?? 0;
+
+  // Regla:
+  // - En progreso: siempre editable.
+  // - Cerrado: editable solo mientras NO esté ajustado por sucursal.
+  if (control.estado !== 'en_progreso') {
+    if (detalleEstado === 'ajustado_sucursal' || detalleAjustado === 1) {
+      return NextResponse.json(
+        { error: 'Este ítem ya fue ajustado por sucursal y no puede editarse.' },
+        { status: 400 }
+      );
+    }
+  }
 
   let sistCajas = detalleActual?.stock_sist_cajas ?? 0;
   let sistUnidades = detalleActual?.stock_sist_unidades ?? 0;
