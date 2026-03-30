@@ -156,6 +156,14 @@ export interface DashboardStats {
   productos_por_vencer_30: number;
   productos_por_vencer_60: number;
   productos_por_vencer_90: number;
+  inventario_base_por_sucursal?: Array<{
+    sucursal_id: number;
+    sucursal_nombre: string;
+    inventariados: number;
+    pendientes: number;
+    total: number;
+    porcentaje: number;
+  }>;
   ultimos_inventarios: Pick<
     ControlInventario,
     'id' | 'fecha_inicio' | 'estado' | 'descripcion' | 'categoria_macro' | 'sucursales'

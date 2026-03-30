@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { LogOut, ClipboardList, CalendarClock, Menu, X } from 'lucide-react';
+import { LogOut, ClipboardList, CalendarClock, Menu, X, Moon, Sun } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 
@@ -18,6 +18,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [rol, setRol] = useState<'admin' | 'operador_sucursal'>('operador_sucursal');
+  const [modoOscuro, setModoOscuro] = useState(false);
 
   const estaEnControlInventario =
     pathname.startsWith('/inventario/') &&
@@ -45,6 +46,33 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
     }
     void cargarRol();
   }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const guardado = localStorage.getItem('theme');
+    if (guardado === 'dark') {
+      root.classList.add('dark');
+      setModoOscuro(true);
+      return;
+    }
+    if (guardado === 'light') {
+      root.classList.remove('dark');
+      setModoOscuro(false);
+      return;
+    }
+    const prefiereOscuro = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.classList.toggle('dark', prefiereOscuro);
+    setModoOscuro(prefiereOscuro);
+  }, []);
+
+  function toggleModoOscuro() {
+    const root = document.documentElement;
+    const actualmenteOscuro = root.classList.contains('dark');
+    const siguiente = !actualmenteOscuro;
+    setModoOscuro(siguiente);
+    root.classList.toggle('dark', siguiente);
+    localStorage.setItem('theme', siguiente ? 'dark' : 'light');
+  }
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -153,6 +181,14 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
               Cambiar sucursal
             </button>
           )}
+          <button
+            onClick={toggleModoOscuro}
+            className="hidden xl:inline-flex items-center justify-center rounded-lg p-2 text-sm text-gray-600 hover:bg-gray-100 transition-colors shrink-0"
+            title={modoOscuro ? 'Desactivar modo oscuro' : 'Activar modo oscuro'}
+            aria-label={modoOscuro ? 'Desactivar modo oscuro' : 'Activar modo oscuro'}
+          >
+            {modoOscuro ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
           {!ocultarAccionesOperativas && (
             <button
               onClick={handleLogout}
@@ -248,6 +284,14 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                 Cambiar sucursal
               </button>
             )}
+            <button
+              onClick={toggleModoOscuro}
+              className="flex items-center justify-center rounded-lg px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 text-left w-full"
+              title={modoOscuro ? 'Desactivar modo oscuro' : 'Activar modo oscuro'}
+              aria-label={modoOscuro ? 'Desactivar modo oscuro' : 'Activar modo oscuro'}
+            >
+              {modoOscuro ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
             {!ocultarAccionesOperativas && (
               <button
                 onClick={handleLogout}

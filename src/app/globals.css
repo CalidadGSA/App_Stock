@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: var(--font-inter);
@@ -8,8 +9,83 @@
   box-sizing: border-box;
 }
 
+/* Variantes de boton controladas por html.dark (toggle manual del navbar) */
+.btn-primary {
+  background-color: #2563eb;
+  color: #ffffff;
+}
+.btn-primary:hover { background-color: #1d4ed8; }
+.btn-primary:active { background-color: #1e40af; }
+
+.btn-secondary {
+  background-color: #f3f4f6;
+  color: #1f2937;
+}
+.btn-secondary:hover { background-color: #e5e7eb; }
+.btn-secondary:active { background-color: #d1d5db; }
+
+.btn-danger {
+  background-color: #dc2626;
+  color: #ffffff;
+}
+.btn-danger:hover { background-color: #b91c1c; }
+.btn-danger:active { background-color: #991b1b; }
+
+.btn-ghost {
+  background-color: transparent;
+  color: #4b5563;
+}
+.btn-ghost:hover { background-color: #f3f4f6; }
+
+.btn-outline {
+  border: 1px solid #d1d5db;
+  background-color: #ffffff;
+  color: #374151;
+}
+.btn-outline:hover { background-color: #f9fafb; }
+
+html.dark .btn-primary {
+  background-color: #2563eb;
+  color: #ffffff;
+}
+html.dark .btn-primary:hover { background-color: #3b82f6; }
+
+html.dark .btn-secondary {
+  background-color: #1f2937;
+  color: #f3f4f6;
+}
+html.dark .btn-secondary:hover { background-color: #374151; }
+
+html.dark .btn-danger {
+  background-color: #dc2626;
+  color: #ffffff;
+}
+html.dark .btn-danger:hover { background-color: #ef4444; }
+
+html.dark .btn-ghost {
+  background-color: transparent;
+  color: #e5e7eb;
+}
+html.dark .btn-ghost:hover { background-color: #1f2937; }
+
+html.dark .btn-outline {
+  border-color: #4b5563;
+  background-color: #111827;
+  color: #f3f4f6;
+}
+html.dark .btn-outline:hover { background-color: #1f2937; }
+
 html, body {
   height: 100%;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark body {
+  background: #0b1220;
+  color: #e5e7eb;
 }
 
 /* Touch targets amigables para tablets */
@@ -48,4 +124,49 @@ button, a, input, select, textarea {
   .text-gray-600 {
     color: #1f2937 !important;
   }
+
+  html.dark .bg-white {
+    background-color: #111827 !important;
+  }
+
+  html.dark .bg-gray-50 {
+    background-color: #0f172a !important;
+  }
+
+  html.dark .bg-blue-50 {
+    background-color: #0b2942 !important;
+  }
+
+  html.dark .border-gray-100,
+  html.dark .border-gray-200,
+  html.dark .border-gray-300 {
+    border-color: #374151 !important;
+  }
+
+  html.dark .text-gray-900 {
+    color: #f9fafb !important;
+  }
+
+  html.dark .text-gray-800 {
+    color: #f3f4f6 !important;
+  }
+
+  html.dark .text-gray-700 {
+    color: #e5e7eb !important;
+  }
+
+  html.dark .text-gray-600,
+  html.dark .text-gray-500,
+  html.dark .text-gray-400 {
+    color: #d1d5db !important;
+  }
+
+  html.dark .hover\:bg-gray-50:hover {
+    background-color: #1f2937 !important;
+  }
+
+  html.dark .hover\:bg-gray-100:hover {
+    background-color: #1f2937 !important;
+  }
+
 }

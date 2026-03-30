@@ -1727,8 +1727,8 @@ export default function InventarioDetailPage() {
                           !yaInventariado
                             ? ''
                             : conDiferencia
-                              ? 'bg-red-50'
-                              : 'bg-green-50'
+                              ? 'bg-red-50 dark:bg-red-950/35'
+                              : 'bg-green-50 dark:bg-emerald-950/35'
                         } ${isSelected ? 'ring-2 ring-blue-300' : ''}`}
                         onClick={async () => {
                           setErrorProducto('');

@@ -158,6 +158,44 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      <Card>
+        <CardHeader>
+          <div>
+            <h3 className="font-semibold text-gray-900">
+              Progreso del trimestre actual
+            </h3>
+            <p className="mt-1 text-xs text-gray-500">
+              Productos recontados respecto de la base asignada para esta sucursal.
+            </p>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {(stats?.inventario_base_por_sucursal ?? []).length === 0 ? (
+            <p className="px-5 py-4 text-sm text-gray-400">Sin datos de base_productos para el trimestre actual.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {(stats?.inventario_base_por_sucursal ?? []).map((r) => (
+                <li key={r.sucursal_id} className="px-5 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-gray-800">{r.sucursal_nombre}</p>
+                    <Badge variant="outline">{r.inventariados}/{r.total}</Badge>
+                  </div>
+                  <div className="mt-2 h-2 w-full rounded bg-gray-100">
+                    <div
+                      className="h-2 rounded bg-blue-600"
+                      style={{ width: `${Math.max(0, Math.min(100, r.porcentaje))}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {r.porcentaje}% inventariado · pendientes: {r.pendientes}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Ajustes (solo admin) */}
       {stats?.rol === 'admin' && (
         <div className="flex justify-end">

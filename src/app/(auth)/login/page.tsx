@@ -79,12 +79,12 @@ export default function LoginPage() {
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center">
           <img src="/logogsa800.png" alt="Logo" className="h-16 w-16 object-contain" />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900">GestiónStock</h1>
-        <p className="mt-1 text-sm text-gray-500">Control de inventario y vencimientos</p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">GestiónStock</h1>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-300">Control de inventario y vencimientos</p>
       </div>
 
-      <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-        <h2 className="mb-6 text-lg font-semibold text-gray-800">Iniciar sesión</h2>
+      <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-slate-900 p-8 shadow-sm">
+        <h2 className="mb-6 text-lg font-semibold text-gray-800 dark:text-gray-100">Iniciar sesión</h2>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Input
@@ -109,12 +109,12 @@ export default function LoginPage() {
           />
 
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-gray-700">Sucursal <span className="text-red-500">*</span></label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-200">Sucursal <span className="text-red-500">*</span></label>
             <select
               value={sucursalId}
               onChange={(e) => setSucursalId(e.target.value)}
               required
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-gray-900
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-slate-900 px-3 py-2.5 text-gray-900 dark:text-gray-100
                 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">Seleccionar sucursal</option>
@@ -127,7 +127,7 @@ export default function LoginPage() {
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-gray-700">Contraseña de sucursal <span className="text-red-500">*</span></label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-200">Contraseña de sucursal <span className="text-red-500">*</span></label>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -136,13 +136,13 @@ export default function LoginPage() {
                 placeholder="••••••••"
                 autoComplete="off"
                 required
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 pr-10 text-gray-900
-                  placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-slate-900 px-3 py-2.5 pr-10 text-gray-900 dark:text-gray-100
+                  placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-300 hover:text-gray-600 dark:hover:text-gray-100"
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -167,7 +167,7 @@ export default function LoginPage() {
         </form>
       </div>
 
-      <p className="mt-4 text-center text-xs text-gray-400">
+      <p className="mt-4 text-center text-xs text-gray-400 dark:text-gray-300">
         Contactá a tu administrador si no podés acceder
       </p>
     </div>

@@ -20,6 +20,7 @@ export async function GET() {
   const en90dias = new Date(hoy.getTime() + 90 * 86400000).toISOString().split('T')[0];
   const hoyStr = hoy.toISOString().split('T')[0];
   const esAdmin = operador.rol === 'admin';
+  const trimestreActual = `Q${Math.floor(hoy.getMonth() / 3) + 1}${hoy.getFullYear()}`;
 
   let invTotalQuery = admin
     .from('controles_inventario')
@@ -62,7 +63,11 @@ export async function GET() {
     ultimosInvQuery = ultimosInvQuery.in('tipo', ['diario', 'ocasional_sucursal']);
   }
 
-  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc] =
+  const baseProductosQuery = admin
+    .from('base_productos')
+    .select('*');
+
+  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc, baseProductosRows] =
     await Promise.all([
       invTotalQuery,
       invMesQuery,
@@ -93,6 +98,7 @@ export async function GET() {
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),
+      baseProductosQuery,
     ]);
 
   const itemsConDiferenciaUnicos = new Set<string>();
@@ -125,6 +131,92 @@ export async function GET() {
     itemsConDiferenciaUnicos.add(productoId);
   }
 
+  const sucursalActualNum = parseInt(sucursalId, 10);
+  const idsSucursales = [sucursalActualNum];
+
+  const sucursalNombreMap = new Map<number, string>();
+  if (idsSucursales.length > 0) {
+    const { data: sucursalesRows } = await admin
+      .from('sucursales')
+      .select('sucursal, nombrefantasia')
+      .in('sucursal', idsSucursales);
+    for (const s of (sucursalesRows ?? []) as Array<{ sucursal: number; nombrefantasia: string | null }>) {
+      sucursalNombreMap.set(Number(s.sucursal), String(s.nombrefantasia ?? s.sucursal));
+    }
+  }
+
+  const attempts = [
+    {
+      idField: 'idsucursal',
+      vecesField: 'vecesinventariado',
+      fechaInicioField: 'fechainicio',
+      fechaFinField: 'fechafin',
+      trimestreField: 'trimestre',
+    },
+    {
+      idField: 'idSucursal',
+      vecesField: 'vecesInventariado',
+      fechaInicioField: 'fechaInicio',
+      fechaFinField: 'fechaFin',
+      trimestreField: 'trimestre',
+    },
+    {
+      idField: 'id_sucursal',
+      vecesField: 'veces_inventariado',
+      fechaInicioField: 'fecha_inicio',
+      fechaFinField: 'fecha_fin',
+      trimestreField: 'trimestre',
+    },
+  ];
+
+  async function countBase(
+    sucId: number,
+    soloContados: boolean
+  ): Promise<number> {
+    for (const a of attempts) {
+      // Intento 1: trimestre por rango de fechas.
+      let q1 = admin
+        .from('base_productos')
+        .select('*', { count: 'exact', head: true })
+        .eq(a.idField, sucId)
+        .lte(a.fechaInicioField, hoyStr)
+        .gte(a.fechaFinField, hoyStr);
+      if (soloContados) q1 = q1.gt(a.vecesField, 0);
+      const r1 = await q1;
+      if (!r1.error) return r1.count ?? 0;
+
+      // Intento 2: fallback por texto de trimestre.
+      let q2 = admin
+        .from('base_productos')
+        .select('*', { count: 'exact', head: true })
+        .eq(a.idField, sucId)
+        .ilike(a.trimestreField, trimestreActual);
+      if (soloContados) q2 = q2.gt(a.vecesField, 0);
+      const r2 = await q2;
+      if (!r2.error) return r2.count ?? 0;
+    }
+    return 0;
+  }
+
+  const inventarioBasePorSucursal = idsSucursales
+    .map(async (idSuc) => {
+      const total = await countBase(idSuc, false);
+      const inventariados = await countBase(idSuc, true);
+      const pendientes = Math.max(0, total - inventariados);
+      const porcentaje = total > 0 ? Math.round((inventariados / total) * 100) : 0;
+      return {
+        sucursal_id: idSuc,
+        sucursal_nombre: sucursalNombreMap.get(idSuc) ?? String(idSuc),
+        inventariados,
+        pendientes,
+        total,
+        porcentaje,
+      };
+    })
+  const inventarioBasePorSucursalResuelto = (
+    await Promise.all(inventarioBasePorSucursal)
+  ).sort((a, b) => a.sucursal_nombre.localeCompare(b.sucursal_nombre));
+
   return NextResponse.json({
     data: {
       rol: operador.rol ?? 'operador_sucursal',
@@ -138,6 +230,7 @@ export async function GET() {
       productos_por_vencer_90: porVencer90.count ?? 0,
       ultimos_inventarios: ultimosInv.data ?? [],
       ultimos_vencimientos: ultimosVenc.data ?? [],
+      inventario_base_por_sucursal: inventarioBasePorSucursalResuelto,
     },
   });
 }

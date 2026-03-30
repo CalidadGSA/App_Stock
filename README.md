@@ -82,3 +82,8 @@ Adaptar las queries SQL en `src/lib/legacy-db/productos.ts` según el esquema de
 ## Deploy
 
 Configurado para Vercel. Agregar las variables de entorno en el panel de Vercel.
+
+## Documentacion
+
+- Documentacion tecnica: `docs/DOCUMENTACION_PROYECTO.md`
+- Manual de usuario: `docs/MANUAL_USUARIO.md`

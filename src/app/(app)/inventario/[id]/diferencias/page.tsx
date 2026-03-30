@@ -112,7 +112,8 @@ export default function InventarioDiferenciasPage() {
           .toLowerCase()
           .replace(/[_\s]+/g, ' ')
           .trim();
-        if (estadoNorm.includes('diferencia')) return true;
+        if (estadoNorm === 'con diferencia') return true;
+        if (estadoNorm === 'sin diferencia' || estadoNorm === 'sin diferencias') return false;
 
         const sistC = d.stock_sist_cajas;
         const sistU = d.stock_sist_unidades;

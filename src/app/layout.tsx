@@ -21,8 +21,30 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const themeInitScript = `
+    (function () {
+      try {
+        var root = document.documentElement;
+        var saved = localStorage.getItem('theme');
+        if (saved === 'dark') {
+          root.classList.add('dark');
+          return;
+        }
+        if (saved === 'light') {
+          root.classList.remove('dark');
+          return;
+        }
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        root.classList.toggle('dark', prefersDark);
+      } catch (e) {}
+    })();
+  `;
+
   return (
     <html lang="es">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body className={`${inter.variable} antialiased bg-gray-50 text-gray-900`}>
         {children}
       </body>
