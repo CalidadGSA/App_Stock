@@ -1,10 +1,11 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { serializarCsvAjuste, type FormatoCsvAjuste } from '@/lib/csv-ajuste';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/ajustes/[id]/export - re-exportar el CSV de un ajuste existente (solo admin) */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const operador = await getOperadorSession();
@@ -14,6 +15,13 @@ export async function GET(
   }
 
   const { id } = await params;
+  const formatoParam = request.nextUrl.searchParams.get('formato');
+  const formato: FormatoCsvAjuste =
+    formatoParam === 'legacy'
+      ? 'legacy'
+      : formatoParam === 'import'
+        ? 'import'
+        : 'gsa';
   const admin = await createAdminClient();
 
   const { data: ajuste, error: ajusteError } = await admin
@@ -42,17 +50,13 @@ export async function GET(
     diferencia_unidades: number;
   };
 
-  let csv = '';
-  for (const r of ((detalles as Row[]) ?? [])) {
-    const cols = [
-      r.idproducto ?? '',
-      r.codigo_barras ?? '',
-      r.diferencia_cajas.toString(),
-      r.diferencia_unidades.toString(),
-    ];
-    const escaped = cols.map((c) => `"${String(c).replace(/"/g, '""')}"`);
-    csv += `${escaped.join(',')}\n`;
-  }
+  const filas = ((detalles as Row[]) ?? []).map((r) => ({
+    idproducto: r.idproducto ?? '',
+    codigo_barras: r.codigo_barras ?? '',
+    diferencia_cajas: r.diferencia_cajas ?? 0,
+    diferencia_unidades: r.diferencia_unidades ?? 0,
+  }));
+  const csv = serializarCsvAjuste(filas, formato);
 
   const filename = ajuste.archivo_nombre as string;
 

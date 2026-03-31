@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { serializarCsvAjuste, type FormatoCsvAjuste } from '@/lib/csv-ajuste';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/inventario/export - exporta diferencias de inventario a CSV (solo admin) */
@@ -15,6 +16,13 @@ export async function GET(request: NextRequest) {
   const desde = searchParams.get('desde');
   const hasta = searchParams.get('hasta');
   const origen = searchParams.get('origen'); // 'Sucursal' | 'Auditoria' | null
+  const formatoParam = searchParams.get('formato');
+  const formato: FormatoCsvAjuste =
+    formatoParam === 'legacy'
+      ? 'legacy'
+      : formatoParam === 'import'
+        ? 'import'
+        : 'gsa';
 
   if (!sucursalIdParam || !desde || !hasta) {
     return NextResponse.json(
@@ -117,20 +125,13 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Construir CSV UTF-8 sin cabecera (una fila por detalle con diferencia)
-  let csv = '';
-  for (const r of filasDet) {
-    const cols = [
-      r.idProducto ?? '',
-      r.codigo ?? '',
-      r.diffCajas.toString(),
-      r.diffUnidades.toString(),
-    ];
-    const escaped = cols.map((c) =>
-      `"${String(c).replace(/"/g, '""')}"`
-    );
-    csv += `${escaped.join(',')}\n`;
-  }
+  const filasCsv = filasDet.map((r) => ({
+    idproducto: r.idProducto ?? '',
+    codigo_barras: r.codigo ?? '',
+    diferencia_cajas: r.diffCajas,
+    diferencia_unidades: r.diffUnidades,
+  }));
+  const csv = serializarCsvAjuste(filasCsv, formato);
 
   const sucursalNombre = (sucursal as { nombrefantasia: string }).nombrefantasia;
   const safeNombre = sucursalNombre.replace(/[^A-Za-z0-9 _-]/g, '');

@@ -1,6 +1,8 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
+const TIME_ZONE_AR = 'America/Argentina/Buenos_Aires';
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -8,6 +10,7 @@ export function cn(...inputs: ClassValue[]) {
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—';
   return new Date(dateStr).toLocaleDateString('es-AR', {
+    timeZone: TIME_ZONE_AR,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -17,11 +20,13 @@ export function formatDate(dateStr: string | null | undefined): string {
 export function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return '—';
   return new Date(dateStr).toLocaleString('es-AR', {
+    timeZone: TIME_ZONE_AR,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    hour12: false,
   });
 }
 
