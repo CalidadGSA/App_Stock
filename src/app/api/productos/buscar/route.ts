@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
     .from('medicamentos')
     .select('codplex, codebar, producto, presentaci, codlab, activo')
     .or(`codebar.ilike.${like},producto.ilike.${like},presentaci.ilike.${like}`)
+    .eq('activo', 'S')
     .limit(20);
 
   if (error) {
@@ -56,10 +57,7 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const resultados = data
-    // Ignorar productos inactivos (activo = 'N')
-    .filter((m: any) => (m.activo as string | null)?.toUpperCase() !== 'N')
-    .map((m: any) => ({
+  const resultados = data.map((m: any) => ({
       producto_id_sistema: String(m.codplex),
       codigo_barras: m.codebar as string | null,
       descripcion: (m.producto as string | null) ?? '',

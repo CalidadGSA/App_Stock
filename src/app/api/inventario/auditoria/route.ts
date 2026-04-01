@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
 type DetalleConDiferencia = {
+  id: string;
   control_id: string;
   producto_id_sistema: string;
   codigo_barras: string;
@@ -114,7 +115,7 @@ export async function POST(request: Request) {
       const { data: detallesConDif, error: difError } = await admin
         .from('controles_inventario_detalle')
         .select(
-          'control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sistema, stock_sist_cajas, stock_sist_unidades, diferencia, estado, auditado, con_diferencias, fecha_registro'
+          'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sistema, stock_sist_cajas, stock_sist_unidades, diferencia, estado, auditado, con_diferencias, fecha_registro'
         )
         .in('control_id', idsCerrados)
         .order('fecha_registro', { ascending: false });
@@ -353,6 +354,22 @@ export async function POST(request: Request) {
               { error: `Error al cargar productos de auditoría: ${insertError.message}` },
               { status: 500 }
             );
+          }
+          const detalleIdsAuditados = seleccionados
+            .map((d) => d.id)
+            .filter((detalleId): detalleId is string => Boolean(detalleId));
+          if (detalleIdsAuditados.length > 0) {
+            const { error: marcarAuditadoError } = await admin
+              .from('controles_inventario_detalle')
+              .update({ auditado: 1 })
+              .in('id', detalleIdsAuditados);
+            if (marcarAuditadoError) {
+              await admin.from('controles_inventario').delete().eq('id', controlId);
+              return NextResponse.json(
+                { error: `Error al marcar ítems auditados: ${marcarAuditadoError.message}` },
+                { status: 500 }
+              );
+            }
           }
           totalInsertados = filasInsert.length;
         }

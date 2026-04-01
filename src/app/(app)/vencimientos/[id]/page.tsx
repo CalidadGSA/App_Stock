@@ -319,27 +319,27 @@ export default function VencimientoDetailPage() {
           </Link>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl font-bold text-gray-900">Control de vencimientos</h1>
+              <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Control de vencimientos</h1>
               <Badge variant={enProgreso ? 'warning' : 'success'}>
                 {enProgreso ? 'En progreso' : 'Cerrado'}
               </Badge>
               {control.categoria_macro && (
-                <Badge variant="default" className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700">
+                <Badge variant="default" className="border-gray-300 px-1.5 py-0 text-[10px] text-gray-700 dark:border-gray-700 dark:text-gray-200">
                   {control.categoria_macro}
                 </Badge>
               )}
             </div>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               Inicio: {formatDateTime(control.fecha_inicio)}
               {control.fecha_fin && ` · Cierre: ${formatDateTime(control.fecha_fin)}`}
             </p>
             {operadorNombreCompleto && (
-              <p className="text-xs text-gray-500 mt-0.5">
+              <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
                 Operador: {operadorNombreCompleto}
               </p>
             )}
             {control.observaciones && (
-              <p className="text-xs text-gray-400 mt-0.5">Obs: {control.observaciones}</p>
+              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">Obs: {control.observaciones}</p>
             )}
           </div>
         </div>
@@ -355,7 +355,7 @@ export default function VencimientoDetailPage() {
       {enProgreso && (
         <Card>
           <CardHeader>
-            <h2 className="font-semibold text-gray-900">Buscar producto</h2>
+            <h2 className="font-semibold text-gray-900 dark:text-gray-100">Buscar producto</h2>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <BarcodeScanner
@@ -367,36 +367,36 @@ export default function VencimientoDetailPage() {
             />
 
             {buscandoProducto && (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
                 Buscando producto...
               </div>
             )}
 
             {errorProducto && (
-              <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
                 {errorProducto}
               </div>
             )}
 
             {/* Resultados de búsqueda por nombre (producto + presentación) */}
             {resultadosBusqueda.length > 0 && !productoEscaneado && (
-              <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs text-gray-800 space-y-2">
+              <div className="space-y-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs text-gray-800 dark:border-indigo-900/50 dark:bg-indigo-950/25 dark:text-gray-200">
                 <p className="font-semibold">Resultados:</p>
                 <ul className="max-h-56 space-y-1 overflow-y-auto">
                   {resultadosBusqueda.map((r) => (
                     <li
                       key={`${r.producto_id_sistema}-${r.codigo_barras ?? 'sin-bc'}`}
-                      className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1"
+                      className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1 dark:bg-slate-900/70"
                     >
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-medium">
                           {r.descripcion}
                         </p>
-                        <p className="truncate text-sm text-gray-900">
+                        <p className="truncate text-sm text-gray-900 dark:text-gray-200">
                           {r.presentacion} · {r.laboratorio}
                         </p>
-                        <p className="font-mono text-sm text-gray-900">
+                        <p className="font-mono text-sm text-gray-900 dark:text-gray-300">
                           {r.codigo_barras ?? 'Sin código de barras'}
                         </p>
                       </div>
@@ -434,28 +434,28 @@ export default function VencimientoDetailPage() {
 
             {/* Ficha del producto + formulario de lotes */}
             {productoEscaneado && (
-              <div className="rounded-xl border-2 border-indigo-200 bg-indigo-50 p-4 flex flex-col gap-4">
+              <div className="flex flex-col gap-4 rounded-xl border-2 border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/25">
                 {/* Info producto */}
                 <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-200">
-                    <Package className="h-5 w-5 text-indigo-700" />
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-200 dark:bg-indigo-900/50">
+                    <Package className="h-5 w-5 text-indigo-700 dark:text-indigo-300" />
                   </div>
                   <div>
-                    <p className="font-semibold text-gray-900">{productoEscaneado.descripcion}</p>
-                    <p className="text-base text-gray-900">{productoEscaneado.presentacion} · {productoEscaneado.laboratorio}</p>
-                    <p className="text-sm font-mono text-gray-900">{productoEscaneado.codigo_barras}</p>
+                    <p className="font-semibold text-gray-900 dark:text-gray-100">{productoEscaneado.descripcion}</p>
+                    <p className="text-base text-gray-900 dark:text-gray-200">{productoEscaneado.presentacion} · {productoEscaneado.laboratorio}</p>
+                    <p className="text-sm font-mono text-gray-900 dark:text-gray-300">{productoEscaneado.codigo_barras}</p>
                   </div>
                 </div>
 
                 {/* Lotes */}
                 <div className="flex flex-col gap-3">
-                  <p className="text-sm font-semibold text-gray-700 flex items-center gap-1">
+                  <p className="flex items-center gap-1 text-sm font-semibold text-gray-700 dark:text-gray-200">
                     <CalendarClock className="h-4 w-4 text-indigo-600" />
                     Fechas de vencimiento y cantidades
                   </p>
 
                   {lotes.map((lote, idx) => (
-                    <div key={idx} className="flex items-end gap-2 rounded-xl bg-white border border-indigo-100 p-3">
+                    <div key={idx} className="flex items-end gap-2 rounded-xl border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900/70">
                       <div className="flex-1">
                         <Input
                           label={`Lote ${idx + 1} – Fecha de vencimiento`}
@@ -481,7 +481,7 @@ export default function VencimientoDetailPage() {
                         <button
                           type="button"
                           onClick={() => eliminarLote(idx)}
-                          className="mb-0.5 rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                          className="mb-0.5 rounded-lg p-2 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-gray-500 dark:hover:bg-red-950/30 dark:hover:text-red-300"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -493,8 +493,8 @@ export default function VencimientoDetailPage() {
                     type="button"
                     onClick={agregarLote}
                     disabled={bloqueoAgregarLote}
-                    className={`flex items-center gap-2 rounded-xl border-2 border-dashed border-indigo-300 px-4 py-3 text-sm text-indigo-600 transition-colors ${
-                      bloqueoAgregarLote ? 'cursor-not-allowed opacity-50' : 'hover:bg-indigo-100'
+                    className={`flex items-center gap-2 rounded-xl border-2 border-dashed border-indigo-300 px-4 py-3 text-sm text-indigo-600 transition-colors dark:border-indigo-700/70 dark:text-indigo-300 ${
+                      bloqueoAgregarLote ? 'cursor-not-allowed opacity-50' : 'hover:bg-indigo-100 dark:hover:bg-indigo-900/30'
                     }`}
                   >
                     <Plus className="h-4 w-4" />
@@ -536,42 +536,42 @@ export default function VencimientoDetailPage() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-gray-900">Productos registrados</h2>
+            <h2 className="font-semibold text-gray-900 dark:text-gray-100">Productos registrados</h2>
             <Badge variant="info">{detalles.length} registro{detalles.length !== 1 ? 's' : ''}</Badge>
           </div>
         </CardHeader>
         <CardContent className="p-0">
           {detalles.length === 0 ? (
-            <p className="px-5 py-6 text-center text-sm text-gray-400">
+            <p className="px-5 py-6 text-center text-sm text-gray-400 dark:text-gray-500">
               No hay productos cargados aún. Empezá escaneando.
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="border-b border-gray-100 bg-gray-50">
+                <thead className="border-b border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-slate-900/60">
                   <tr>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Producto</th>
-                    <th className="px-4 py-3 text-center font-medium text-gray-500">Vencimiento</th>
-                    <th className="px-4 py-3 text-right font-medium text-gray-500">Cantidad</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">Producto</th>
+                    <th className="px-4 py-3 text-center font-medium text-gray-500 dark:text-gray-300">Vencimiento</th>
+                    <th className="px-4 py-3 text-right font-medium text-gray-500 dark:text-gray-300">Cantidad</th>
                     {enProgreso && <th className="px-4 py-3" />}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                   {detalles.map(det => {
                     const dias = diasHastaVencimiento(det.fecha_vencimiento);
                     const colorClass = colorVencimiento(dias);
                     return (
                       <tr
                         key={det.id}
-                        className="hover:bg-gray-50 cursor-pointer"
+                        className="cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-900/60"
                         onClick={() => {
                           if (!enProgreso) return;
                           handleEditarProductoDesdeLinea(det);
                         }}
                       >
                         <td className="px-4 py-3">
-                          <p className="font-medium text-gray-900">{det.descripcion}</p>
-                          <p className="text-sm text-gray-900">{det.presentacion} · {det.laboratorio}</p>
+                          <p className="font-medium text-gray-900 dark:text-gray-100">{det.descripcion}</p>
+                          <p className="text-sm text-gray-900 dark:text-gray-200">{det.presentacion} · {det.laboratorio}</p>
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${colorClass}`}>
@@ -580,7 +580,7 @@ export default function VencimientoDetailPage() {
                             {dias < 0 ? ' (vencido)' : ` (${dias}d)`}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right font-semibold text-gray-900">{det.cantidad}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-gray-900 dark:text-gray-100">{det.cantidad}</td>
                         {enProgreso && (
                           <td className="px-4 py-3">
                             <button
@@ -588,7 +588,7 @@ export default function VencimientoDetailPage() {
                                 e.stopPropagation();
                                 void handleEliminarLinea(det.id);
                               }}
-                              className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-gray-500 dark:hover:bg-red-950/30 dark:hover:text-red-300"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
@@ -616,9 +616,9 @@ export default function VencimientoDetailPage() {
       {/* Modal confirmación de cierre */}
       {confirmCerrar && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">¿Cerrar control?</h3>
-            <p className="text-sm text-gray-600 mb-6">
+          <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-slate-900">
+            <h3 className="mb-2 text-lg font-bold text-gray-900 dark:text-gray-100">¿Cerrar control?</h3>
+            <p className="mb-6 text-sm text-gray-600 dark:text-gray-300">
               Una vez cerrado no podrás agregar más productos.
             </p>
             <div className="flex gap-3">

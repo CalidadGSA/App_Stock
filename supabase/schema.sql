@@ -315,6 +315,22 @@ alter table controles_vencimientos_detalle
 alter table controles_vencimientos_detalle
   add column if not exists devuelto smallint not null default 0;
 
+-- Historial de ventas desde “por vencer” (cada bajada de stock / marca vendido).
+-- Permite auditar por controles_vencimientos_detalle qué se vendió parcialmente y cuándo quedó liquidado.
+create table if not exists vencimientos_detalle_ventas (
+  id                         uuid primary key default gen_random_uuid(),
+  detalle_id                 uuid not null references controles_vencimientos_detalle(id) on delete cascade,
+  cantidad_vendida           numeric(12,2) not null check (cantidad_vendida > 0),
+  cantidad_restante_despues  numeric(12,2) not null check (cantidad_restante_despues >= 0),
+  linea_vendida_completa     smallint not null default 0,
+  usuario_id                 integer references operadores(IDOperador),
+  sucursal_id                integer not null references sucursales(Sucursal),
+  created_at                 timestamptz not null default now()
+);
+create index if not exists idx_vdv_detalle on vencimientos_detalle_ventas(detalle_id);
+create index if not exists idx_vdv_sucursal on vencimientos_detalle_ventas(sucursal_id);
+create index if not exists idx_vdv_created on vencimientos_detalle_ventas(created_at);
+
 -- ------------------------------------------------------------
 -- DEVOLUCIONES DE VENCIMIENTOS
 -- ------------------------------------------------------------
@@ -343,16 +359,26 @@ create table if not exists devoluciones_vencimientos_detalle (
 -- ------------------------------------------------------------
 -- REGLAS DE DESCUENTOS POR VENCIMIENTOS
 -- ------------------------------------------------------------
+create table if not exists categorias_finales (
+  id              serial primary key,
+  subrubro_nombre text not null,
+  categoria       text not null,
+  categoria_final text not null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  unique (subrubro_nombre, categoria)
+);
+
 create table if not exists descuentos_vencimientos_reglas (
   id             serial primary key,
-  id_subrubro    integer references subrubros(IDSubRubro),
-  categoria_macro text,
+  id_categoriafinal integer not null references categorias_finales(id) on delete cascade,
+  descuento      numeric(5,2) not null,
   dias_min       integer not null,
   dias_max       integer not null,
-  descuento      numeric(5,2) not null,
-  activo         smallint not null default 1
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
 );
-create index if not exists idx_dvr_subrubro on descuentos_vencimientos_reglas(id_subrubro);
+create index if not exists idx_dvr_categoriafinal on descuentos_vencimientos_reglas(id_categoriafinal);
 
 -- ------------------------------------------------------------
 -- SYNC LEGACY → SUPABASE  (estado y auditoría)
@@ -399,6 +425,7 @@ alter table controles_inventario         enable row level security;
 alter table controles_inventario_detalle enable row level security;
 alter table controles_vencimientos       enable row level security;
 alter table controles_vencimientos_detalle enable row level security;
+alter table vencimientos_detalle_ventas enable row level security;
 
 -- ------------------------------------------------------------
 -- FUNCIÓN: incrementar vecesInventariado al cerrar un inventario diario

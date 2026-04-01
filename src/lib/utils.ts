@@ -40,8 +40,8 @@ export function diasHastaVencimiento(fechaVenc: string): number {
 }
 
 export function colorVencimiento(dias: number): string {
-  if (dias < 0) return 'text-red-700 bg-red-50 border-red-200';
-  if (dias <= 30) return 'text-orange-700 bg-orange-50 border-orange-200';
-  if (dias <= 60) return 'text-yellow-700 bg-yellow-50 border-yellow-200';
-  return 'text-green-700 bg-green-50 border-green-200';
+  if (dias < 0) return 'text-red-700 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-950/30 dark:border-red-900/60';
+  if (dias <= 30) return 'text-orange-700 bg-orange-50 border-orange-200 dark:text-orange-300 dark:bg-orange-950/30 dark:border-orange-900/60';
+  if (dias <= 60) return 'text-yellow-700 bg-yellow-50 border-yellow-200 dark:text-yellow-300 dark:bg-yellow-950/30 dark:border-yellow-900/60';
+  return 'text-green-700 bg-green-50 border-green-200 dark:text-green-300 dark:bg-green-950/30 dark:border-green-900/60';
 }

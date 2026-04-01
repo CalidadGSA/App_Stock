@@ -79,6 +79,24 @@ LEGACY_DB_PASSWORD=...
 
 Adaptar las queries SQL en `src/lib/legacy-db/productos.ts` según el esquema de tu sistema.
 
+### Padron externo para descuentos
+
+Para la configuración de descuentos (rubro Perfumería), la app consulta un Postgres externo (`padron_final`).
+Configurar en `.env.local`:
+
+```
+# Opción recomendada
+PADRON_DB_URL=postgresql://usuario:password@host:puerto/base
+
+# O por campos
+PADRON_DB_HOST=...
+PADRON_DB_PORT=25060
+PADRON_DB_NAME=abastecimiento
+PADRON_DB_USER=...
+PADRON_DB_PASSWORD=...
+PADRON_DB_SSL=require
+```
+
 ## Deploy
 
 Configurado para Vercel. Agregar las variables de entorno en el panel de Vercel.

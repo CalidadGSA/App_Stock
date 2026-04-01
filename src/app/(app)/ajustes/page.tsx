@@ -206,12 +206,6 @@ export default function AjustesPage() {
           <h2 className="font-semibold text-gray-900">
             Exportar diferencias de inventario
           </h2>
-          <p className="text-sm text-gray-600">
-            El CSV sigue el formato del ERP: cuatro columnas separadas por punto y coma, sin fila de cabecera (
-            <span className="font-mono text-xs">id_producto;código_barras;diferencia_cajas;diferencia_unidades</span>
-            ). Alternativas por API: <span className="font-mono text-xs">formato=import</span> (BOM y cabecera) o{' '}
-            <span className="font-mono text-xs">formato=legacy</span> (coma y comillas).
-          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           {loadingSucursales ? (

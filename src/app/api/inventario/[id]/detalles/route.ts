@@ -155,7 +155,6 @@ export async function PATCH(
   if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   const tipoControl = inferirTipoControlInventario(control);
   if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
-  if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'El control ya está cerrado' }, { status: 400 });
 
   const body = await request.json() as {
     detalle_id: string;
@@ -195,11 +194,25 @@ export async function PATCH(
 
   // Regla:
   // - En progreso: siempre editable.
-  // - Cerrado: editable solo mientras NO esté ajustado por sucursal.
+  // - Cerrado: editable para diarios y ocasionales, solo mientras NO esté ajustado.
   if (control.estado !== 'en_progreso') {
-    if (detalleEstado === 'ajustado_sucursal' || detalleAjustado === 1) {
+    const editableCerrado =
+      tipoControl === 'diario' ||
+      tipoControl === 'ocasional_sucursal' ||
+      tipoControl === 'ocasional_auditoria';
+    if (!editableCerrado) {
       return NextResponse.json(
-        { error: 'Este ítem ya fue ajustado por sucursal y no puede editarse.' },
+        { error: 'Este tipo de control cerrado no permite edición de ítems.' },
+        { status: 400 }
+      );
+    }
+    if (
+      detalleEstado === 'ajustado_sucursal' ||
+      detalleEstado === 'ajustado_auditoria' ||
+      detalleAjustado === 1
+    ) {
+      return NextResponse.json(
+        { error: 'Este ítem ya fue ajustado y no puede editarse.' },
         { status: 400 }
       );
     }

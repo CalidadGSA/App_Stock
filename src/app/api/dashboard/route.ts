@@ -19,8 +19,11 @@ export async function GET() {
   const en60dias = new Date(hoy.getTime() + 60 * 86400000).toISOString().split('T')[0];
   const en90dias = new Date(hoy.getTime() + 90 * 86400000).toISOString().split('T')[0];
   const hoyStr = hoy.toISOString().split('T')[0];
+  /** Para base_productos: misma lógica que POST /api/inventario (fechainicio/fechafin vs “hoy” local AR). */
+  const hoyStrArgentina = new Date().toLocaleDateString('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+  });
   const esAdmin = operador.rol === 'admin';
-  const trimestreActual = `Q${Math.floor(hoy.getMonth() / 3) + 1}${hoy.getFullYear()}`;
 
   let invTotalQuery = admin
     .from('controles_inventario')
@@ -41,7 +44,7 @@ export async function GET() {
 
   let invDetallesQuery = admin
     .from('controles_inventario_detalle')
-    .select('producto_id_sistema, con_diferencias, estado, diferencia, controles_inventario!inner(sucursal_id, origen, tipo)')
+    .select('producto_id_sistema, con_diferencias, controles_inventario!inner(sucursal_id, origen, tipo)')
     .eq('controles_inventario.sucursal_id', sucursalId)
     .gte('controles_inventario.fecha_inicio', inicio60dias)
     .neq('controles_inventario.tipo', 'auditoria')
@@ -63,11 +66,7 @@ export async function GET() {
     ultimosInvQuery = ultimosInvQuery.in('tipo', ['diario', 'ocasional_sucursal']);
   }
 
-  const baseProductosQuery = admin
-    .from('base_productos')
-    .select('*');
-
-  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc, baseProductosRows] =
+  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc] =
     await Promise.all([
       invTotalQuery,
       invMesQuery,
@@ -98,36 +97,18 @@ export async function GET() {
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),
-      baseProductosQuery,
     ]);
 
   const itemsConDiferenciaUnicos = new Set<string>();
   for (const det of invDetalles.data ?? []) {
     const d = det as {
       producto_id_sistema?: string | number | null;
-      con_diferencias?: number | null;
-      estado?: string | null;
-      diferencia?: number | null;
+      con_diferencias?: number | boolean | string | null;
     };
     const productoId = String(d.producto_id_sistema ?? '').trim();
     if (!productoId) continue;
-    const estadoNorm = String(d.estado ?? '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .trim()
-      .toLowerCase();
-    if (
-      estadoNorm === 'sin diferencias' ||
-      estadoNorm === 'ajustado' ||
-      estadoNorm === 'ajustado_sucursal' ||
-      estadoNorm === 'ajustado_auditoria'
-    ) {
-      continue;
-    }
-    const tieneDiferencia =
-      Number(d.con_diferencias ?? 0) === 1 ||
-      Number(d.diferencia ?? 0) !== 0;
-    if (!tieneDiferencia) continue;
+    // KPI por ítem: solo cuenta productos con flag de diferencia activo.
+    if (Number(d.con_diferencias ?? 0) !== 1 && d.con_diferencias !== true) continue;
     itemsConDiferenciaUnicos.add(productoId);
   }
 
@@ -145,74 +126,87 @@ export async function GET() {
     }
   }
 
-  const attempts = [
-    {
-      idField: 'idsucursal',
-      vecesField: 'vecesinventariado',
-      fechaInicioField: 'fechainicio',
-      fechaFinField: 'fechafin',
-      trimestreField: 'trimestre',
-    },
-    {
-      idField: 'idSucursal',
-      vecesField: 'vecesInventariado',
-      fechaInicioField: 'fechaInicio',
-      fechaFinField: 'fechaFin',
-      trimestreField: 'trimestre',
-    },
-    {
-      idField: 'id_sucursal',
-      vecesField: 'veces_inventariado',
-      fechaInicioField: 'fecha_inicio',
-      fechaFinField: 'fecha_fin',
-      trimestreField: 'trimestre',
-    },
-  ];
+  /**
+   * Misma idea que POST /api/inventario: el trimestre vigente sale de base_productos
+   * (fechainicio <= hoy <= fechafin), no de un string fijo tipo Q12026.
+   */
+  async function contarProgresoBaseProductos(sucId: number): Promise<{
+    total: number;
+    inventariados: number;
+    pendientes: number;
+    porcentaje: number;
+  }> {
+    const variantes = [
+      {
+        id: 'idsucursal',
+        ini: 'fechainicio',
+        fin: 'fechafin',
+        veces: 'vecesinventariado',
+        trim: 'trimestre',
+      },
+      {
+        id: 'idSucursal',
+        ini: 'fechaInicio',
+        fin: 'fechaFin',
+        veces: 'vecesInventariado',
+        trim: 'trimestre',
+      },
+    ] as const;
 
-  async function countBase(
-    sucId: number,
-    soloContados: boolean
-  ): Promise<number> {
-    for (const a of attempts) {
-      // Intento 1: trimestre por rango de fechas.
-      let q1 = admin
+    for (const v of variantes) {
+      const { data: muestra, error: errMuestra } = await admin
+        .from('base_productos')
+        .select(v.trim)
+        .eq(v.id, sucId)
+        .lte(v.ini, hoyStrArgentina)
+        .gte(v.fin, hoyStrArgentina)
+        .limit(1);
+
+      if (errMuestra) continue;
+
+      const trimestreDb = String((muestra?.[0] as { trimestre?: string } | undefined)?.trimestre ?? '').trim();
+      if (!trimestreDb) {
+        return { total: 0, inventariados: 0, pendientes: 0, porcentaje: 0 };
+      }
+
+      const { count: total, error: errTotal } = await admin
         .from('base_productos')
         .select('*', { count: 'exact', head: true })
-        .eq(a.idField, sucId)
-        .lte(a.fechaInicioField, hoyStr)
-        .gte(a.fechaFinField, hoyStr);
-      if (soloContados) q1 = q1.gt(a.vecesField, 0);
-      const r1 = await q1;
-      if (!r1.error) return r1.count ?? 0;
+        .eq(v.id, sucId)
+        .eq(v.trim, trimestreDb);
 
-      // Intento 2: fallback por texto de trimestre.
-      let q2 = admin
+      if (errTotal) continue;
+
+      const { count: inventariados, error: errInv } = await admin
         .from('base_productos')
         .select('*', { count: 'exact', head: true })
-        .eq(a.idField, sucId)
-        .ilike(a.trimestreField, trimestreActual);
-      if (soloContados) q2 = q2.gt(a.vecesField, 0);
-      const r2 = await q2;
-      if (!r2.error) return r2.count ?? 0;
+        .eq(v.id, sucId)
+        .eq(v.trim, trimestreDb)
+        .gt(v.veces, 0);
+
+      if (errInv) continue;
+
+      const t = total ?? 0;
+      const inv = inventariados ?? 0;
+      const pendientes = Math.max(0, t - inv);
+      const porcentaje = t > 0 ? Math.round((inv / t) * 100) : 0;
+      return { total: t, inventariados: inv, pendientes, porcentaje };
     }
-    return 0;
+
+    return { total: 0, inventariados: 0, pendientes: 0, porcentaje: 0 };
   }
 
-  const inventarioBasePorSucursal = idsSucursales
-    .map(async (idSuc) => {
-      const total = await countBase(idSuc, false);
-      const inventariados = await countBase(idSuc, true);
-      const pendientes = Math.max(0, total - inventariados);
-      const porcentaje = total > 0 ? Math.round((inventariados / total) * 100) : 0;
-      return {
-        sucursal_id: idSuc,
-        sucursal_nombre: sucursalNombreMap.get(idSuc) ?? String(idSuc),
-        inventariados,
-        pendientes,
-        total,
-        porcentaje,
-      };
-    })
+  const inventarioBasePorSucursal = idsSucursales.map(async (idSuc) => {
+    const { total, inventariados, pendientes, porcentaje } = await contarProgresoBaseProductos(idSuc);
+    return {
+      sucursal_id: idSuc,
+      sucursal_nombre: sucursalNombreMap.get(idSuc) ?? String(idSuc),
+      inventariados,
+      pendientes,
+      total,
+      porcentaje,
+    };
+  });
   const inventarioBasePorSucursalResuelto = (
     await Promise.all(inventarioBasePorSucursal)
   ).sort((a, b) => a.sucursal_nombre.localeCompare(b.sucursal_nombre));

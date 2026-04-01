@@ -9,7 +9,7 @@ import { PageSpinner } from '@/components/ui/spinner';
 import { formatDate, diasHastaVencimiento, colorVencimiento } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
 
-interface PorVencerItem {
+interface ConsolidadoItem {
   id: string;
   control_id: string;
   producto_id_sistema: string;
@@ -19,28 +19,31 @@ interface PorVencerItem {
   laboratorio: string | null;
   fecha_vencimiento: string;
   cantidad: number;
+  sucursal_id: number;
+  sucursal_nombre?: string | null;
   cat_macro: string | null;
   categoria: string | null;
   descuento_aplicado?: number | null;
 }
 
-export default function PorVencerPage() {
+export default function PorVencerConsolidadoPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [items, setItems] = useState<PorVencerItem[]>([]);
+  const [items, setItems] = useState<ConsolidadoItem[]>([]);
+  const [sucursales, setSucursales] = useState<Array<{ sucursal: number; nombrefantasia: string }>>([]);
   const [catMacros, setCatMacros] = useState<string[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [days, setDays] = useState(30);
-  const [daysMin, setDaysMin] = useState(0);
-  const [catMacroFiltro, setCatMacroFiltro] = useState<string>('');
-  const [categoriaFiltro, setCategoriaFiltro] = useState<string>('');
+  const [autorizado, setAutorizado] = useState<boolean | null>(null);
   const [busquedaTexto, setBusquedaTexto] = useState('');
-  const [rol, setRol] = useState<'admin' | 'operador_sucursal'>('operador_sucursal');
   const [rangeKey, setRangeKey] = useState<
     'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
   >('all');
+
+  const sucursalFiltro = searchParams.get('sucursal') ?? '';
+  const catMacroFiltro = searchParams.get('cat_macro') ?? '';
+  const categoriaFiltro = searchParams.get('categoria') ?? '';
 
   const desdeHastaLabel = useMemo(() => {
     switch (rangeKey) {
@@ -72,6 +75,8 @@ export default function PorVencerPage() {
         i.laboratorio ?? '',
         i.codigo_barras,
         i.producto_id_sistema,
+        i.sucursal_nombre ?? '',
+        String(i.sucursal_id),
       ]
         .join(' ')
         .toLowerCase();
@@ -79,15 +84,22 @@ export default function PorVencerPage() {
     });
   }, [items, busquedaTexto]);
 
+  function buildParams(overrides: Record<string, string>) {
+    const p = new URLSearchParams(searchParams.toString());
+    p.set('consolidado', '1');
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v === '') p.delete(k);
+      else p.set(k, v);
+    }
+    return p;
+  }
+
   async function cargar() {
     setLoading(true);
     setError('');
     try {
       const daysParam = parseInt(searchParams.get('days') ?? '365', 10) || 365;
       const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
-      setDays(daysParam);
-      setDaysMin(daysMinParam);
-      // Determinar selección actual según (days, daysMin)
       if (daysParam === 365 && daysMinParam === 0) setRangeKey('all');
       else if (daysParam === 30 && daysMinParam === 0) setRangeKey('30_all');
       else if (daysParam === 30 && daysMinParam === 1) setRangeKey('30_only');
@@ -96,32 +108,34 @@ export default function PorVencerPage() {
       else if (daysParam === 90 && daysMinParam === 61) setRangeKey('90_only');
       else if (daysParam === 90 && daysMinParam === 0) setRangeKey('90_all');
       else setRangeKey('all');
+
       const params = new URLSearchParams();
+      params.set('consolidado', '1');
       params.set('days', String(daysParam));
       params.set('daysMin', String(daysMinParam));
-      if (catMacroFiltro) {
-        params.set('cat_macro', catMacroFiltro);
-      }
-      if (categoriaFiltro) {
-        params.set('categoria', categoriaFiltro);
-      }
+      if (sucursalFiltro) params.set('sucursal', sucursalFiltro);
+      if (catMacroFiltro) params.set('cat_macro', catMacroFiltro);
+      if (categoriaFiltro) params.set('categoria', categoriaFiltro);
+
       const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`);
       const json = await res.json() as {
-        data?: PorVencerItem[];
+        data?: ConsolidadoItem[];
         cat_macros?: string[];
         categorias?: string[];
+        sucursales?: Array<{ sucursal: number; nombrefantasia: string }>;
         error?: string;
       };
       if (!res.ok) {
-        setError(json.error ?? 'Error al cargar productos por vencer');
+        setError(json.error ?? 'Error al cargar consolidado');
         setItems([]);
         return;
       }
       setItems(json.data ?? []);
       setCatMacros(json.cat_macros ?? []);
       setCategorias(json.categorias ?? []);
+      setSucursales(json.sucursales ?? []);
     } catch {
-      setError('Error al cargar productos por vencer');
+      setError('Error al cargar consolidado');
       setItems([]);
     } finally {
       setLoading(false);
@@ -129,110 +143,66 @@ export default function PorVencerPage() {
   }
 
   useEffect(() => {
+    async function verAdmin() {
+      try {
+        const res = await fetch('/api/dashboard');
+        const json = await res.json();
+        if (json?.data?.rol !== 'admin') {
+          router.replace('/vencimientos/por-vencer?days=365&daysMin=0');
+          return;
+        }
+        setAutorizado(true);
+      } catch {
+        router.replace('/vencimientos/por-vencer?days=365&daysMin=0');
+      }
+    }
+    void verAdmin();
+  }, [router]);
+
+  useEffect(() => {
+    if (autorizado !== true) return;
     const currentDays = searchParams.get('days');
     const currentDaysMin = searchParams.get('daysMin');
-    if (!currentDays || !currentDaysMin) {
+    if (!currentDays || !currentDaysMin || searchParams.get('consolidado') !== '1') {
       const params = new URLSearchParams(searchParams.toString());
       if (!currentDays) params.set('days', '365');
       if (!currentDaysMin) params.set('daysMin', '0');
-      router.replace(`/vencimientos/por-vencer?${params.toString()}`);
+      params.set('consolidado', '1');
+      router.replace(`/vencimientos/por-vencer/consolidado?${params.toString()}`);
       return;
     }
     void cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, catMacroFiltro, categoriaFiltro]);
+  }, [searchParams, autorizado]);
 
-  useEffect(() => {
-    async function cargarRol() {
-      try {
-        const res = await fetch('/api/dashboard');
-        const json = await res.json();
-        if (json?.data?.rol === 'admin') {
-          setRol('admin');
-        }
-      } catch {
-        // noop
-      }
-    }
-    void cargarRol();
-  }, []);
-
-  async function eliminarRegistro(id: string, cantidadDisponible: number) {
-    const max = Math.max(0, Math.floor(Number(cantidadDisponible) || 0));
-    if (max <= 0) {
-      setError('El registro no tiene cantidad disponible para marcar como vendido.');
-      return;
-    }
-    const ingresado = window.prompt(`¿Cuántas unidades se vendieron? (1 a ${max})`, '1');
-    if (ingresado == null) return;
-    const cantidad = parseInt(ingresado, 10);
-    if (!Number.isFinite(cantidad) || cantidad <= 0 || cantidad > max) {
-      setError(`Ingresá una cantidad válida entre 1 y ${max}.`);
-      return;
-    }
-    try {
-      const params = new URLSearchParams({
-        id,
-        cantidad: String(cantidad),
-      });
-      const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`, {
-        method: 'DELETE',
-      });
-      const json = (await res.json().catch(() => ({}))) as { error?: string; cantidad_restante?: number };
-      if (!res.ok) {
-        setError(json.error ?? 'Error al eliminar el registro');
-        return;
-      }
-      const restante = Number(json.cantidad_restante ?? 0);
-      setItems((prev) =>
-        prev
-          .map((x) => (x.id === id ? { ...x, cantidad: restante } : x))
-          .filter((x) => x.cantidad > 0)
-      );
-    } catch {
-      setError('Error al eliminar el registro');
-    }
+  if (autorizado !== true) {
+    return (
+      <div className="py-12">
+        <PageSpinner />
+      </div>
+    );
   }
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => router.back()}
-            aria-label="Volver"
+          <Link
+            href="/vencimientos/por-vencer?days=365&daysMin=0"
             className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-200 dark:hover:bg-slate-800"
+            aria-label="Volver"
           >
             <ArrowLeft className="h-4 w-4" />
-          </button>
+          </Link>
           <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-            Productos próximos a vencer ({desdeHastaLabel})
+            Por vencer — consolidado ({desdeHastaLabel})
           </h1>
         </div>
-        <div className="flex items-center gap-2">
-          {rol === 'admin' && (
-            <>
-              <Link
-                href={`/vencimientos/por-vencer/consolidado?consolidado=1&days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}`}
-              >
-                <Button size="sm" variant="secondary">
-                  Consolidado
-                </Button>
-              </Link>
-              <Link href="/vencimientos/descuentos">
-                <Button size="sm" variant="outline">
-                  Descuentos
-                </Button>
-              </Link>
-            </>
-          )}
-          <Link href="/vencimientos">
-            <Button size="sm" variant="outline">
-              Ver controles
-            </Button>
-          </Link>
-        </div>
+        <Link href="/vencimientos">
+          <Button size="sm" variant="outline">
+            Ver controles
+          </Button>
+        </Link>
       </div>
 
       <Card>
@@ -241,81 +211,95 @@ export default function PorVencerPage() {
             <div>
               <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Filtros</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Ordenado por fecha de vencimiento.
+                Todas las sucursales · Ordenado por vencimiento.
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Periodo</label>
                 <select
-                    value={rangeKey}
+                  value={rangeKey}
                   onChange={(e) => {
-                      const nextKey = e.target.value as typeof rangeKey;
-                      let nextDays = 30;
-                      let nextDaysMin = 0;
-                      if (nextKey === 'all') {
-                        nextDays = 365;
-                        nextDaysMin = 0;
-                      }
-                      if (nextKey === '60_all') {
-                        nextDays = 60;
-                        nextDaysMin = 0;
-                      }
-                      if (nextKey === '90_all') {
-                        nextDays = 90;
-                        nextDaysMin = 0;
-                      }
-                      if (nextKey === '60_only') {
-                        nextDays = 60;
-                        nextDaysMin = 31;
-                      }
-                      if (nextKey === '30_only') {
-                        nextDays = 30;
-                        nextDaysMin = 1;
-                      }
-                      if (nextKey === '90_only') {
-                        nextDays = 90;
-                        nextDaysMin = 61;
-                      }
-                    const params = new URLSearchParams(searchParams.toString());
-                      params.set('days', String(nextDays));
-                      params.set('daysMin', String(nextDaysMin));
-                      setRangeKey(nextKey);
-                    router.push(`/vencimientos/por-vencer?${params.toString()}`);
+                    const nextKey = e.target.value as typeof rangeKey;
+                    let nextDays = 30;
+                    let nextDaysMin = 0;
+                    if (nextKey === 'all') {
+                      nextDays = 365;
+                      nextDaysMin = 0;
+                    }
+                    if (nextKey === '60_all') {
+                      nextDays = 60;
+                      nextDaysMin = 0;
+                    }
+                    if (nextKey === '90_all') {
+                      nextDays = 90;
+                      nextDaysMin = 0;
+                    }
+                    if (nextKey === '60_only') {
+                      nextDays = 60;
+                      nextDaysMin = 31;
+                    }
+                    if (nextKey === '30_only') {
+                      nextDays = 30;
+                      nextDaysMin = 1;
+                    }
+                    if (nextKey === '90_only') {
+                      nextDays = 90;
+                      nextDaysMin = 61;
+                    }
+                    const p = buildParams({
+                      days: String(nextDays),
+                      daysMin: String(nextDaysMin),
+                    });
+                    setRangeKey(nextKey);
+                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
                   }}
-                  className="min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  className="min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
-                    <option value="all">Todos</option>
-                    <option value="30_all">Todos hasta 30 días</option>
-                    <option value="60_all">Todos hasta 60 días</option>
-                    <option value="90_all">Todos hasta 90 días</option>
-                    <option value="30_only">Solo a 30 días</option>
-                    <option value="60_only">Solo a 60 días</option>
-                    <option value="90_only">Solo a 90 días</option>
+                  <option value="all">Todos</option>
+                  <option value="30_all">Todos hasta 30 días</option>
+                  <option value="60_all">Todos hasta 60 días</option>
+                  <option value="90_all">Todos hasta 90 días</option>
+                  <option value="30_only">Solo a 30 días</option>
+                  <option value="60_only">Solo a 60 días</option>
+                  <option value="90_only">Solo a 90 días</option>
                 </select>
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Buscar</label>
-                <input
-                  type="text"
-                  value={busquedaTexto}
-                  onChange={(e) => setBusquedaTexto(e.target.value)}
-                  placeholder="Producto, código, laboratorio..."
-                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:placeholder:text-gray-400 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                />
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Sucursal</label>
+                <select
+                  value={sucursalFiltro}
+                  onChange={(e) => {
+                    const p = buildParams({
+                      sucursal: e.target.value,
+                      categoria: '',
+                    });
+                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
+                  }}
+                  className="min-w-[200px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                >
+                  <option value="">Todas</option>
+                  {sucursales.map((s) => (
+                    <option key={s.sucursal} value={String(s.sucursal)}>
+                      {s.nombrefantasia?.trim() || `Sucursal ${s.sucursal}`}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Cat. Macro</label>
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Macro (padrón)
+                </label>
                 <select
                   value={catMacroFiltro}
                   onChange={(e) => {
-                    setCatMacroFiltro(e.target.value);
-                    setCategoriaFiltro('');
+                    const p = buildParams({
+                      cat_macro: e.target.value,
+                      categoria: '',
+                    });
+                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
                   }}
-                  className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="">Todas</option>
                   {catMacros.map((m) => (
@@ -329,9 +313,11 @@ export default function PorVencerPage() {
                 <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Categoría</label>
                 <select
                   value={categoriaFiltro}
-                  onChange={(e) => setCategoriaFiltro(e.target.value)}
-                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  onChange={(e) => {
+                    const p = buildParams({ categoria: e.target.value });
+                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
+                  }}
+                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="">Todas</option>
                   {categorias.map((c) => (
@@ -340,6 +326,16 @@ export default function PorVencerPage() {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Buscar</label>
+                <input
+                  type="text"
+                  value={busquedaTexto}
+                  onChange={(e) => setBusquedaTexto(e.target.value)}
+                  placeholder="Producto, código, sucursal..."
+                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:placeholder:text-gray-400 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                />
               </div>
               <Button size="sm" variant="secondary" onClick={cargar} disabled={loading}>
                 Actualizar
@@ -362,7 +358,7 @@ export default function PorVencerPage() {
             <p className="px-5 py-4 text-sm text-red-600">{error}</p>
           ) : itemsFiltrados.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400 dark:text-gray-500">
-              No hay productos por vencer con esos filtros.
+              No hay registros con esos filtros.
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -370,7 +366,13 @@ export default function PorVencerPage() {
                 <thead className="border-b border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-slate-900/60">
                   <tr>
                     <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
+                      Sucursal
+                    </th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
                       Producto
+                    </th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
+                      Cat. padrón
                     </th>
                     <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
                       Categoría
@@ -382,10 +384,7 @@ export default function PorVencerPage() {
                       Cant.
                     </th>
                     <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
-                      Descuento
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
-                      Acciones
+                      Desc.
                     </th>
                   </tr>
                 </thead>
@@ -395,6 +394,9 @@ export default function PorVencerPage() {
                     const color = colorVencimiento(dias);
                     return (
                       <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-slate-900/60">
+                        <td className="px-4 py-2 align-top text-xs text-gray-800 dark:text-gray-200">
+                          {r.sucursal_nombre || `Sucursal ${r.sucursal_id}`}
+                        </td>
                         <td className="px-4 py-2 align-top">
                           <p className="font-medium text-gray-900 dark:text-gray-100">{r.descripcion}</p>
                           <p className="text-sm text-gray-900 dark:text-gray-200">
@@ -405,12 +407,19 @@ export default function PorVencerPage() {
                           </p>
                         </td>
                         <td className="px-4 py-2 align-top text-xs text-gray-700 dark:text-gray-300">
-                          {r.categoria ?? '-'}
+                          {r.cat_macro ?? '—'}
+                        </td>
+                        <td className="px-4 py-2 align-top text-xs text-gray-700 dark:text-gray-300">
+                          {r.categoria ?? '—'}
                         </td>
                         <td className="px-4 py-2 align-top text-xs">
                           <div className="flex flex-col gap-0.5">
-                            <span className="text-gray-800 dark:text-gray-200">{formatDate(r.fecha_vencimiento)}</span>
-                            <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
+                            <span className="text-gray-800 dark:text-gray-200">
+                              {formatDate(r.fecha_vencimiento)}
+                            </span>
+                            <span
+                              className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}
+                            >
                               {dias < 0 ? 'Vencido' : `En ${dias} día${dias !== 1 ? 's' : ''}`}
                             </span>
                           </div>
@@ -424,17 +433,8 @@ export default function PorVencerPage() {
                               -{Math.abs(r.descuento_aplicado)}%
                             </span>
                           ) : (
-                            <span className="text-gray-400 dark:text-gray-500">-</span>
+                            <span className="text-gray-400 dark:text-gray-500">—</span>
                           )}
-                        </td>
-                        <td className="px-4 py-2 align-top text-right">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => void eliminarRegistro(r.id, Number(r.cantidad ?? 0))}
-                          >
-                            Vendido
-                          </Button>
                         </td>
                       </tr>
                     );
@@ -448,4 +448,3 @@ export default function PorVencerPage() {
     </div>
   );
 }
-

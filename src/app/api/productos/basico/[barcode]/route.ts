@@ -61,7 +61,7 @@ export async function GET(
     med = data;
   }
 
-  if (!med || (med.activo as string | null)?.toUpperCase() === 'N') {
+  if (!med || (med.activo as string | null)?.toUpperCase() !== 'S') {
     return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
   }
 

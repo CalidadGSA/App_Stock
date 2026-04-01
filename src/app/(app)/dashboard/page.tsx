@@ -142,7 +142,7 @@ export default function DashboardPage() {
             sublabel={`${stats?.productos_por_vencer_60 ?? 0} en 60 días · ${stats?.productos_por_vencer_90 ?? 0} en 90 días`}
             color="bg-yellow-100 text-yellow-600"
             onClick={() => {
-              router.push('/vencimientos/por-vencer?days=30');
+              router.push('/vencimientos/por-vencer?days=365&daysMin=0');
             }}
           />
           <KpiCard

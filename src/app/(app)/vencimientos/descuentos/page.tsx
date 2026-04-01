@@ -1,82 +1,167 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
-import { formatDate } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
 
-type DescuentoRow = {
-  id: string;
-  control_id: string;
-  producto_id_sistema: string;
-  codigo_barras: string;
-  descripcion: string;
-  presentacion: string | null;
-  laboratorio: string | null;
-  fecha_vencimiento: string;
-  cantidad: number;
-  categoria_macro: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
-  subrubro_id: number | null;
-  descuento: number;
+type OpcionPadron = {
+  subrubro: string;
+  categoria: string;
 };
 
-export default function DescuentosVencimientosPage() {
-  const router = useRouter();
-  const [items, setItems] = useState<DescuentoRow[]>([]);
-  const [meta, setMeta] = useState<{
-    sucursal_nombre: string;
-    mes: string;
-    anio: number;
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [busquedaTexto, setBusquedaTexto] = useState('');
-  const [categoriaFiltro, setCategoriaFiltro] = useState<string>(''); // categoria_macro
+type CategoriaFinal = {
+  id: number;
+  subrubro_nombre: string;
+  categoria: string;
+  categoria_final: string;
+};
 
-  const itemsFiltrados = useMemo(() => {
-    let res = items;
-    if (categoriaFiltro) {
-      res = res.filter((i) => i.categoria_macro === categoriaFiltro);
+type Descuento = {
+  id: number;
+  categoria_final_id: number;
+  categoria_final: string;
+  descuento: number;
+  dias_min: number;
+  dias_max: number;
+};
+
+type ApiData = {
+  opciones_padron: OpcionPadron[];
+  categorias_finales: CategoriaFinal[];
+  descuentos: Descuento[];
+};
+
+function normalizarTexto(v: string): string {
+  return String(v ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export default function DescuentosConfigPage() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState('');
+  const [data, setData] = useState<ApiData>({
+    opciones_padron: [],
+    categorias_finales: [],
+    descuentos: [],
+  });
+
+  const [showCategoriaCard, setShowCategoriaCard] = useState(false);
+  const [showCategoriaSoloCard, setShowCategoriaSoloCard] = useState(false);
+  const [showDescuentoCard, setShowDescuentoCard] = useState(false);
+
+  const [subrubroSel, setSubrubroSel] = useState('');
+  const [categoriaSel, setCategoriaSel] = useState('');
+  const [categoriaFinalTxt, setCategoriaFinalTxt] = useState('');
+
+  const [catFinalSel, setCatFinalSel] = useState('');
+  const [descuentoTxt, setDescuentoTxt] = useState('');
+  const [diasMin, setDiasMin] = useState('');
+  const [diasMax, setDiasMax] = useState('');
+
+  const [editCat, setEditCat] = useState<{ id: number; value: string } | null>(null);
+  const [editDesc, setEditDesc] = useState<{
+    id: number;
+    descuento: string;
+    dias_min: string;
+    dias_max: string;
+  } | null>(null);
+
+  const agrupadoPadron = useMemo(() => {
+    const map = new Map<string, { label: string; categorias: Set<string> }>();
+    for (const row of data.opciones_padron) {
+      const subLabel = String(row.subrubro ?? '').trim();
+      const cat = String(row.categoria ?? '').trim();
+      if (!subLabel || !cat) continue;
+      const key = normalizarTexto(subLabel);
+      if (!map.has(key)) map.set(key, { label: subLabel, categorias: new Set<string>() });
+      map.get(key)!.categorias.add(cat);
     }
-    const q = busquedaTexto.trim().toLowerCase();
-    if (!q) return res;
-    return res.filter((i) => {
-      const texto = [
-        i.descripcion,
-        i.presentacion ?? '',
-        i.laboratorio ?? '',
-        i.codigo_barras,
-        i.producto_id_sistema,
-      ]
-        .join(' ')
-        .toLowerCase();
-      return texto.includes(q);
-    });
-  }, [items, busquedaTexto, categoriaFiltro]);
+    return map;
+  }, [data.opciones_padron]);
+
+  const subrubros = useMemo(
+    () =>
+      Array.from(agrupadoPadron.entries())
+        .map(([value, v]) => ({ value, label: v.label }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [agrupadoPadron]
+  );
+
+  const categoriasPorSubrubro = useMemo(() => {
+    if (!subrubroSel) return [];
+    const group = agrupadoPadron.get(subrubroSel);
+    if (!group) return [];
+    return Array.from(group.categorias).sort((a, b) => a.localeCompare(b));
+  }, [agrupadoPadron, subrubroSel]);
+
+  const categoriasGlobales = useMemo(
+    () =>
+      Array.from(new Set(data.opciones_padron.map((x) => String(x.categoria ?? '').trim()).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b)
+      ),
+    [data.opciones_padron]
+  );
+
+  const subrubrosPorCategoria = useMemo(() => {
+    if (!categoriaSel) return [];
+    const set = new Set(
+      data.opciones_padron
+        .filter((x) => String(x.categoria ?? '').trim() === categoriaSel)
+        .map((x) => String(x.subrubro ?? '').trim())
+        .filter(Boolean)
+    );
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [data.opciones_padron, categoriaSel]);
+
+  function cerrarModalCategoriaFinal() {
+    setShowCategoriaCard(false);
+    setSubrubroSel('');
+    setCategoriaSel('');
+    setCategoriaFinalTxt('');
+  }
+
+  function cerrarModalCategoriaFinalSolo() {
+    setShowCategoriaSoloCard(false);
+    setCategoriaSel('');
+    setCategoriaFinalTxt('');
+  }
+
+  function cerrarModalDescuento() {
+    setShowDescuentoCard(false);
+    setCatFinalSel('');
+    setDescuentoTxt('');
+    setDiasMin('');
+    setDiasMax('');
+  }
 
   async function cargar() {
     setLoading(true);
     setError('');
     try {
       const res = await fetch('/api/vencimientos/descuentos');
-      const json = (await res.json()) as {
-        data?: DescuentoRow[];
-        error?: string;
-        meta?: { sucursal_nombre: string; mes: string; anio: number };
-      };
+      const json = await res.json();
       if (!res.ok) {
-        setError(json.error ?? 'Error al cargar descuentos por vencimiento');
-        setItems([]);
+        setError(json.error ?? 'Error al cargar configuración');
         return;
       }
-      setItems(json.data ?? []);
-      if (json.meta) setMeta(json.meta);
+      setData({
+        opciones_padron: json.opciones_padron ?? [],
+        categorias_finales: json.categorias_finales ?? [],
+        descuentos: json.descuentos ?? [],
+      });
     } catch {
-      setError('Error al cargar descuentos por vencimiento');
-      setItems([]);
+      setError('Error al cargar configuración');
     } finally {
       setLoading(false);
     }
@@ -84,52 +169,242 @@ export default function DescuentosVencimientosPage() {
 
   useEffect(() => {
     void cargar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function csvEscape(value: string) {
-    const s = value.replace(/"/g, '""');
-    // Solo escapamos con comillas si tiene coma, salto de línea o comillas
-    if (/[,"\n\r]/.test(s)) return `"${s}"`;
-    return s;
+  async function crearCategoriaFinal() {
+    const subrubroLabel = agrupadoPadron.get(subrubroSel)?.label ?? '';
+    if (!subrubroSel || !subrubroLabel || !categoriaSel || !categoriaFinalTxt.trim()) {
+      setError('Completá Sub Rubro, Categoría y Categoría Final.');
+      return;
+    }
+    setGuardando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/descuentos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tipo: 'categoria_final',
+          payload: {
+            subrubro: subrubroLabel,
+            categoria: categoriaSel,
+            categoria_final: categoriaFinalTxt.trim(),
+          },
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'No se pudo crear categoría final');
+        return;
+      }
+      cerrarModalCategoriaFinal();
+      await cargar();
+    } catch {
+      setError('No se pudo crear categoría final');
+    } finally {
+      setGuardando(false);
+    }
   }
 
-  function descargarCSV() {
-    const filas = itemsFiltrados;
-    if (!filas || filas.length === 0) return;
+  async function crearCategoriaFinalSoloCategoria() {
+    if (!categoriaSel || !categoriaFinalTxt.trim()) {
+      setError('Completá Categoría y Categoría Final.');
+      return;
+    }
+    setGuardando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/descuentos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tipo: 'categoria_final',
+          payload: {
+            categoria: categoriaSel,
+            categoria_final: categoriaFinalTxt.trim(),
+          },
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'No se pudo crear categoría final');
+        return;
+      }
+      cerrarModalCategoriaFinalSolo();
+      await cargar();
+    } catch {
+      setError('No se pudo crear categoría final');
+    } finally {
+      setGuardando(false);
+    }
+  }
 
-    const hoy = new Date();
-    const mesNombre =
-      meta?.mes ??
-      hoy.toLocaleString('es-ES', { month: 'long' });
-    const anio = meta?.anio ?? hoy.getFullYear();
-    const sucursalNombre = meta?.sucursal_nombre ?? 'Sucursal';
+  async function crearDescuento() {
+    const descuento = Number(descuentoTxt);
+    const dMin = Number(diasMin);
+    const dMax = Number(diasMax);
+    if (
+      !catFinalSel ||
+      !Number.isFinite(descuento) ||
+      descuento < 1 ||
+      descuento > 100 ||
+      !Number.isFinite(dMin) ||
+      !Number.isFinite(dMax)
+    ) {
+      setError('Completá categoría final, descuento (1-100), días mínimo y máximo.');
+      return;
+    }
+    if (dMax < dMin) {
+      setError('Días máximos no puede ser menor que días mínimos.');
+      return;
+    }
+    setGuardando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/descuentos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tipo: 'descuento',
+          payload: {
+            categoria_final_id: Number(catFinalSel),
+            descuento,
+            dias_min: dMin,
+            dias_max: dMax,
+          },
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'No se pudo crear descuento');
+        return;
+      }
+      cerrarModalDescuento();
+      await cargar();
+    } catch {
+      setError('No se pudo crear descuento');
+    } finally {
+      setGuardando(false);
+    }
+  }
 
-    const sanitize = (name: string) =>
-      name.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
-    const fileBase = sanitize(`${sucursalNombre} ${mesNombre} ${anio}`);
+  async function guardarCategoriaFinalEdit() {
+    if (!editCat) return;
+    if (!editCat.value.trim()) {
+      setError('La categoría final no puede quedar vacía.');
+      return;
+    }
+    setGuardando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/descuentos', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tipo: 'categoria_final',
+          id: editCat.id,
+          categoria_final: editCat.value.trim(),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'No se pudo editar categoría final');
+        return;
+      }
+      setEditCat(null);
+      await cargar();
+    } catch {
+      setError('No se pudo editar categoría final');
+    } finally {
+      setGuardando(false);
+    }
+  }
 
-    // Sin cabecera. Columnas:
-    // codebar, descuento (negativo), stock (cantidad)
-    const csv = filas
-      .map((i) => {
-        const codebar = String(i.codigo_barras ?? '');
-        const descuentoNeg = -Math.abs(Number(i.descuento ?? 0));
-        const descuentoTxt = String(Math.round(descuentoNeg));
-        const stockTxt = String(Math.round(Number(i.cantidad ?? 0)));
-        return [codebar, descuentoTxt, stockTxt].map((v) => csvEscape(String(v))).join(',');
-      })
-      .join('\n');
+  async function eliminarCategoriaFinal(id: number) {
+    if (!confirm('¿Eliminar esta categoría final?')) return;
+    setGuardando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/descuentos', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tipo: 'categoria_final', id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'No se pudo eliminar categoría final');
+        return;
+      }
+      await cargar();
+    } catch {
+      setError('No se pudo eliminar categoría final');
+    } finally {
+      setGuardando(false);
+    }
+  }
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${fileBase}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+  async function guardarDescuentoEdit() {
+    if (!editDesc) return;
+    const descuento = Number(editDesc.descuento);
+    if (!Number.isFinite(descuento) || descuento < 1 || descuento > 100) {
+      setError('El descuento debe estar entre 1 y 100.');
+      return;
+    }
+    const dMin = Number(editDesc.dias_min);
+    const dMax = Number(editDesc.dias_max);
+    if (!Number.isFinite(dMin) || !Number.isFinite(dMax) || dMax < dMin) {
+      setError('Rango de días inválido.');
+      return;
+    }
+    setGuardando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/descuentos', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tipo: 'descuento',
+          id: editDesc.id,
+          descuento,
+          dias_min: dMin,
+          dias_max: dMax,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'No se pudo editar descuento');
+        return;
+      }
+      setEditDesc(null);
+      await cargar();
+    } catch {
+      setError('No se pudo editar descuento');
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  async function eliminarDescuento(id: number) {
+    if (!confirm('¿Eliminar este descuento?')) return;
+    setGuardando(true);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/descuentos', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tipo: 'descuento', id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'No se pudo eliminar descuento');
+        return;
+      }
+      await cargar();
+    } catch {
+      setError('No se pudo eliminar descuento');
+    } finally {
+      setGuardando(false);
+    }
   }
 
   return (
@@ -144,123 +419,395 @@ export default function DescuentosVencimientosPage() {
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <h1 className="text-xl font-bold text-gray-900">
-            Descuentos por vencimientos cortos
-          </h1>
+          <h1 className="text-xl font-bold text-gray-900">Configuración de descuentos</h1>
         </div>
+        <Link href="/vencimientos/descuentos/productos">
+          <Button size="sm" variant="secondary">
+            Productos con descuentos
+          </Button>
+        </Link>
       </div>
 
       <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <p className="text-sm font-medium text-gray-800">Filtros</p>
-              <p className="text-xs text-gray-500">
-                Los descuentos se calculan según la categoría y la cercanía a la fecha de vencimiento.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">Buscar</label>
-                <input
-                  type="text"
-                  value={busquedaTexto}
-                  onChange={(e) => setBusquedaTexto(e.target.value)}
-                  placeholder="Producto, código, laboratorio..."
-                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">Categoría</label>
-                <select
-                  value={categoriaFiltro}
-                  onChange={(e) => setCategoriaFiltro(e.target.value)}
-                  className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                >
-                  <option value="">Todas</option>
-                  <option value="FARMA">FARMA</option>
-                  <option value="BIENESTAR">BIENESTAR</option>
-                  <option value="PSICOTROPICOS">PSICOTROPICOS</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
-                  Exportar
-                </label>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={descargarCSV}
-                  disabled={loading || itemsFiltrados.length === 0}
-                >
-                  Exportar a Excel (CSV)
+        <CardContent className="pt-6 flex flex-wrap gap-3">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (showCategoriaSoloCard) {
+                cerrarModalCategoriaFinalSolo();
+                return;
+              }
+              setShowCategoriaSoloCard(true);
+            }}
+          >
+            Crear categoría final (solo categoría)
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (showCategoriaCard) {
+                cerrarModalCategoriaFinal();
+                return;
+              }
+              setShowCategoriaCard(true);
+            }}
+          >
+            Crear categoría final (categoría + subrubro)
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (showDescuentoCard) {
+                cerrarModalDescuento();
+                return;
+              }
+              setShowDescuentoCard(true);
+            }}
+          >
+            Crear descuento
+          </Button>
+        </CardContent>
+      </Card>
+
+      {showCategoriaCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="w-full max-w-3xl">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-semibold text-gray-900">Nueva categoría final</h2>
+                <Button size="sm" variant="outline" onClick={cerrarModalCategoriaFinal}>
+                  Cerrar
                 </Button>
               </div>
-            </div>
-          </div>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <select
+                value={categoriaSel}
+                onChange={(e) => {
+                  setCategoriaSel(e.target.value);
+                  setSubrubroSel('');
+                }}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              >
+                <option value="">Categoría</option>
+                {categoriasGlobales.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={subrubroSel}
+                onChange={(e) => setSubrubroSel(e.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              >
+                <option value="">Sub Rubro</option>
+                {subrubrosPorCategoria.map((s) => (
+                  <option key={s} value={normalizarTexto(s)}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={categoriaFinalTxt}
+                onChange={(e) => setCategoriaFinalTxt(e.target.value)}
+                placeholder="Categoría Final"
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              />
+              <Button size="sm" loading={guardando} onClick={crearCategoriaFinal}>
+                Guardar
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {showCategoriaSoloCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="w-full max-w-2xl">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-semibold text-gray-900">Nueva categoría final (solo categoría)</h2>
+                <Button size="sm" variant="outline" onClick={cerrarModalCategoriaFinalSolo}>
+                  Cerrar
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <select
+                value={categoriaSel}
+                onChange={(e) => setCategoriaSel(e.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              >
+                <option value="">Categoría</option>
+                {categoriasGlobales.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={categoriaFinalTxt}
+                onChange={(e) => setCategoriaFinalTxt(e.target.value)}
+                placeholder="Categoría Final"
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              />
+              <Button size="sm" loading={guardando} onClick={crearCategoriaFinalSoloCategoria}>
+                Guardar
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {showDescuentoCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="w-full max-w-4xl">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-semibold text-gray-900">Nuevo descuento</h2>
+                <Button size="sm" variant="outline" onClick={cerrarModalDescuento}>
+                  Cerrar
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-5">
+              <select
+                value={catFinalSel}
+                onChange={(e) => setCatFinalSel(e.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              >
+                <option value="">Categoría Final</option>
+                {data.categorias_finales.map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.categoria_final}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={descuentoTxt}
+                onChange={(e) => setDescuentoTxt(e.target.value)}
+                placeholder="Descuento (1-100)"
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              />
+            <input
+              type="number"
+              min={0}
+              value={diasMin}
+              onChange={(e) => setDiasMin(e.target.value)}
+              placeholder="Días mín."
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+            />
+            <input
+              type="number"
+              min={0}
+              value={diasMax}
+              onChange={(e) => setDiasMax(e.target.value)}
+              placeholder="Días máx."
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+            />
+              <Button size="sm" loading={guardando} onClick={crearDescuento}>
+                Guardar
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+
+      <Card>
+        <CardHeader>
+          <h2 className="font-semibold text-gray-900">Categorías finales creadas</h2>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="py-6">
               <PageSpinner />
             </div>
-          ) : error ? (
-            <p className="px-5 py-4 text-sm text-red-600">{error}</p>
-          ) : itemsFiltrados.length === 0 ? (
-            <p className="px-5 py-4 text-sm text-gray-400">
-              No hay productos con descuentos activos por vencimiento.
-            </p>
+          ) : data.categorias_finales.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-gray-400">No hay categorías finales creadas.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-gray-50 text-xs text-gray-600">
-                    <th className="px-3 py-2 text-left font-medium">Producto</th>
+                <thead className="border-b bg-gray-50 text-xs text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Sub Rubro</th>
                     <th className="px-3 py-2 text-left font-medium">Categoría</th>
-                    <th className="px-3 py-2 text-left font-medium">Fecha vencimiento</th>
-                    <th className="px-3 py-2 text-right font-medium">Cantidad</th>
-                    <th className="px-3 py-2 text-right font-medium">Descuento</th>
+                    <th className="px-3 py-2 text-left font-medium">Categoría Final</th>
+                    <th className="px-3 py-2 text-right font-medium">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {itemsFiltrados.map((i) => (
-                    <tr key={i.id}>
-                      <td className="px-3 py-2 align-top">
-                        <div className="flex flex-col">
-                          <span className="font-medium text-gray-900">
-                            {i.descripcion}
-                          </span>
-                          {i.presentacion && (
-                            <span className="text-sm text-gray-900">
-                              {i.presentacion}
-                            </span>
+                  {data.categorias_finales.map((c) => {
+                    const isEditing = editCat?.id === c.id;
+                    return (
+                      <tr key={c.id}>
+                        <td className="px-3 py-2">{c.subrubro_nombre}</td>
+                        <td className="px-3 py-2">{c.categoria}</td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              type="text"
+                              value={editCat.value}
+                              onChange={(e) =>
+                                setEditCat((prev) => (prev ? { ...prev, value: e.target.value } : prev))
+                              }
+                              className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                            />
+                          ) : (
+                            c.categoria_final
                           )}
-                          {i.laboratorio && (
-                            <span className="text-sm text-gray-900">
-                              {i.laboratorio}
-                            </span>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {isEditing ? (
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" onClick={guardarCategoriaFinalEdit} loading={guardando}>
+                                Guardar
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => setEditCat(null)}>
+                                Cancelar
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => setEditCat({ id: c.id, value: c.categoria_final })}>
+                                Editar
+                              </Button>
+                              <Button size="sm" variant="danger" loading={guardando} onClick={() => void eliminarCategoriaFinal(c.id)}>
+                                Eliminar
+                              </Button>
+                            </div>
                           )}
-                          <span className="text-sm text-gray-900 mt-0.5">
-                            Código: {i.codigo_barras}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 align-top text-xs text-gray-700">
-                        {i.categoria_macro ?? '-'}
-                      </td>
-                      <td className="px-3 py-2 align-top text-xs text-gray-700">
-                        {formatDate(i.fecha_vencimiento)}
-                      </td>
-                      <td className="px-3 py-2 align-top text-right text-xs text-gray-800">
-                        {i.cantidad.toFixed(0)}
-                      </td>
-                      <td className="px-3 py-2 align-top text-right text-xs font-semibold text-green-700">
-                        {i.descuento.toFixed(0)}%
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <h2 className="font-semibold text-gray-900">Descuentos creados</h2>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="py-6">
+              <PageSpinner />
+            </div>
+          ) : data.descuentos.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-gray-400">No hay descuentos creados.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="border-b bg-gray-50 text-xs text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Categoría Final</th>
+                    <th className="px-3 py-2 text-right font-medium">Descuento</th>
+                    <th className="px-3 py-2 text-left font-medium">Días mín.</th>
+                    <th className="px-3 py-2 text-left font-medium">Días máx.</th>
+                    <th className="px-3 py-2 text-right font-medium">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {data.descuentos.map((d) => {
+                    const isEditing = editDesc?.id === d.id;
+                    return (
+                      <tr key={d.id}>
+                        <td className="px-3 py-2">{d.categoria_final}</td>
+                        <td className="px-3 py-2 text-right">
+                          {isEditing ? (
+                            <input
+                              type="number"
+                              min={1}
+                              max={100}
+                              value={editDesc.descuento}
+                              onChange={(e) =>
+                                setEditDesc((prev) => (prev ? { ...prev, descuento: e.target.value } : prev))
+                              }
+                              className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                            />
+                          ) : (
+                            `${d.descuento}%`
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              type="number"
+                              min={0}
+                              value={editDesc.dias_min}
+                              onChange={(e) =>
+                                setEditDesc((prev) => (prev ? { ...prev, dias_min: e.target.value } : prev))
+                              }
+                              className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                            />
+                          ) : (
+                            d.dias_min
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              type="number"
+                              min={0}
+                              value={editDesc.dias_max}
+                              onChange={(e) =>
+                                setEditDesc((prev) => (prev ? { ...prev, dias_max: e.target.value } : prev))
+                              }
+                              className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                            />
+                          ) : (
+                            d.dias_max
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {isEditing ? (
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" onClick={guardarDescuentoEdit} loading={guardando}>
+                                Guardar
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => setEditDesc(null)}>
+                                Cancelar
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  setEditDesc({
+                                    id: d.id,
+                                    descuento: String(d.descuento),
+                                    dias_min: String(d.dias_min),
+                                    dias_max: String(d.dias_max),
+                                  })
+                                }
+                              >
+                                Editar
+                              </Button>
+                              <Button size="sm" variant="danger" loading={guardando} onClick={() => void eliminarDescuento(d.id)}>
+                                Eliminar
+                              </Button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -270,4 +817,3 @@ export default function DescuentosVencimientosPage() {
     </div>
   );
 }
-
