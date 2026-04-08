@@ -109,3 +109,55 @@ export async function getStockFromLegacy(
   const result = await getStockFromLegacyDetailed(sucursalId, idProducto);
   return result.status === 'ok' ? result.row : null;
 }
+
+/** Resultado de la carrera timeout vs consulta MySQL (API productos). */
+export type StockLegacyRaceResult =
+  | StockLegacyLookupResult
+  | { status: 'timeout' };
+
+/**
+ * Convierte la respuesta legacy en campos de stock para la API.
+ * Si `allowMissingStock` es true (p. ej. inventario ocasional), no hay 503 por fila ausente,
+ * timeout o MySQL caído: se asume 0 para poder cargar la ficha y contar físico.
+ */
+export function legacyStockRaceToSistemaFields(
+  stockResult: StockLegacyRaceResult,
+  allowMissingStock: boolean
+):
+  | {
+      ok: true;
+      stock_sistema: number;
+      stock_cajas: number;
+      stock_unidades: number;
+      unidades_por_caja: number;
+    }
+  | { ok: false } {
+  if (stockResult.status === 'ok' && stockResult.row) {
+    const stockRow = stockResult.row;
+    const cajas = Number(stockRow.cantidad ?? 0);
+    const unidadesSueltas = Number(stockRow.unidades ?? 0);
+    const unidadesProd = Number(stockRow.unidadesprod ?? 0) || 1;
+    return {
+      ok: true,
+      stock_cajas: cajas,
+      stock_unidades: unidadesSueltas,
+      unidades_por_caja: unidadesProd,
+      stock_sistema: cajas * unidadesProd + unidadesSueltas,
+    };
+  }
+  if (
+    allowMissingStock &&
+    (stockResult.status === 'timeout' ||
+      (stockResult.status === 'ok' && !stockResult.row) ||
+      stockResult.status === 'unavailable')
+  ) {
+    return {
+      ok: true,
+      stock_cajas: 0,
+      stock_unidades: 0,
+      unidades_por_caja: 1,
+      stock_sistema: 0,
+    };
+  }
+  return { ok: false };
+}

@@ -315,6 +315,10 @@ alter table controles_vencimientos_detalle
 alter table controles_vencimientos_detalle
   add column if not exists devuelto smallint not null default 0;
 
+-- Acción u observación (p. ej. vencidos / criterio de devolución)
+alter table controles_vencimientos_detalle
+  add column if not exists accion_observacion text;
+
 -- Historial de ventas desde “por vencer” (cada bajada de stock / marca vendido).
 -- Permite auditar por controles_vencimientos_detalle qué se vendió parcialmente y cuándo quedó liquidado.
 create table if not exists vencimientos_detalle_ventas (
@@ -355,6 +359,9 @@ create table if not exists devoluciones_vencimientos_detalle (
   cantidad                 numeric(12,2) not null,
   categoria_macro          text
 );
+
+alter table devoluciones_vencimientos_detalle
+  add column if not exists accion_observacion text;
 
 -- ------------------------------------------------------------
 -- REGLAS DE DESCUENTOS POR VENCIMIENTOS

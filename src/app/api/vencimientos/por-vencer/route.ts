@@ -3,6 +3,7 @@ import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getPadronPorProductos, getPadronPerfumeriaMap } from '@/lib/padron-final-db';
+import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
 
 type ItemRow = {
   id: string;
@@ -13,7 +14,13 @@ type ItemRow = {
   presentacion: string | null;
   laboratorio: string | null;
   fecha_vencimiento: string;
+  /** Momento en que se cargó la línea al control (controles_vencimientos_detalle.fecha_registro) */
+  fecha_registro: string;
   cantidad: number;
+  /** Suma de cantidad_vendida en vencimientos_detalle_ventas para esta línea */
+  cantidad_vendida_acumulada: number;
+  /** 1 si la línea quedó marcada vendida en el control (puede tener cantidad 0) */
+  vendido: number;
   sucursal_id: number;
   sucursal_nombre?: string | null;
 };
@@ -48,8 +55,10 @@ function parseFechaISOaUTC(fecha: string): number {
   return Date.UTC(y, m - 1, d);
 }
 
-/** GET /api/vencimientos/por-vencer?days=30&cat_macro=...&categoria=...
- * Lista productos por vencer en la sucursal actual, ordenados por fecha_vencimiento ASC.
+/** GET /api/vencimientos/por-vencer?days=30&daysMin=0&cat_macro=...&categoria=...&vista=por_vencer|vendidos|vencidos
+ * - vista omitida o por_vencer: fechas de vencimiento entre hoy y hoy+days (incluye liquidados).
+ * - vendidos: mismo rango de fechas futuro, solo líneas liquidadas (restante 0 o vendido=1).
+ * - vencidos: fechas de vencimiento entre hoy-days y ayer (solo ya vencidos en esa ventana).
  * GET ...?consolidado=1 (solo admin): todas las sucursales; opcional &sucursal=id
  */
 export async function GET(request: NextRequest) {
@@ -77,25 +86,33 @@ export async function GET(request: NextRequest) {
   const sucursalQueryRaw = searchParams.get('sucursal');
   const sucursalFiltroNum = sucursalQueryRaw != null && sucursalQueryRaw !== '' ? parseInt(sucursalQueryRaw, 10) : NaN;
 
+  const vistaRaw = String(searchParams.get('vista') ?? '').toLowerCase();
+  const vista =
+    vistaRaw === 'vendidos' || vistaRaw === 'vencidos' ? (vistaRaw as 'vendidos' | 'vencidos') : 'por_vencer';
+
   const hoy = new Date();
   const hoyStr = hoy.toISOString().split('T')[0];
   const hoyMid = parseFechaISOaUTC(hoyStr);
   const hasta = new Date(hoy.getTime() + days * 86400000).toISOString().split('T')[0];
+  const desdePasado = new Date(hoy.getTime() - days * 86400000).toISOString().split('T')[0];
 
   const admin = await createAdminClient();
 
   const selectNormal =
-    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, vendido, controles_vencimientos!inner(sucursal_id)';
+    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, controles_vencimientos!inner(sucursal_id)';
   const selectConsolidado =
-    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, vendido, controles_vencimientos!inner(sucursal_id, sucursales(nombrefantasia))';
+    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, controles_vencimientos!inner(sucursal_id, sucursales(nombrefantasia))';
 
   let detalleQuery = admin
     .from('controles_vencimientos_detalle')
     .select(consolidado ? selectConsolidado : selectNormal)
-    .gte('fecha_vencimiento', hoyStr)
-    .lte('fecha_vencimiento', hasta)
-    .eq('vendido', 0)
-    .order('fecha_vencimiento', { ascending: true });
+    .order('fecha_vencimiento', { ascending: vista !== 'vencidos' });
+
+  if (vista === 'vencidos') {
+    detalleQuery = detalleQuery.gte('fecha_vencimiento', desdePasado).lt('fecha_vencimiento', hoyStr);
+  } else {
+    detalleQuery = detalleQuery.gte('fecha_vencimiento', hoyStr).lte('fecha_vencimiento', hasta);
+  }
 
   if (consolidado) {
     if (Number.isFinite(sucursalFiltroNum) && sucursalFiltroNum > 0) {
@@ -116,8 +133,22 @@ export async function GET(request: NextRequest) {
     const fechaV = parseFechaISOaUTC(String(r.fecha_vencimiento));
     if (!Number.isFinite(fechaV)) return false;
     const dias = Math.floor((fechaV - hoyMid) / 86400000);
+    if (vista === 'vencidos') {
+      return dias < 0 && dias >= -days;
+    }
+    if (vista === 'vendidos') {
+      if (dias < daysMin) return false;
+      const cant = Number(r.cantidad ?? 0);
+      const ven = Number(r.vendido ?? 0);
+      return cant <= 0 || ven === 1;
+    }
     return dias >= daysMin;
   });
+
+  const ventasPorDetalle = await sumarCantidadVendidaPorDetalle(
+    admin,
+    rowsDentroRango.map((r) => String(r.id))
+  );
 
   const sucursalIdCookieNum = sucursalCookie ? parseInt(sucursalCookie, 10) : 0;
 
@@ -139,7 +170,10 @@ export async function GET(request: NextRequest) {
       presentacion: r.presentacion ?? null,
       laboratorio: r.laboratorio ?? null,
       fecha_vencimiento: r.fecha_vencimiento,
+      fecha_registro: String(r.fecha_registro ?? ''),
       cantidad: Number(r.cantidad ?? 0),
+      cantidad_vendida_acumulada: ventasPorDetalle.get(String(r.id)) ?? 0,
+      vendido: Number(r.vendido ?? 0) ? 1 : 0,
       sucursal_id: sid,
       sucursal_nombre: sn,
     };
@@ -274,6 +308,7 @@ export async function GET(request: NextRequest) {
     consolidado,
     days,
     daysMin,
+    vista,
     desde: hoyStr,
     hasta,
   });

@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -44,4 +45,23 @@ export function colorVencimiento(dias: number): string {
   if (dias <= 30) return 'text-orange-700 bg-orange-50 border-orange-200 dark:text-orange-300 dark:bg-orange-950/30 dark:border-orange-900/60';
   if (dias <= 60) return 'text-yellow-700 bg-yellow-50 border-yellow-200 dark:text-yellow-300 dark:bg-yellow-950/30 dark:border-yellow-900/60';
   return 'text-green-700 bg-green-50 border-green-200 dark:text-green-300 dark:bg-green-950/30 dark:border-green-900/60';
+}
+
+/**
+ * Fondo de fila por progreso de venta: vendido hist. / (restante + vendido), en deciles del 10 % (rojo → verde).
+ */
+export function estiloFilaProgresoVenta(cantidad: number, vendidaHist: number): CSSProperties {
+  const r = Math.max(0, Number(cantidad) || 0);
+  const v = Math.max(0, Number(vendidaHist) || 0);
+  const total = r + v;
+  if (total <= 0) {
+    return { backgroundColor: 'hsla(215, 14%, 50%, 0.1)' };
+  }
+  const p = Math.min(1, Math.max(0, v / total));
+  const decil = Math.min(9, Math.floor(p * 10));
+  const t = decil / 9;
+  const hue = Math.round(120 * t);
+  return {
+    backgroundColor: `hsla(${hue}, 72%, 44%, 0.22)`,
+  };
 }

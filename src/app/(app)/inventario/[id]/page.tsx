@@ -41,6 +41,20 @@ function detalleCoincideConBarcode(detalle: ControlInventarioDetalle, barcode: s
   return normalizeBarcode(detalle.codigo_barras) === normalizeBarcode(barcode);
 }
 
+/** Inventario ocasional / auditoría: la API puede devolver ficha con stock 0 si no hay fila en MySQL legacy. */
+function qsAllowMissingStock(control: ControlConDetalles | null): string {
+  if (!control) return '';
+  const t = inferirTipoControlInventario({
+    origen: control.origen,
+    tipo: control.tipo ?? null,
+    categoria_macro: control.categoria_macro ?? null,
+    descripcion: control.descripcion ?? null,
+  });
+  return t === 'ocasional_sucursal' || t === 'ocasional_auditoria'
+    ? '?allow_missing_stock=1'
+    : '';
+}
+
 export default function InventarioDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -585,7 +599,10 @@ export default function InventarioDetailPage() {
   ) {
     // Solo abrimos la card si pudimos obtener el stock actual.
     try {
-      const res = await fetch(`/api/productos/id/${encodeURIComponent(detalle.producto_id_sistema)}`, { signal });
+      const res = await fetch(
+        `/api/productos/id/${encodeURIComponent(detalle.producto_id_sistema)}${qsAllowMissingStock(control)}`,
+        { signal }
+      );
       const json = await res.json() as { data?: ProductoLegacy; error?: string };
       if (!canApply()) return false;
       if (res.ok && json.data) {
@@ -779,11 +796,14 @@ export default function InventarioDetailPage() {
 
       if (!detalle) {
         try {
-          const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`, { signal });
-          if (signal.aborted) return false;
-          if (isStale()) return false;
-          const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
-          if (res.ok && json.data) {
+        const res = await fetch(
+          `/api/productos/${encodeURIComponent(barcode)}${qsAllowMissingStock(control)}`,
+          { signal }
+        );
+        if (signal.aborted) return false;
+        if (isStale()) return false;
+        const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+        if (res.ok && json.data) {
             detalle =
               detallesControl.find(
                 (d) => d.producto_id_sistema === json.data?.producto_id_sistema
@@ -815,7 +835,10 @@ export default function InventarioDetailPage() {
 
     async function fetchProducto(intento: number): Promise<boolean> {
       try {
-        const res = await fetch(`/api/productos/${encodeURIComponent(barcode)}`, { signal });
+        const res = await fetch(
+          `/api/productos/${encodeURIComponent(barcode)}${qsAllowMissingStock(control)}`,
+          { signal }
+        );
         if (signal.aborted) return false;
         if (isStale()) return false;
         const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
@@ -908,7 +931,7 @@ export default function InventarioDetailPage() {
     // 2) Si no existe aún, intentamos abrir por ID de producto.
     try {
       const res = await fetch(
-        `/api/productos/id/${encodeURIComponent(resultado.producto_id_sistema)}`,
+        `/api/productos/id/${encodeURIComponent(resultado.producto_id_sistema)}${qsAllowMissingStock(control)}`,
         { signal }
       );
       const json = (await res.json()) as { data?: ProductoLegacy; error?: string };

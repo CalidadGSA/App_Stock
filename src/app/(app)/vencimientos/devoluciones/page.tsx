@@ -23,6 +23,8 @@ type DevolucionRow = {
     nombrecompleto?: string | null;
   } | null;
   categoria_macro?: string | null;
+  lineas_detalle?: number;
+  lineas_con_observacion?: number;
 };
 
 const CATEGORIAS = ['FARMA', 'BIENESTAR', 'PSICOTROPICOS'] as const;
@@ -188,6 +190,15 @@ export default function DevolucionesVencimientosPage() {
                               className="text-[10px] px-1.5 py-0 border-gray-300 text-gray-700"
                             >
                               {d.categoria_macro}
+                            </Badge>
+                          )}
+                          {typeof d.lineas_detalle === 'number' && d.lineas_detalle > 0 && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 border-amber-200 bg-amber-50 text-amber-900"
+                              title="Líneas con acción u observación registrada al devolver"
+                            >
+                              Obs.: {d.lineas_con_observacion ?? 0}/{d.lineas_detalle}
                             </Badge>
                           )}
                         </div>

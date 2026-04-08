@@ -10,6 +10,16 @@ function cleanHost(raw: string | undefined): string | undefined {
     .replace(/^host/i, '');
 }
 
+/** True si hay PADRON_DB_URL o las cuatro variables discretas (host, name, user, password). */
+export function isPadronDatabaseConfigured(): boolean {
+  if (String(process.env.PADRON_DB_URL ?? '').trim()) return true;
+  const host = cleanHost(process.env.PADRON_DB_HOST);
+  const database = String(process.env.PADRON_DB_NAME ?? '').trim();
+  const user = String(process.env.PADRON_DB_USER ?? '').trim();
+  const password = String(process.env.PADRON_DB_PASSWORD ?? '').trim();
+  return !!(host && database && user && password);
+}
+
 function getSslConfig() {
   const sslMode = (process.env.PADRON_DB_SSL ?? 'require').toLowerCase();
   if (sslMode === 'disable' || sslMode === 'false' || sslMode === 'off') return undefined;
@@ -123,6 +133,12 @@ async function queryPadronPerfumeriaRows() {
 }
 
 export async function getPadronPorProductos(productoIds: string[]) {
+  const empty = new Map<
+    string,
+    { cat_macro: string | null; categoria: string | null; subrubro: string | null }
+  >();
+  if (!isPadronDatabaseConfigured()) return empty;
+
   const ids = Array.from(
     new Set(
       productoIds
@@ -131,7 +147,7 @@ export async function getPadronPorProductos(productoIds: string[]) {
     )
   );
   if (ids.length === 0) {
-    return new Map<string, { cat_macro: string | null; categoria: string | null; subrubro: string | null }>();
+    return empty;
   }
 
   const p = getPadronPool();
@@ -183,6 +199,8 @@ export async function getPadronPorProductos(productoIds: string[]) {
 }
 
 export async function getPadronOpcionesPerfumeria() {
+  if (!isPadronDatabaseConfigured()) return [];
+
   const rows = await queryPadronPerfumeriaRows();
   const uniq = new Set<string>();
   const out: Array<{ subrubro: string; categoria: string }> = [];
@@ -200,6 +218,10 @@ export async function getPadronOpcionesPerfumeria() {
 }
 
 export async function getPadronPerfumeriaMap() {
+  if (!isPadronDatabaseConfigured()) {
+    return { byCodebar: new Map<string, { subrubro: string; categoria: string }>(), byCodplex: new Map() };
+  }
+
   const rows = await queryPadronPerfumeriaRows();
 
   const byCodebar = new Map<string, { subrubro: string; categoria: string }>();

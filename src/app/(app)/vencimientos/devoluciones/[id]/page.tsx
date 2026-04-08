@@ -34,6 +34,7 @@ type DetalleRow = {
   fecha_vencimiento: string;
   cantidad: number;
   categoria_macro: string | null;
+  accion_observacion: string | null;
 };
 
 export default function DevolucionDetallePage() {
@@ -172,6 +173,7 @@ export default function DevolucionDetallePage() {
                       <th className="px-3 py-2 text-left font-medium">Vencimiento</th>
                       <th className="px-3 py-2 text-right font-medium">Cantidad</th>
                       <th className="px-3 py-2 text-left font-medium">Categoría</th>
+                      <th className="px-3 py-2 text-left font-medium">Acción / observación</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -203,6 +205,11 @@ export default function DevolucionDetallePage() {
                         </td>
                         <td className="px-3 py-2 align-top text-gray-700">
                           {d.categoria_macro ?? '-'}
+                        </td>
+                        <td className="px-3 py-2 align-top text-[11px] text-gray-700 max-w-[220px] whitespace-pre-wrap break-words">
+                          {d.accion_observacion?.trim()
+                            ? d.accion_observacion.trim()
+                            : '—'}
                         </td>
                       </tr>
                     ))}

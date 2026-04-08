@@ -16,7 +16,46 @@ type DevolucionRow = {
     nombrecompleto?: string | null;
   } | null;
   categoria_macro?: string | null;
+  /** Líneas de detalle de la devolución (para resumen de observaciones en el listado). */
+  lineas_detalle?: number;
+  lineas_con_observacion?: number;
 };
+
+async function adjuntarResumenObservaciones(
+  admin: Awaited<ReturnType<typeof createAdminClient>>,
+  items: DevolucionRow[]
+): Promise<DevolucionRow[]> {
+  if (items.length === 0) return items;
+  const ids = items.map((i) => i.id);
+  const { data: dets, error } = await admin
+    .from('devoluciones_vencimientos_detalle')
+    .select('devolucion_id, accion_observacion')
+    .in('devolucion_id', ids);
+
+  if (error) {
+    console.error('adjuntarResumenObservaciones', error);
+    return items;
+  }
+
+  const stats = new Map<string, { total: number; conObs: number }>();
+  for (const row of dets ?? []) {
+    const r = row as { devolucion_id: string; accion_observacion: string | null };
+    const did = String(r.devolucion_id);
+    const s = stats.get(did) ?? { total: 0, conObs: 0 };
+    s.total++;
+    if (String(r.accion_observacion ?? '').trim()) s.conObs++;
+    stats.set(did, s);
+  }
+
+  return items.map((i) => {
+    const s = stats.get(i.id);
+    return {
+      ...i,
+      lineas_detalle: s?.total ?? 0,
+      lineas_con_observacion: s?.conObs ?? 0,
+    };
+  });
+}
 
 export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
@@ -80,8 +119,12 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const enriched = await adjuntarResumenObservaciones(
+      admin,
+      Array.from(mapa.values())
+    );
     return NextResponse.json({
-      data: Array.from(mapa.values()),
+      data: enriched,
     });
   }
 
@@ -116,8 +159,9 @@ export async function GET(request: NextRequest) {
       categoria_macro: null, // solo se completa cuando se filtra por categoría
     })) ?? [];
 
+  const enriched = await adjuntarResumenObservaciones(admin, items);
   return NextResponse.json({
-    data: items,
+    data: enriched,
   });
 }
 

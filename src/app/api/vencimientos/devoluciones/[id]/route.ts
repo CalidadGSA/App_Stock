@@ -42,7 +42,7 @@ export async function GET(
   const { data: detalles, error: detError } = await admin
     .from('devoluciones_vencimientos_detalle')
     .select(
-      'id, devolucion_id, detalle_vencimiento_id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, categoria_macro'
+      'id, devolucion_id, detalle_vencimiento_id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, categoria_macro, accion_observacion'
     )
     .eq('devolucion_id', devolucionId)
     .order('fecha_vencimiento', { ascending: true });

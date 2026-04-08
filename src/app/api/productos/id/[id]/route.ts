@@ -4,11 +4,14 @@ import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+
+  const allowMissingStock =
+    request.nextUrl.searchParams.get('allow_missing_stock') === '1';
 
   const { id } = await params;
   const idProducto = Number(id);
@@ -61,7 +64,9 @@ export async function GET(
     const sucursalNum = parseInt(sucursalId, 10);
     if (!Number.isNaN(sucursalNum)) {
       try {
-        const { getStockFromLegacyDetailed } = await import('@/lib/legacy-db/mysql-stock');
+        const { getStockFromLegacyDetailed, legacyStockRaceToSistemaFields } = await import(
+          '@/lib/legacy-db/mysql-stock'
+        );
 
         const timeoutMs = 1500;
         const stockResult = await Promise.race([
@@ -71,24 +76,33 @@ export async function GET(
           ),
         ]);
 
-        if (stockResult.status === 'ok' && stockResult.row) {
-          const stockRow = stockResult.row;
-          const cajas = Number(stockRow.cantidad ?? 0);
-          const unidadesSueltas = Number(stockRow.unidades ?? 0);
-          const unidadesProd = Number(stockRow.unidadesprod ?? 0) || 1;
-
-          stock_cajas = cajas;
-          stock_unidades = unidadesSueltas;
-          unidades_por_caja = unidadesProd;
-          stock_sistema = cajas * unidadesProd + unidadesSueltas;
-        } else if (stockResult.status !== 'ok') {
+        const resolved = legacyStockRaceToSistemaFields(stockResult, allowMissingStock);
+        if (resolved.ok) {
+          stock_cajas = resolved.stock_cajas;
+          stock_unidades = resolved.stock_unidades;
+          unidades_por_caja = resolved.unidades_por_caja;
+          stock_sistema = resolved.stock_sistema;
+        } else {
           stockLookupFailed = true;
         }
       } catch (e) {
         console.error('Error obteniendo stock legacy para producto', med.codplex, e);
-        stockLookupFailed = true;
+        stockLookupFailed = !allowMissingStock;
+        if (allowMissingStock) {
+          stock_cajas = 0;
+          stock_unidades = 0;
+          unidades_por_caja = 1;
+          stock_sistema = 0;
+        }
       }
     }
+  }
+
+  if (allowMissingStock && stock_sistema == null && !stockLookupFailed) {
+    stock_cajas = 0;
+    stock_unidades = 0;
+    unidades_por_caja = 1;
+    stock_sistema = 0;
   }
 
   if (stockLookupFailed || stock_sistema == null) {

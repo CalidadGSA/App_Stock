@@ -72,21 +72,27 @@ export async function GET() {
       invMesQuery,
       invDetallesQuery,
       admin.from('controles_vencimientos').select('id', { count: 'exact', head: true }).eq('sucursal_id', sucursalId),
-      admin.from('controles_vencimientos_detalle')
-        .select('id', { count: 'exact', head: true })
+      admin
+        .from('controles_vencimientos_detalle')
+        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
         .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .lt('fecha_vencimiento', hoyStr)
-        .not('controles_vencimientos', 'is', null),
-      admin.from('controles_vencimientos_detalle')
-        .select('id', { count: 'exact', head: true })
+        .lt('fecha_vencimiento', hoyStr),
+      admin
+        .from('controles_vencimientos_detalle')
+        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
+        .eq('controles_vencimientos.sucursal_id', sucursalId)
         .gte('fecha_vencimiento', hoyStr)
         .lte('fecha_vencimiento', en30dias),
-      admin.from('controles_vencimientos_detalle')
-        .select('id', { count: 'exact', head: true })
+      admin
+        .from('controles_vencimientos_detalle')
+        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
+        .eq('controles_vencimientos.sucursal_id', sucursalId)
         .gte('fecha_vencimiento', hoyStr)
         .lte('fecha_vencimiento', en60dias),
-      admin.from('controles_vencimientos_detalle')
-        .select('id', { count: 'exact', head: true })
+      admin
+        .from('controles_vencimientos_detalle')
+        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
+        .eq('controles_vencimientos.sucursal_id', sucursalId)
         .gte('fecha_vencimiento', hoyStr)
         .lte('fecha_vencimiento', en90dias),
       ultimosInvQuery,
