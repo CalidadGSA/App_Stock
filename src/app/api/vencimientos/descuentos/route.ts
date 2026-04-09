@@ -162,7 +162,8 @@ export async function GET(request: NextRequest) {
       .gte('fecha_vencimiento', hoyStr)
       .lte('fecha_vencimiento', hasta)
       .eq('vendido', 0)
-      .eq('devuelto', 0);
+      .eq('devuelto', 0)
+      .eq('eliminado', 0);
     if (vencErr) return NextResponse.json({ error: vencErr.message }, { status: 500 });
 
     const { data: sucursalRow } = await admin

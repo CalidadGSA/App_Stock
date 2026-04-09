@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -15,14 +16,13 @@ export async function GET() {
   const hoy = new Date();
   const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
   const inicio60dias = new Date(hoy.getTime() - 60 * 86400000).toISOString();
-  const en30dias = new Date(hoy.getTime() + 30 * 86400000).toISOString().split('T')[0];
-  const en60dias = new Date(hoy.getTime() + 60 * 86400000).toISOString().split('T')[0];
-  const en90dias = new Date(hoy.getTime() + 90 * 86400000).toISOString().split('T')[0];
-  const hoyStr = hoy.toISOString().split('T')[0];
+  /** Vencimientos: mismo “hoy” calendario AR que /api/vencimientos/por-vencer. */
+  const hoyVen = fechaHoyArgentinaYmd();
+  const en30dias = ymdAddDays(hoyVen, 30);
+  const en60dias = ymdAddDays(hoyVen, 60);
+  const en90dias = ymdAddDays(hoyVen, 90);
   /** Para base_productos: misma lógica que POST /api/inventario (fechainicio/fechafin vs “hoy” local AR). */
-  const hoyStrArgentina = new Date().toLocaleDateString('en-CA', {
-    timeZone: 'America/Argentina/Buenos_Aires',
-  });
+  const hoyStrArgentina = hoyVen;
   const esAdmin = operador.rol === 'admin';
 
   let invTotalQuery = admin
@@ -76,25 +76,33 @@ export async function GET() {
         .from('controles_vencimientos_detalle')
         .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
         .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .lt('fecha_vencimiento', hoyStr),
+        .lt('fecha_vencimiento', hoyVen)
+        .eq('devuelto', 0)
+        .eq('eliminado', 0),
       admin
         .from('controles_vencimientos_detalle')
-        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
+        .select('cantidad, controles_vencimientos!inner(sucursal_id)')
         .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .gte('fecha_vencimiento', hoyStr)
-        .lte('fecha_vencimiento', en30dias),
+        .gte('fecha_vencimiento', hoyVen)
+        .lte('fecha_vencimiento', en30dias)
+        .eq('devuelto', 0)
+        .eq('eliminado', 0),
       admin
         .from('controles_vencimientos_detalle')
-        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
+        .select('cantidad, controles_vencimientos!inner(sucursal_id)')
         .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .gte('fecha_vencimiento', hoyStr)
-        .lte('fecha_vencimiento', en60dias),
+        .gte('fecha_vencimiento', hoyVen)
+        .lte('fecha_vencimiento', en60dias)
+        .eq('devuelto', 0)
+        .eq('eliminado', 0),
       admin
         .from('controles_vencimientos_detalle')
-        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
+        .select('cantidad, controles_vencimientos!inner(sucursal_id)')
         .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .gte('fecha_vencimiento', hoyStr)
-        .lte('fecha_vencimiento', en90dias),
+        .gte('fecha_vencimiento', hoyVen)
+        .lte('fecha_vencimiento', en90dias)
+        .eq('devuelto', 0)
+        .eq('eliminado', 0),
       ultimosInvQuery,
       admin.from('controles_vencimientos')
         .select(
@@ -117,6 +125,16 @@ export async function GET() {
     if (Number(d.con_diferencias ?? 0) !== 1 && d.con_diferencias !== true) continue;
     itemsConDiferenciaUnicos.add(productoId);
   }
+
+  const sumarCantidad = (rows: Array<{ cantidad?: number | null }> | null | undefined): number =>
+    Math.max(
+      0,
+      Math.round(
+        (rows ?? []).reduce((acc: number, r) => {
+          return acc + Number(r.cantidad ?? 0);
+        }, 0)
+      )
+    );
 
   const sucursalActualNum = parseInt(sucursalId, 10);
   const idsSucursales = [sucursalActualNum];
@@ -225,9 +243,9 @@ export async function GET() {
       items_con_diferencia: itemsConDiferenciaUnicos.size,
       controles_vencimientos_total: vencTotal.count ?? 0,
       productos_vencidos: vencidos.count ?? 0,
-      productos_por_vencer_30: porVencer30.count ?? 0,
-      productos_por_vencer_60: porVencer60.count ?? 0,
-      productos_por_vencer_90: porVencer90.count ?? 0,
+      productos_por_vencer_30: sumarCantidad((porVencer30.data ?? []) as Array<{ cantidad?: number | null }>),
+      productos_por_vencer_60: sumarCantidad((porVencer60.data ?? []) as Array<{ cantidad?: number | null }>),
+      productos_por_vencer_90: sumarCantidad((porVencer90.data ?? []) as Array<{ cantidad?: number | null }>),
       ultimos_inventarios: ultimosInv.data ?? [],
       ultimos_vencimientos: ultimosVenc.data ?? [],
       inventario_base_por_sucursal: inventarioBasePorSucursalResuelto,

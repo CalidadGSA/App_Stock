@@ -3,6 +3,7 @@ import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
+import { getVentaPosteriorFlagsForDetalles } from '@/lib/legacy-db/mysql-stock';
 
 type ItemRow = {
   id: string;
@@ -22,6 +23,7 @@ type ItemRow = {
   ratio_vendido_sobre_original: number | null;
   /** Si hace falta texto para poder devolver (vendido &lt; 50 % de la carga original). */
   obligatorio_observacion_devolucion: boolean;
+  venta_posterior_a_carga?: boolean;
 };
 
 function enriquecerItem(
@@ -73,13 +75,14 @@ export async function GET(_request: NextRequest) {
   const { data, error } = await admin
     .from('controles_vencimientos_detalle')
     .select(
-      'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, vendido, devuelto, accion_observacion, controles_vencimientos!inner(sucursal_id, categoria_macro)'
+      'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, devuelto, accion_observacion, controles_vencimientos!inner(sucursal_id, categoria_macro)'
     )
     .eq('controles_vencimientos.sucursal_id', parseInt(sucursalId, 10))
     .gte('fecha_vencimiento', hace40)
     .lt('fecha_vencimiento', hoyStr)
     .eq('vendido', 0)
     .eq('devuelto', 0)
+    .eq('eliminado', 0)
     .order('fecha_vencimiento', { ascending: true });
 
   if (error) {
@@ -87,6 +90,12 @@ export async function GET(_request: NextRequest) {
   }
 
   const rows = (data ?? []) as any[];
+  const fechaRegistroById = new Map<string, string>();
+  for (const r of rows) {
+    const id = String(r.id ?? '');
+    const fr = String(r.fecha_registro ?? '').trim();
+    if (id && fr) fechaRegistroById.set(id, fr);
+  }
 
   function diasDesde(fecha: string) {
     const d = new Date(fecha);
@@ -137,7 +146,7 @@ export async function GET(_request: NextRequest) {
     prelim.map((p) => p.id)
   );
 
-  const items: ItemRow[] = prelim.map((p) =>
+  const baseItems: ItemRow[] = prelim.map((p) =>
     enriquecerItem(
       {
         ...p,
@@ -146,6 +155,20 @@ export async function GET(_request: NextRequest) {
       ventasMap
     )
   );
+
+  const ventaPosteriorMap = await getVentaPosteriorFlagsForDetalles(
+    baseItems.map((i) => ({
+      detalleId: i.id,
+      sucursalId: parseInt(sucursalId, 10),
+      productoId: Number(i.producto_id_sistema),
+      fechaRegistroIso: fechaRegistroById.get(i.id) ?? '',
+    }))
+  );
+
+  const items: ItemRow[] = baseItems.map((i) => ({
+    ...i,
+    venta_posterior_a_carga: ventaPosteriorMap.get(i.id) === true,
+  }));
 
   return NextResponse.json({
     data: items,

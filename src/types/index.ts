@@ -140,6 +140,8 @@ export interface ControlVencimientoDetalle {
   fecha_vencimiento: string;
   cantidad: number;
   fecha_registro: string;
+  /** 1 = línea anulada (error de carga), no lista operativa */
+  eliminado?: number;
 }
 
 // ------------------------------------------------------------

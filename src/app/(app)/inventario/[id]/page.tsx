@@ -1392,7 +1392,7 @@ export default function InventarioDetailPage() {
                 guardando ||
                 !!productoEscaneado
               }
-              placeholder="Escanear código o escribir nombre de producto..."
+              placeholder="Código de barras, troquel o nombre…"
               // En inventarios diarios guiados mantenemos el foco en el escáner;
               // en ocasionales/auditoría dejamos que el usuario use el buscador manual.
               autoFocusInput={esControlGuiado && !productoEscaneado && !esDispositivoTactil}

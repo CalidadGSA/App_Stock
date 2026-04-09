@@ -54,6 +54,8 @@ export default function VencimientoDetailPage() {
 
   const [cerrando, setCerrando] = useState(false);
   const [confirmCerrar, setConfirmCerrar] = useState(false);
+  /** Misma fecha+producto ya cargada en otro control (misma sucursal). */
+  const [duplicadosPorFecha, setDuplicadosPorFecha] = useState<Record<string, boolean>>({});
 
   const cargarControl = useCallback(async () => {
     try {
@@ -70,8 +72,44 @@ export default function VencimientoDetailPage() {
 
   useEffect(() => { cargarControl(); }, [cargarControl]);
 
+  useEffect(() => {
+    if (!control?.id || control.estado !== 'en_progreso' || !productoEscaneado) {
+      setDuplicadosPorFecha({});
+      return;
+    }
+    const fechas = lotes.map((l) => (l.fecha_vencimiento ?? '').trim()).filter(Boolean);
+    if (fechas.length === 0) {
+      setDuplicadosPorFecha({});
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        const params = new URLSearchParams({
+          control_id: String(control.id),
+          producto_id: productoEscaneado.producto_id_sistema,
+          fechas: fechas.join(','),
+        });
+        try {
+          const res = await fetch(`/api/vencimientos/duplicado-otro-control?${params.toString()}`);
+          const json = (await res.json()) as {
+            data?: { duplicados_por_fecha?: Record<string, boolean> };
+          };
+          if (res.ok && json.data?.duplicados_por_fecha) {
+            setDuplicadosPorFecha(json.data.duplicados_por_fecha);
+          } else {
+            setDuplicadosPorFecha({});
+          }
+        } catch {
+          setDuplicadosPorFecha({});
+        }
+      })();
+    }, 450);
+    return () => window.clearTimeout(handle);
+  }, [control?.id, control?.estado, productoEscaneado?.producto_id_sistema, lotes]);
+
   async function handleScan(barcode: string): Promise<boolean> {
     setErrorProducto('');
+    setDuplicadosPorFecha({});
     setProductoEscaneado(null);
     setLotes([LOTE_VACIO]);
     setEditandoProductoId(null);
@@ -183,6 +221,16 @@ export default function VencimientoDetailPage() {
 
     if (lotesValidos.length === 0) {
       setErrorProducto('Ingresá al menos una fecha de vencimiento y cantidad válida.');
+      return;
+    }
+
+    const hayDuplicadoOtroControl = lotesValidos.some((l) => duplicadosPorFecha[l.fecha_vencimiento]);
+    if (
+      hayDuplicadoOtroControl &&
+      !window.confirm(
+        'Hay al menos una fecha que ya figura en otro control de vencimientos. ¿Cargar igual?'
+      )
+    ) {
       return;
     }
 
@@ -362,7 +410,7 @@ export default function VencimientoDetailPage() {
               onScan={handleScan}
               // Mientras hay un producto cargado o se están guardando lotes, desactivamos el escáner
               disabled={buscandoProducto || guardando || !!productoEscaneado}
-              placeholder="Escanear o ingresar código de barras..."
+              placeholder="Código de barras, troquel o nombre…"
               autoFocusInput={!productoEscaneado}
             />
 
@@ -403,25 +451,29 @@ export default function VencimientoDetailPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={!r.codigo_barras}
-                        title={r.codigo_barras ? 'Usar este producto' : 'No se puede usar sin código de barras'}
+                        disabled={buscandoProducto}
+                        title="Cargar este producto"
                         onClick={() => {
-                          if (!r.codigo_barras) return;
-                          setErrorProducto('');
-                          setResultadosBusqueda([]);
-                          setProductoEscaneado({
-                            producto_id_sistema: r.producto_id_sistema,
-                            codigo_barras: r.codigo_barras,
-                            codigos_secundarios: [],
-                            descripcion: r.descripcion,
-                            presentacion: r.presentacion,
-                            laboratorio: r.laboratorio,
-                            stock_sistema: 0,
-                            stock_cajas: undefined,
-                            stock_unidades: undefined,
-                            unidades_por_caja: undefined,
-                            fraccionable: undefined,
-                          });
+                          void (async () => {
+                            setErrorProducto('');
+                            setBuscandoProducto(true);
+                            try {
+                              const res = await fetch(
+                                `/api/productos/id/${encodeURIComponent(r.producto_id_sistema)}`
+                              );
+                              const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+                              if (!res.ok || !json.data) {
+                                setErrorProducto(json.error ?? 'No se pudo cargar el producto');
+                                return;
+                              }
+                              setResultadosBusqueda([]);
+                              setProductoEscaneado(json.data);
+                            } catch {
+                              setErrorProducto('Error al cargar el producto');
+                            } finally {
+                              setBuscandoProducto(false);
+                            }
+                          })();
                         }}
                       >
                         Usar
@@ -440,10 +492,17 @@ export default function VencimientoDetailPage() {
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-200 dark:bg-indigo-900/50">
                     <Package className="h-5 w-5 text-indigo-700 dark:text-indigo-300" />
                   </div>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className="font-semibold text-gray-900 dark:text-gray-100">{productoEscaneado.descripcion}</p>
                     <p className="text-base text-gray-900 dark:text-gray-200">{productoEscaneado.presentacion} · {productoEscaneado.laboratorio}</p>
-                    <p className="text-sm font-mono text-gray-900 dark:text-gray-300">{productoEscaneado.codigo_barras}</p>
+                    <p className="text-sm font-mono text-gray-900 dark:text-gray-300">
+                      {productoEscaneado.codigo_barras || 'Sin código'} · ID {productoEscaneado.producto_id_sistema}
+                    </p>
+                    {Object.values(duplicadosPorFecha).some(Boolean) ? (
+                      <p className="mt-2 rounded-md border border-amber-400 bg-amber-100/90 px-2 py-1 text-xs font-semibold text-amber-950 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100">
+                        Producto duplicado, revisar
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 
@@ -464,6 +523,11 @@ export default function VencimientoDetailPage() {
                           onChange={e => actualizarLote(idx, 'fecha_vencimiento', e.target.value)}
                           required
                         />
+                        {lote.fecha_vencimiento && duplicadosPorFecha[lote.fecha_vencimiento] ? (
+                          <p className="mt-1 text-[11px] font-medium text-amber-800 dark:text-amber-200">
+                            Producto duplicado, revisar
+                          </p>
+                        ) : null}
                       </div>
                       <div className="w-28">
                         <Input

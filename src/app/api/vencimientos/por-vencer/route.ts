@@ -1,9 +1,11 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getPadronPorProductos, getPadronPerfumeriaMap } from '@/lib/padron-final-db';
 import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
+import { getVentaPosteriorFlagsForDetalles } from '@/lib/legacy-db/mysql-stock';
 
 type ItemRow = {
   id: string;
@@ -17,6 +19,7 @@ type ItemRow = {
   /** Momento en que se cargó la línea al control (controles_vencimientos_detalle.fecha_registro) */
   fecha_registro: string;
   cantidad: number;
+  accion_observacion: string | null;
   /** Suma de cantidad_vendida en vencimientos_detalle_ventas para esta línea */
   cantidad_vendida_acumulada: number;
   /** 1 si la línea quedó marcada vendida en el control (puede tener cantidad 0) */
@@ -90,22 +93,23 @@ export async function GET(request: NextRequest) {
   const vista =
     vistaRaw === 'vendidos' || vistaRaw === 'vencidos' ? (vistaRaw as 'vendidos' | 'vencidos') : 'por_vencer';
 
-  const hoy = new Date();
-  const hoyStr = hoy.toISOString().split('T')[0];
+  const hoyStr = fechaHoyArgentinaYmd();
   const hoyMid = parseFechaISOaUTC(hoyStr);
-  const hasta = new Date(hoy.getTime() + days * 86400000).toISOString().split('T')[0];
-  const desdePasado = new Date(hoy.getTime() - days * 86400000).toISOString().split('T')[0];
+  const hasta = ymdAddDays(hoyStr, days);
+  const desdePasado = ymdAddDays(hoyStr, -days);
 
   const admin = await createAdminClient();
 
   const selectNormal =
-    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, controles_vencimientos!inner(sucursal_id)';
+    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, accion_observacion, controles_vencimientos!inner(sucursal_id)';
   const selectConsolidado =
-    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, controles_vencimientos!inner(sucursal_id, sucursales(nombrefantasia))';
+    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, accion_observacion, controles_vencimientos!inner(sucursal_id, sucursales(nombrefantasia))';
 
   let detalleQuery = admin
     .from('controles_vencimientos_detalle')
     .select(consolidado ? selectConsolidado : selectNormal)
+    .eq('eliminado', 0)
+    .eq('devuelto', 0)
     .order('fecha_vencimiento', { ascending: vista !== 'vencidos' });
 
   if (vista === 'vencidos') {
@@ -172,12 +176,25 @@ export async function GET(request: NextRequest) {
       fecha_vencimiento: r.fecha_vencimiento,
       fecha_registro: String(r.fecha_registro ?? ''),
       cantidad: Number(r.cantidad ?? 0),
+      accion_observacion: (() => {
+        const t = String(r.accion_observacion ?? '').trim();
+        return t ? t : null;
+      })(),
       cantidad_vendida_acumulada: ventasPorDetalle.get(String(r.id)) ?? 0,
       vendido: Number(r.vendido ?? 0) ? 1 : 0,
       sucursal_id: sid,
       sucursal_nombre: sn,
     };
   });
+
+  const ventaPosteriorMap = await getVentaPosteriorFlagsForDetalles(
+    items.map((i) => ({
+      detalleId: i.id,
+      sucursalId: Number(i.sucursal_id),
+      productoId: Number(i.producto_id_sistema),
+      fechaRegistroIso: String(i.fecha_registro ?? ''),
+    }))
+  );
 
   let padronMap = new Map<string, { cat_macro: string | null; categoria: string | null; subrubro: string | null }>();
   let padronPerfumeria: Awaited<ReturnType<typeof getPadronPerfumeriaMap>> | null = null;
@@ -263,6 +280,7 @@ export async function GET(request: NextRequest) {
       cat_macro: p?.cat_macro ?? null,
       categoria,
       descuento_aplicado: descuentoAplicado,
+      venta_posterior_a_carga: ventaPosteriorMap.get(i.id) === true,
     };
   });
 
@@ -339,7 +357,7 @@ export async function DELETE(request: NextRequest) {
   // Verificar que el detalle pertenece a la sucursal actual (via join con control)
   const { data: row, error: rowError } = await admin
     .from('controles_vencimientos_detalle')
-    .select('id, cantidad, controles_vencimientos!inner(sucursal_id)')
+    .select('id, cantidad, eliminado, controles_vencimientos!inner(sucursal_id)')
     .eq('id', id)
     .maybeSingle();
 
@@ -351,6 +369,10 @@ export async function DELETE(request: NextRequest) {
   const sucursalRow = (row as any).controles_vencimientos?.sucursal_id;
   if (String(sucursalRow) !== String(sucursalCookie)) {
     return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
+
+  if (Number((row as any).eliminado ?? 0) === 1) {
+    return NextResponse.json({ error: 'La línea fue eliminada' }, { status: 400 });
   }
 
   const cantidadActual = Number((row as any).cantidad ?? 0);
@@ -398,5 +420,46 @@ export async function DELETE(request: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, cantidad_vendida: cantidadAplicar, cantidad_restante: restanteFinal });
+}
+
+/** PATCH /api/vencimientos/por-vencer - guarda acción/observación por línea */
+export async function PATCH(request: NextRequest) {
+  const operador = await getOperadorSession();
+  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+
+  const cookieStore = await cookies();
+  const sucursalCookie = cookieStore.get('sucursal_id')?.value;
+  if (!sucursalCookie) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
+
+  const body = (await request.json().catch(() => null)) as
+    | { id?: string; accion_observacion?: unknown }
+    | null;
+  const id = String(body?.id ?? '').trim();
+  if (!id) return NextResponse.json({ error: 'id requerido' }, { status: 400 });
+  const texto =
+    typeof body?.accion_observacion === 'string'
+      ? body.accion_observacion
+      : String(body?.accion_observacion ?? '');
+  const trimmed = texto.trim();
+
+  const admin = await createAdminClient();
+  const { data: row, error: rowError } = await admin
+    .from('controles_vencimientos_detalle')
+    .select('id, controles_vencimientos!inner(sucursal_id)')
+    .eq('id', id)
+    .maybeSingle();
+  if (rowError) return NextResponse.json({ error: rowError.message }, { status: 500 });
+  if (!row) return NextResponse.json({ error: 'Registro no encontrado' }, { status: 404 });
+  const sucursalRow = (row as any).controles_vencimientos?.sucursal_id;
+  if (String(sucursalRow) !== String(sucursalCookie)) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
+
+  const { error } = await admin
+    .from('controles_vencimientos_detalle')
+    .update({ accion_observacion: trimmed || null })
+    .eq('id', id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true, accion_observacion: trimmed || null });
 }
 

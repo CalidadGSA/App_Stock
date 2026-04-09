@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { getPadronPorProductos } from '@/lib/padron-final-db';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -27,6 +28,7 @@ export async function GET(request: NextRequest) {
   const desdeActual = searchParams.get('desdeActual');
   const hastaActual = searchParams.get('hastaActual');
   const categoriaMacro = searchParams.get('categoria_macro');
+  const codigoBarrasFiltro = String(searchParams.get('codigo_barras') ?? '').trim();
 
   if (!desdeActual || !hastaActual) {
     return NextResponse.json(
@@ -50,15 +52,15 @@ export async function GET(request: NextRequest) {
     let query = admin
       .from('controles_inventario_detalle')
       .select(
-        'producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, categoria_macro)'
+        'producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, usuario_id, operadores(nombrecompleto))'
       )
       .eq('controles_inventario.sucursal_id', sucursalNum)
       .gte('controles_inventario.fecha_inicio', desdeIso)
       .lte('controles_inventario.fecha_inicio', hastaIso)
       .eq('con_diferencias', 1);
 
-    if (categoriaMacro) {
-      query = query.eq('controles_inventario.categoria_macro', categoriaMacro);
+    if (codigoBarrasFiltro) {
+      query = query.ilike('codigo_barras', `%${codigoBarrasFiltro}%`);
     }
 
     const { data, error } = await query;
@@ -91,6 +93,7 @@ export async function GET(request: NextRequest) {
         laboratorio: string | null;
         diffCajas: number;
         diffUnidades: number;
+        operadores: Set<string>;
       }
     >();
 
@@ -114,14 +117,26 @@ export async function GET(request: NextRequest) {
         laboratorio: d.laboratorio ?? null,
         diffCajas: 0,
         diffUnidades: 0,
+        operadores: new Set<string>(),
       };
+
+      const control = (d as any).controles_inventario as
+        | { operadores?: { nombrecompleto?: string | null } | null; usuario_id?: number | null }
+        | null
+        | undefined;
+      const opNombre = String(control?.operadores?.nombrecompleto ?? '').trim();
+      if (opNombre) actual.operadores.add(opNombre);
+      else if (control?.usuario_id != null) actual.operadores.add(`Operador ${control.usuario_id}`);
 
       actual.diffCajas += deltaC;
       actual.diffUnidades += deltaU;
       agregados.set(key, actual);
     }
 
-    return Array.from(agregados.values());
+    return Array.from(agregados.values()).map((x) => ({
+      ...x,
+      operadores: Array.from(x.operadores.values()).sort((a, b) => a.localeCompare(b)),
+    }));
   }
 
   try {
@@ -133,10 +148,16 @@ export async function GET(request: NextRequest) {
       mapActual.set(key, r);
     });
 
+    const padron = await getPadronPorProductos(
+      Array.from(mapActual.values()).map((x) => x.producto_id_sistema)
+    );
+
     const keys = new Set<string>([...mapActual.keys()]);
-    const resumen = Array.from(keys).map((key) => {
-      const a = mapActual.get(key)!;
-      return {
+    const resumen = Array.from(keys)
+      .map((key) => {
+        const a = mapActual.get(key)!;
+        const catMacroPadron = padron.get(String(a.producto_id_sistema))?.cat_macro ?? null;
+        return {
         producto_id_sistema: a.producto_id_sistema,
         codigo_barras: a.codigo_barras,
         descripcion: a.descripcion,
@@ -144,10 +165,16 @@ export async function GET(request: NextRequest) {
         laboratorio: a.laboratorio,
         diffCajasActual: a.diffCajas,
         diffUnidadesActual: a.diffUnidades,
+        operadores: a.operadores.join(' | '),
+        cat_macro: catMacroPadron,
         diffCajasAnterior: 0,
         diffUnidadesAnterior: 0,
-      };
-    });
+        };
+      })
+      .filter((r) => {
+        if (!categoriaMacro) return true;
+        return String(r.cat_macro ?? '').toUpperCase() === String(categoriaMacro).toUpperCase();
+      });
 
     return NextResponse.json({
       data: resumen,

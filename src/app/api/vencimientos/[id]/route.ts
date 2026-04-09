@@ -23,5 +23,13 @@ export async function GET(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
-  return NextResponse.json({ data });
+  const payload = data as {
+    controles_vencimientos_detalle?: Array<{ eliminado?: number }>;
+  };
+  if (payload?.controles_vencimientos_detalle?.length) {
+    payload.controles_vencimientos_detalle = payload.controles_vencimientos_detalle.filter(
+      (d) => Number(d.eliminado ?? 0) !== 1
+    );
+  }
+  return NextResponse.json({ data: payload });
 }

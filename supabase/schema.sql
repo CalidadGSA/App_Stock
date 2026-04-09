@@ -319,6 +319,10 @@ alter table controles_vencimientos_detalle
 alter table controles_vencimientos_detalle
   add column if not exists accion_observacion text;
 
+-- Línea anulada por error de carga (no es venta; no aparece en listados operativos)
+alter table controles_vencimientos_detalle
+  add column if not exists eliminado smallint not null default 0;
+
 -- Historial de ventas desde “por vencer” (cada bajada de stock / marca vendido).
 -- Permite auditar por controles_vencimientos_detalle qué se vendió parcialmente y cuándo quedó liquidado.
 create table if not exists vencimientos_detalle_ventas (

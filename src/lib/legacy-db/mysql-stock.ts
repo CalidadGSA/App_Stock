@@ -161,3 +161,77 @@ export function legacyStockRaceToSistemaFields(
   }
   return { ok: false };
 }
+
+export interface VentaPosteriorInput {
+  detalleId: string;
+  sucursalId: number;
+  productoId: number;
+  fechaRegistroIso: string;
+}
+
+/**
+ * Marca si existe al menos una venta (factcabecera/factlineas) posterior a la carga de la línea.
+ */
+export async function getVentaPosteriorFlagsForDetalles(
+  detalles: VentaPosteriorInput[]
+): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>();
+  if (detalles.length === 0) return out;
+
+  const limpios = detalles.filter(
+    (d) =>
+      Number.isFinite(d.sucursalId) &&
+      Number.isFinite(d.productoId) &&
+      !!String(d.fechaRegistroIso ?? '').trim()
+  );
+  if (limpios.length === 0) return out;
+
+  const minRegistro = limpios
+    .map((d) => String(d.fechaRegistroIso))
+    .sort((a, b) => a.localeCompare(b))[0];
+  const idsSuc = Array.from(new Set(limpios.map((d) => d.sucursalId)));
+  const idsProd = Array.from(new Set(limpios.map((d) => d.productoId)));
+
+  for (const d of limpios) out.set(d.detalleId, false);
+
+  const pool = await getPool();
+  if (!pool || !minRegistro) return out;
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT
+         fc.Sucursal AS sucursal,
+         fl.IDProducto AS producto_id,
+         MAX(TIMESTAMP(fc.Emision, COALESCE(fc.Hora, '00:00:00'))) AS ultima_venta
+       FROM factlineas fl
+       INNER JOIN factcabecera fc ON fc.IDComprobante = fl.IDComprobante
+       WHERE fc.Sucursal IN (?)
+         AND fl.IDProducto IN (?)
+         AND TIMESTAMP(fc.Emision, COALESCE(fc.Hora, '00:00:00')) >= ?
+       GROUP BY fc.Sucursal, fl.IDProducto`,
+      [idsSuc, idsProd, minRegistro]
+    );
+
+    const ultimaByKey = new Map<string, string>();
+    for (const r of rows as Array<{ sucursal: number; producto_id: number; ultima_venta: string | Date | null }>) {
+      const key = `${Number(r.sucursal)}::${Number(r.producto_id)}`;
+      const val = r.ultima_venta
+        ? new Date(r.ultima_venta as string | Date).toISOString()
+        : '';
+      if (val) ultimaByKey.set(key, val);
+    }
+
+    for (const d of limpios) {
+      const key = `${d.sucursalId}::${d.productoId}`;
+      const ultima = ultimaByKey.get(key);
+      if (!ultima) continue;
+      const tUlt = new Date(ultima).getTime();
+      const tReg = new Date(String(d.fechaRegistroIso)).getTime();
+      out.set(d.detalleId, Number.isFinite(tUlt) && Number.isFinite(tReg) && tUlt > tReg);
+    }
+    return out;
+  } catch (err) {
+    console.error('Error leyendo ventas posteriores desde MySQL legacy:', err);
+    return out;
+  }
+}

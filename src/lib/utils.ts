@@ -4,6 +4,22 @@ import { twMerge } from 'tailwind-merge';
 
 const TIME_ZONE_AR = 'America/Argentina/Buenos_Aires';
 
+/** Fecha local Argentina en YYYY-MM-DD (misma convención que inventario / vencimientos en servidor). */
+export function fechaHoyArgentinaYmd(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: TIME_ZONE_AR });
+}
+
+/** Suma días a una fecha YYYY-MM-DD (calendario, sin hora). */
+export function ymdAddDays(ymd: string, deltaDays: number): string {
+  const [y, m, d] = String(ymd)
+    .split('-')
+    .map((x) => parseInt(x, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return String(ymd);
+  const ms = Date.UTC(y, m - 1, d) + deltaDays * 86400000;
+  const dt = new Date(ms);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+}
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }

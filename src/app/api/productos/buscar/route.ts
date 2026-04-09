@@ -18,12 +18,12 @@ export async function GET(request: NextRequest) {
   const admin = await createAdminClient();
 
   const like = `%${q}%`;
+  const seen = new Map<number, Record<string, unknown>>();
 
-  // Buscamos por nombre (Producto + Presentaci) y por codebar.
   const { data, error } = await admin
     .from('medicamentos')
-    .select('codplex, codebar, producto, presentaci, codlab, activo')
-    .or(`codebar.ilike.${like},producto.ilike.${like},presentaci.ilike.${like}`)
+    .select('codplex, troquel, codebar, producto, presentaci, codlab, activo')
+    .or(`codebar.ilike.${like},troquel.ilike.${like},producto.ilike.${like},presentaci.ilike.${like}`)
     .eq('activo', 'S')
     .limit(20);
 
@@ -32,14 +32,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Error al buscar productos' }, { status: 500 });
   }
 
-  if (!data || data.length === 0) {
+  for (const m of data ?? []) {
+    const row = m as { codplex: number };
+    const id = Number(row.codplex);
+    if (!seen.has(id)) seen.set(id, m as Record<string, unknown>);
+    if (seen.size >= 20) break;
+  }
+
+  const merged = Array.from(seen.values());
+  if (merged.length === 0) {
     return NextResponse.json({ data: [] });
   }
 
   // Resolver nombres de laboratorio
   const codlabs = Array.from(
     new Set(
-      data
+      merged
         .map((m: any) => m.codlab as number | null)
         .filter((v): v is number => v != null)
     )
@@ -57,9 +65,10 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const resultados = data.map((m: any) => ({
+  const resultados = merged.map((m: any) => ({
       producto_id_sistema: String(m.codplex),
       codigo_barras: m.codebar as string | null,
+      troquel: (m.troquel as string | null) ?? null,
       descripcion: (m.producto as string | null) ?? '',
       presentacion: (m.presentaci as string | null) ?? null,
       laboratorio:

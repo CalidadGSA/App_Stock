@@ -37,7 +37,7 @@ export async function GET(
   if (idProductoFromBarcode != null) {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab, refrigeracion, activo')
+      .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo')
       .eq('codplex', idProductoFromBarcode)
       .maybeSingle();
 
@@ -49,7 +49,7 @@ export async function GET(
   } else {
     const { data, error } = await admin
       .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab, refrigeracion, activo')
+      .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo')
       .eq('codebar', barcode)
       .limit(1)
       .maybeSingle();
@@ -59,6 +59,20 @@ export async function GET(
       return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
     }
     med = data;
+
+    if (!med) {
+      const { data: byTroquel, error: troqErr } = await admin
+        .from('medicamentos')
+        .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo')
+        .eq('troquel', barcode)
+        .limit(1)
+        .maybeSingle();
+      if (troqErr) {
+        console.error('Error buscando medicamento por troquel [básico]:', troqErr);
+        return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
+      }
+      med = byTroquel;
+    }
   }
 
   if (!med || (med.activo as string | null)?.toUpperCase() !== 'S') {

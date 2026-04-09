@@ -25,6 +25,7 @@ interface VencidoItem {
   cantidad_cargada_original: number;
   ratio_vendido_sobre_original: number | null;
   obligatorio_observacion_devolucion: boolean;
+  venta_posterior_a_carga?: boolean;
 }
 
 function textoObservacionEfectiva(item: VencidoItem, obsLocal: Record<string, string>): string {
@@ -386,6 +387,11 @@ export default function VencidosPage() {
                           {alertaObs ? (
                             <span className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
                               Observación requerida para devolver
+                            </span>
+                          ) : null}
+                          {r.venta_posterior_a_carga ? (
+                            <span className="mt-1 ml-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+                              Venta posterior a la carga
                             </span>
                           ) : null}
                         </td>

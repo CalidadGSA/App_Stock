@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -13,7 +13,7 @@ import {
   colorVencimiento,
   estiloFilaProgresoVenta,
 } from '@/lib/utils';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 
 interface PorVencerItem {
   id: string;
@@ -28,6 +28,8 @@ interface PorVencerItem {
   cantidad: number;
   cantidad_vendida_acumulada?: number;
   vendido?: number;
+  accion_observacion?: string | null;
+  venta_posterior_a_carga?: boolean;
   cat_macro: string | null;
   categoria: string | null;
   descuento_aplicado?: number | null;
@@ -47,6 +49,9 @@ export default function PorVencerPage() {
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>('');
   const [busquedaTexto, setBusquedaTexto] = useState('');
   const [rol, setRol] = useState<'admin' | 'operador_sucursal'>('operador_sucursal');
+  const [gruposExpandidos, setGruposExpandidos] = useState<Record<string, boolean>>({});
+  const [obsLocal, setObsLocal] = useState<Record<string, string>>({});
+  const [guardandoObsId, setGuardandoObsId] = useState<string | null>(null);
   const [rangeKey, setRangeKey] = useState<
     'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
   >('all');
@@ -99,6 +104,38 @@ export default function PorVencerPage() {
     });
   }, [items, busquedaTexto]);
 
+  type FilaAgrupada =
+    | { tipo: 'uno'; item: PorVencerItem }
+    | { tipo: 'grupo'; key: string; items: PorVencerItem[] };
+
+  const filasAgrupadas = useMemo((): FilaAgrupada[] => {
+    const map = new Map<string, PorVencerItem[]>();
+    for (const i of itemsFiltrados) {
+      const k = `${i.producto_id_sistema}\t${i.fecha_vencimiento}`;
+      const arr = map.get(k) ?? [];
+      arr.push(i);
+      map.set(k, arr);
+    }
+    const filas: FilaAgrupada[] = [];
+    for (const [, arr] of map) {
+      if (arr.length === 1) {
+        filas.push({ tipo: 'uno', item: arr[0]! });
+      } else {
+        filas.push({
+          tipo: 'grupo',
+          key: `${arr[0]!.producto_id_sistema}-${arr[0]!.fecha_vencimiento}`,
+          items: arr,
+        });
+      }
+    }
+    filas.sort((a, b) => {
+      const fa = a.tipo === 'uno' ? a.item.fecha_vencimiento : a.items[0]!.fecha_vencimiento;
+      const fb = b.tipo === 'uno' ? b.item.fecha_vencimiento : b.items[0]!.fecha_vencimiento;
+      return fa.localeCompare(fb);
+    });
+    return filas;
+  }, [itemsFiltrados]);
+
   async function cargar() {
     setLoading(true);
     setError('');
@@ -141,6 +178,7 @@ export default function PorVencerPage() {
         return;
       }
       setItems(json.data ?? []);
+      setObsLocal({});
       setCatMacros(json.cat_macros ?? []);
       setCategorias(json.categorias ?? []);
     } catch {
@@ -222,6 +260,80 @@ export default function PorVencerPage() {
       );
     } catch {
       setError('Error al eliminar el registro');
+    }
+  }
+
+  async function reducirCarga(detalleId: string, cantidadDisponible: number) {
+    const max = Math.max(0, Math.floor(Number(cantidadDisponible) || 0));
+    if (max <= 0) {
+      setError('Sin cantidad para quitar.');
+      return;
+    }
+    const ingresado = window.prompt(
+      `¿Cuántas unidades quitás? (error de carga, máx ${max})`,
+      String(max)
+    );
+    if (ingresado == null) return;
+    const cantidad = parseInt(ingresado, 10);
+    if (!Number.isFinite(cantidad) || cantidad <= 0 || cantidad > max) {
+      setError(`Cantidad entre 1 y ${max}.`);
+      return;
+    }
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/por-vencer/reducir-carga', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ detalle_id: detalleId, cantidad }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setError(json.error ?? 'Error al quitar cantidad');
+        return;
+      }
+      await cargar();
+    } catch {
+      setError('Error al quitar cantidad');
+    }
+  }
+
+  function textoObs(item: PorVencerItem) {
+    if (obsLocal[item.id] !== undefined) return obsLocal[item.id];
+    return String(item.accion_observacion ?? '');
+  }
+
+  async function guardarObservacion(item: PorVencerItem) {
+    const texto = textoObs(item).trim();
+    setGuardandoObsId(item.id);
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/por-vencer', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.id, accion_observacion: texto }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        accion_observacion?: string | null;
+      };
+      if (!res.ok) {
+        setError(json.error ?? 'Error al guardar observación');
+        return;
+      }
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === item.id ? { ...x, accion_observacion: json.accion_observacion ?? null } : x
+        )
+      );
+      setObsLocal((prev) => {
+        const n = { ...prev };
+        delete n[item.id];
+        return n;
+      });
+    } catch {
+      setError('Error al guardar observación');
+    } finally {
+      setGuardandoObsId(null);
     }
   }
 
@@ -354,7 +466,7 @@ export default function PorVencerPage() {
                   type="text"
                   value={busquedaTexto}
                   onChange={(e) => setBusquedaTexto(e.target.value)}
-                  placeholder="Producto, código, laboratorio..."
+                  placeholder="Producto, código, id, laboratorio…"
                   className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:placeholder:text-gray-400 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 />
@@ -406,9 +518,8 @@ export default function PorVencerPage() {
         <CardHeader>
           <div className="flex flex-col gap-2">
             <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
-            {!loading && !error && itemsFiltrados.length > 0 ? (
+            {!loading && !error && filasAgrupadas.length > 0 ? (
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Color de fila: progreso de venta cada 10 % (rojo → verde) según vendido ÷ (restante + vendido).
               </p>
             ) : null}
           </div>
@@ -420,7 +531,7 @@ export default function PorVencerPage() {
             </div>
           ) : error ? (
             <p className="px-5 py-4 text-sm text-red-600">{error}</p>
-          ) : itemsFiltrados.length === 0 ? (
+          ) : filasAgrupadas.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400 dark:text-gray-500">
               {vistaSelect === 'vendidos' && 'No hay productos liquidados en ese rango.'}
               {vistaSelect === 'vencidos' && 'No hay productos vencidos en ese rango.'}
@@ -452,80 +563,308 @@ export default function PorVencerPage() {
                     <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
                       Descuento
                     </th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
+                      Acción / observación
+                    </th>
                     <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
                       Acciones
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {itemsFiltrados.map((r) => {
-                    const dias = diasHastaVencimiento(r.fecha_vencimiento);
-                    const color = colorVencimiento(dias);
-                    const vendHist = Number(r.cantidad_vendida_acumulada) || 0;
-                    const rest = Number(r.cantidad) || 0;
-                    const liquidado = rest <= 0;
-                    return (
-                      <tr
-                        key={r.id}
-                        style={estiloFilaProgresoVenta(rest, vendHist)}
-                        className="transition-[filter] duration-150 hover:brightness-[0.97] dark:hover:brightness-[1.05]"
-                      >
-                        <td className="px-4 py-2 align-top">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-medium text-gray-900 dark:text-gray-100">{r.descripcion}</p>
-                            {liquidado ? (
-                              <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-100/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
-                                Liquidado
-                              </span>
+                  {filasAgrupadas.map((fila) => {
+                    if (fila.tipo === 'uno') {
+                      const r = fila.item;
+                      const dias = diasHastaVencimiento(r.fecha_vencimiento);
+                      const color = colorVencimiento(dias);
+                      const vendHist = Number(r.cantidad_vendida_acumulada) || 0;
+                      const rest = Number(r.cantidad) || 0;
+                      const liquidado = rest <= 0;
+                      return (
+                        <tr
+                          key={r.id}
+                          style={estiloFilaProgresoVenta(rest, vendHist)}
+                          className="transition-[filter] duration-150 hover:brightness-[0.97] dark:hover:brightness-[1.05]"
+                        >
+                          <td className="px-4 py-2 align-top">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium text-gray-900 dark:text-gray-100">{r.descripcion}</p>
+                              {liquidado ? (
+                                <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-100/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
+                                  Liquidado
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="text-sm text-gray-900 dark:text-gray-200">
+                              {r.presentacion} · {r.laboratorio}
+                            </p>
+                            <p className="mt-0.5 font-mono text-sm text-gray-900 dark:text-gray-300">
+                              {r.codigo_barras} · ID {r.producto_id_sistema}
+                            </p>
+                            {r.venta_posterior_a_carga ? (
+                              <p className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
+                                Venta posterior a la carga
+                              </p>
                             ) : null}
-                          </div>
-                          <p className="text-sm text-gray-900 dark:text-gray-200">
-                            {r.presentacion} · {r.laboratorio}
-                          </p>
-                          <p className="mt-0.5 font-mono text-sm text-gray-900 dark:text-gray-300">
-                            {r.codigo_barras}
-                          </p>
-                        </td>
-                        <td className="px-4 py-2 align-top text-xs text-gray-700 dark:text-gray-300">
-                          {r.categoria ?? '-'}
-                        </td>
-                        <td className="px-4 py-2 align-top text-xs whitespace-nowrap text-gray-700 dark:text-gray-300">
-                          {formatDateTime(r.fecha_registro)}
-                        </td>
-                        <td className="px-4 py-2 align-top text-xs">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-gray-800 dark:text-gray-200">{formatDate(r.fecha_vencimiento)}</span>
-                            <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
-                              {dias < 0 ? 'Vencido' : `En ${dias} día${dias !== 1 ? 's' : ''}`}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-2 align-top text-right text-xs text-gray-800 dark:text-gray-200">
-                          {Number(r.cantidad ?? 0).toFixed(0)}
-                        </td>
-                        <td className="px-4 py-2 align-top text-right text-xs text-gray-800 dark:text-gray-200">
-                          {vendHist.toFixed(0)}
-                        </td>
-                        <td className="px-4 py-2 align-top text-right text-xs">
-                          {typeof r.descuento_aplicado === 'number' ? (
-                            <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
-                              -{Math.abs(r.descuento_aplicado)}%
-                            </span>
-                          ) : (
-                            <span className="text-gray-400 dark:text-gray-500">-</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2 align-top text-right">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={liquidado}
-                            onClick={() => void eliminarRegistro(r.id, Number(r.cantidad ?? 0))}
-                          >
-                            Vendido
-                          </Button>
-                        </td>
-                      </tr>
+                          </td>
+                          <td className="px-4 py-2 align-top text-xs text-gray-700 dark:text-gray-300">
+                            {r.categoria ?? '-'}
+                          </td>
+                          <td className="px-4 py-2 align-top text-xs whitespace-nowrap text-gray-700 dark:text-gray-300">
+                            {formatDateTime(r.fecha_registro)}
+                          </td>
+                          <td className="px-4 py-2 align-top text-xs">
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-gray-800 dark:text-gray-200">{formatDate(r.fecha_vencimiento)}</span>
+                              <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
+                                {dias < 0 ? 'Vencido' : `En ${dias} día${dias !== 1 ? 's' : ''}`}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 align-top text-right text-xs text-gray-800 dark:text-gray-200">
+                            {Number(r.cantidad ?? 0).toFixed(0)}
+                          </td>
+                          <td className="px-4 py-2 align-top text-right text-xs text-gray-800 dark:text-gray-200">
+                            {vendHist.toFixed(0)}
+                          </td>
+                          <td className="px-4 py-2 align-top text-right text-xs">
+                            {typeof r.descuento_aplicado === 'number' ? (
+                              <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+                                -{Math.abs(r.descuento_aplicado)}%
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 dark:text-gray-500">-</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 align-top">
+                            <textarea
+                              rows={2}
+                              value={textoObs(r)}
+                              onChange={(e) =>
+                                setObsLocal((prev) => ({ ...prev, [r.id]: e.target.value }))
+                              }
+                              className="w-full min-w-[190px] resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                              placeholder="Acción tomada..."
+                            />
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="mt-1"
+                              disabled={guardandoObsId === r.id}
+                              onClick={() => void guardarObservacion(r)}
+                            >
+                              {guardandoObsId === r.id ? 'Guardando…' : 'Guardar'}
+                            </Button>
+                          </td>
+                          <td className="px-4 py-2 align-top text-right">
+                            <div className="flex flex-wrap justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={liquidado}
+                                onClick={() => void eliminarRegistro(r.id, Number(r.cantidad ?? 0))}
+                              >
+                                Vendido
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="px-2"
+                                title="Quitar por error de carga"
+                                disabled={liquidado}
+                                onClick={() => void reducirCarga(r.id, Number(r.cantidad ?? 0))}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    const grp = fila.items;
+                    const key = fila.key;
+                    const exp = gruposExpandidos[key] ?? false;
+                    const restG = grp.reduce((s, x) => s + (Number(x.cantidad) || 0), 0);
+                    const vendG = grp.reduce((s, x) => s + (Number(x.cantidad_vendida_acumulada) || 0), 0);
+                    const liquidadoG = restG <= 0;
+                    const primero = grp[0]!;
+                    const dias = diasHastaVencimiento(primero.fecha_vencimiento);
+                    const color = colorVencimiento(dias);
+                    const desc0 = primero.descuento_aplicado;
+                    const descTodosIguales = grp.every(
+                      (x) => x.descuento_aplicado === desc0
+                    );
+
+                    return (
+                      <Fragment key={key}>
+                        <tr
+                          style={estiloFilaProgresoVenta(restG, vendG)}
+                          className="transition-[filter] duration-150 hover:brightness-[0.97] dark:hover:brightness-[1.05]"
+                        >
+                          <td className="px-4 py-2 align-top">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium text-gray-900 dark:text-gray-100">{primero.descripcion}</p>
+                              <span className="inline-flex rounded-full border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-100">
+                                {grp.length} líneas
+                              </span>
+                              {liquidadoG ? (
+                                <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-100/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
+                                  Liquidado
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="text-sm text-gray-900 dark:text-gray-200">
+                              {primero.presentacion} · {primero.laboratorio}
+                            </p>
+                            <p className="mt-0.5 font-mono text-sm text-gray-900 dark:text-gray-300">
+                              {primero.codigo_barras} · ID {primero.producto_id_sistema}
+                            </p>
+                            {grp.some((x) => x.venta_posterior_a_carga) ? (
+                              <p className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
+                                Venta posterior a la carga
+                              </p>
+                            ) : null}
+                          </td>
+                          <td className="px-4 py-2 align-top text-xs text-gray-700 dark:text-gray-300">
+                            {primero.categoria ?? '-'}
+                          </td>
+                          <td className="px-4 py-2 align-top text-xs text-gray-600 dark:text-gray-400">
+                            Varias cargas
+                          </td>
+                          <td className="px-4 py-2 align-top text-xs">
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-gray-800 dark:text-gray-200">{formatDate(primero.fecha_vencimiento)}</span>
+                              <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
+                                {dias < 0 ? 'Vencido' : `En ${dias} día${dias !== 1 ? 's' : ''}`}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">
+                            {restG.toFixed(0)}
+                          </td>
+                          <td className="px-4 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">
+                            {vendG.toFixed(0)}
+                          </td>
+                          <td className="px-4 py-2 align-top text-right text-xs">
+                            {descTodosIguales && typeof desc0 === 'number' ? (
+                              <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+                                -{Math.abs(desc0)}%
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 dark:text-gray-500">-</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 align-top text-xs text-gray-500 dark:text-gray-400">
+                            Editá por línea
+                          </td>
+                          <td className="px-4 py-2 align-top text-right">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="gap-1"
+                              onClick={() =>
+                                setGruposExpandidos((p) => ({ ...p, [key]: !exp }))
+                              }
+                            >
+                              {exp ? (
+                                <ChevronDown className="h-4 w-4" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4" />
+                              )}
+                              Líneas
+                            </Button>
+                          </td>
+                        </tr>
+                        {exp
+                          ? grp.map((r) => {
+                              const d = diasHastaVencimiento(r.fecha_vencimiento);
+                              const col = colorVencimiento(d);
+                              const vh = Number(r.cantidad_vendida_acumulada) || 0;
+                              const rest = Number(r.cantidad) || 0;
+                              const liq = rest <= 0;
+                              return (
+                                <tr
+                                  key={r.id}
+                                  className="bg-slate-50/90 dark:bg-slate-900/40"
+                                >
+                                  <td className="px-4 py-2 pl-8 align-top text-xs text-gray-600 dark:text-gray-400">
+                                    Línea · control {r.control_id.slice(0, 8)}…
+                                  </td>
+                                  <td className="px-4 py-2 align-top text-xs text-gray-500 dark:text-gray-500">
+                                    {r.categoria ?? '-'}
+                                  </td>
+                                  <td className="px-4 py-2 align-top text-xs whitespace-nowrap text-gray-600 dark:text-gray-400">
+                                    {r.fecha_registro ? formatDateTime(r.fecha_registro) : '—'}
+                                  </td>
+                                  <td className="px-4 py-2 align-top text-xs">
+                                    <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${col}`}>
+                                      {formatDate(r.fecha_vencimiento)}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-2 align-top text-right text-xs">{rest.toFixed(0)}</td>
+                                  <td className="px-4 py-2 align-top text-right text-xs">{vh.toFixed(0)}</td>
+                                  <td className="px-4 py-2 align-top text-right text-xs">
+                                    {typeof r.descuento_aplicado === 'number' ? (
+                                      <span className="text-emerald-700 dark:text-emerald-300">
+                                        -{Math.abs(r.descuento_aplicado)}%
+                                      </span>
+                                    ) : (
+                                      '-'
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2 align-top">
+                                    <textarea
+                                      rows={2}
+                                      value={textoObs(r)}
+                                      onChange={(e) =>
+                                        setObsLocal((prev) => ({ ...prev, [r.id]: e.target.value }))
+                                      }
+                                      className="w-full min-w-[180px] resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                                      placeholder="Acción tomada..."
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      className="mt-1"
+                                      disabled={guardandoObsId === r.id}
+                                      onClick={() => void guardarObservacion(r)}
+                                    >
+                                      {guardandoObsId === r.id ? 'Guardando…' : 'Guardar'}
+                                    </Button>
+                                    {r.venta_posterior_a_carga ? (
+                                      <p className="mt-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                        Venta posterior a la carga
+                                      </p>
+                                    ) : null}
+                                  </td>
+                                  <td className="px-4 py-2 align-top text-right">
+                                    <div className="flex flex-wrap justify-end gap-1">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={liq}
+                                        onClick={() => void eliminarRegistro(r.id, Number(r.cantidad ?? 0))}
+                                      >
+                                        Vendido
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="px-2"
+                                        title="Quitar por error de carga"
+                                        disabled={liq}
+                                        onClick={() => void reducirCarga(r.id, Number(r.cantidad ?? 0))}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          : null}
+                      </Fragment>
                     );
                   })}
                 </tbody>
