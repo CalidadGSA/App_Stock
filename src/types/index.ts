@@ -90,7 +90,7 @@ export interface ControlInventarioDetalle {
   id: string;
   control_id: string;
   producto_id_sistema: string;
-  codigo_barras: string;
+  codigo_barras: string | null;
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
@@ -133,7 +133,7 @@ export interface ControlVencimientoDetalle {
   id: string;
   control_id: string;
   producto_id_sistema: string;
-  codigo_barras: string;
+  codigo_barras: string | null;
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;

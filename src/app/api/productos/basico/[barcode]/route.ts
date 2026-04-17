@@ -61,6 +61,20 @@ export async function GET(
     med = data;
 
     if (!med) {
+      const { data: byAltCodebar, error: altErr } = await admin
+        .from('medicamentos')
+        .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo')
+        .or(`codebar2.eq.${barcode},codebar3.eq.${barcode},codebar4.eq.${barcode}`)
+        .limit(1)
+        .maybeSingle();
+      if (altErr) {
+        console.error('Error buscando medicamento por codebar alternativo [básico]:', altErr);
+        return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
+      }
+      med = byAltCodebar;
+    }
+
+    if (!med) {
       const { data: byTroquel, error: troqErr } = await admin
         .from('medicamentos')
         .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo')

@@ -26,6 +26,25 @@ interface LoteForm {
 
 const LOTE_VACIO: LoteForm = { fecha_vencimiento: '', cantidad: '' };
 
+function ymdToYm(ymd: string): string {
+  const raw = (ymd ?? '').trim();
+  if (!raw) return '';
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return raw;
+  return `${m[1]}-${m[2]}`;
+}
+
+function ymToLastDayYmd(ym: string): string | null {
+  const raw = (ym ?? '').trim();
+  const m = raw.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return null;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+}
+
 export default function VencimientoDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -87,7 +106,10 @@ export default function VencimientoDetailPage() {
         const params = new URLSearchParams({
           control_id: String(control.id),
           producto_id: productoEscaneado.producto_id_sistema,
-          fechas: fechas.join(','),
+          fechas: fechas
+            .map((ym) => ymToLastDayYmd(ym))
+            .filter((v): v is string => Boolean(v))
+            .join(','),
         });
         try {
           const res = await fetch(`/api/vencimientos/duplicado-otro-control?${params.toString()}`);
@@ -163,7 +185,13 @@ export default function VencimientoDetailPage() {
         setErrorProducto(json.error ?? 'Producto no encontrado');
         return false;
       }
-      setProductoEscaneado(json.data!);
+      const producto = json.data!;
+      const existente = detalles.find((d) => d.producto_id_sistema === producto.producto_id_sistema);
+      if (existente) {
+        handleEditarProductoDesdeLinea(existente);
+      } else {
+        setProductoEscaneado(producto);
+      }
       return true;
     } catch {
       setErrorProducto('Error al buscar el producto');
@@ -224,7 +252,10 @@ export default function VencimientoDetailPage() {
       return;
     }
 
-    const hayDuplicadoOtroControl = lotesValidos.some((l) => duplicadosPorFecha[l.fecha_vencimiento]);
+    const hayDuplicadoOtroControl = lotesValidos.some((l) => {
+      const fechaYmd = ymToLastDayYmd(l.fecha_vencimiento);
+      return fechaYmd ? Boolean(duplicadosPorFecha[fechaYmd]) : false;
+    });
     if (
       hayDuplicadoOtroControl &&
       !window.confirm(
@@ -257,6 +288,11 @@ export default function VencimientoDetailPage() {
       }
 
       for (const lote of lotesValidos) {
+        const fechaYmd = ymToLastDayYmd(lote.fecha_vencimiento);
+        if (!fechaYmd) {
+          setErrorProducto('Mes de vencimiento inválido.');
+          return;
+        }
         const res = await fetch(`/api/vencimientos/${id}/detalles`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -266,7 +302,7 @@ export default function VencimientoDetailPage() {
             descripcion: productoEscaneado.descripcion,
             presentacion: productoEscaneado.presentacion,
             laboratorio: productoEscaneado.laboratorio,
-            fecha_vencimiento: lote.fecha_vencimiento,
+            fecha_vencimiento: fechaYmd,
             cantidad: parseFloat(lote.cantidad),
           }),
         });
@@ -301,7 +337,7 @@ export default function VencimientoDetailPage() {
       .filter((d) => d.producto_id_sistema === productoId)
       .sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento))
       .map((d) => ({
-        fecha_vencimiento: d.fecha_vencimiento,
+        fecha_vencimiento: ymdToYm(d.fecha_vencimiento),
         cantidad: String(d.cantidad),
       }));
 
@@ -467,7 +503,15 @@ export default function VencimientoDetailPage() {
                                 return;
                               }
                               setResultadosBusqueda([]);
-                              setProductoEscaneado(json.data);
+                              const producto = json.data;
+                              const existente = detalles.find(
+                                (d) => d.producto_id_sistema === producto.producto_id_sistema
+                              );
+                              if (existente) {
+                                handleEditarProductoDesdeLinea(existente);
+                              } else {
+                                setProductoEscaneado(producto);
+                              }
                             } catch {
                               setErrorProducto('Error al cargar el producto');
                             } finally {
@@ -518,12 +562,16 @@ export default function VencimientoDetailPage() {
                       <div className="flex-1">
                         <Input
                           label={`Lote ${idx + 1} – Fecha de vencimiento`}
-                          type="date"
+                          type="month"
                           value={lote.fecha_vencimiento}
                           onChange={e => actualizarLote(idx, 'fecha_vencimiento', e.target.value)}
                           required
                         />
-                        {lote.fecha_vencimiento && duplicadosPorFecha[lote.fecha_vencimiento] ? (
+                        {lote.fecha_vencimiento &&
+                        (() => {
+                          const fechaYmd = ymToLastDayYmd(lote.fecha_vencimiento);
+                          return fechaYmd ? Boolean(duplicadosPorFecha[fechaYmd]) : false;
+                        })() ? (
                           <p className="mt-1 text-[11px] font-medium text-amber-800 dark:text-amber-200">
                             Producto duplicado, revisar
                           </p>

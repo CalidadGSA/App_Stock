@@ -662,7 +662,7 @@ export default function InventarioDetailPage() {
         if (opened) {
           setDetalleSeleccionadoId(detalleExistentePorBarcode.id);
           if (control?.categoria_macro) {
-            setFiltroCodigo(detalleExistentePorBarcode.codigo_barras);
+            setFiltroCodigo(detalleExistentePorBarcode.codigo_barras ?? '');
           }
         }
         return opened;
@@ -824,7 +824,7 @@ export default function InventarioDetailPage() {
       if (isStale()) return false;
       if (cargado) {
         setDetalleSeleccionadoId(detalle.id);
-        setFiltroCodigo(detalle.codigo_barras);
+        setFiltroCodigo(detalle.codigo_barras ?? '');
       } else {
         setDetalleSeleccionadoId(null);
         setFiltroCodigo('');
@@ -921,7 +921,7 @@ export default function InventarioDetailPage() {
       if (opened) {
         setDetalleSeleccionadoId(detalleExistente.id);
         if (control?.categoria_macro) {
-          setFiltroCodigo(detalleExistente.codigo_barras);
+          setFiltroCodigo(detalleExistente.codigo_barras ?? '');
         }
         setResultadosBusqueda([]);
       }
@@ -1086,8 +1086,8 @@ export default function InventarioDetailPage() {
             stock_sistema: productoEscaneado.stock_sistema,
             stock_sist_cajas: productoEscaneado.stock_cajas ?? undefined,
             stock_sist_unidades: productoEscaneado.stock_unidades ?? undefined,
-            stock_real_cajas: cajasNum || undefined,
-            stock_real_unidades: unidadesFinal || undefined,
+            stock_real_cajas: cajasNum,
+            stock_real_unidades: unidadesFinal,
             stock_real: totalUnidades,
           }),
         });
@@ -1103,9 +1103,14 @@ export default function InventarioDetailPage() {
       // no quede visible solo el panel de resultados.
       setResultadosBusqueda([]);
       stopCardCamera();
-      recentlyConfirmedBarcodesRef.current.set(productoEscaneado.codigo_barras, Date.now());
-      lastConfirmedBarcodeRef.current = { value: productoEscaneado.codigo_barras, at: Date.now() };
-      mustScanDifferentBarcodeRef.current = productoEscaneado.codigo_barras;
+      if (productoEscaneado.codigo_barras) {
+        recentlyConfirmedBarcodesRef.current.set(productoEscaneado.codigo_barras, Date.now());
+        lastConfirmedBarcodeRef.current = { value: productoEscaneado.codigo_barras, at: Date.now() };
+        mustScanDifferentBarcodeRef.current = productoEscaneado.codigo_barras;
+      } else {
+        lastConfirmedBarcodeRef.current = null;
+        mustScanDifferentBarcodeRef.current = null;
+      }
       setDetalleSeleccionadoId(null);
       setFiltroCodigo('');
       setFiltroNombre('');
@@ -1487,7 +1492,7 @@ export default function InventarioDetailPage() {
                     </div>
                     <p className="text-base text-gray-900">{productoEscaneado.presentacion} . {productoEscaneado.laboratorio}</p>
                     <p className="mt-2 font-mono text-base text-gray-800">
-                      {productoEscaneado.codigo_barras}
+                      {productoEscaneado.codigo_barras ?? 'Sin código de barras'}
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-2">
@@ -1759,7 +1764,7 @@ export default function InventarioDetailPage() {
                           if (cargado) {
                             setDetalleSeleccionadoId(det.id);
                             if (control.categoria_macro) {
-                              setFiltroCodigo(det.codigo_barras);
+                              setFiltroCodigo(det.codigo_barras ?? '');
                             }
                           } else {
                             setDetalleSeleccionadoId(null);
@@ -1780,7 +1785,7 @@ export default function InventarioDetailPage() {
                             {det.presentacion} · {det.laboratorio}
                           </p>
                           <p className="mt-0.5 font-mono text-sm text-gray-700">
-                            {det.codigo_barras}
+                            {det.codigo_barras ?? 'Sin código de barras'}
                           </p>
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">

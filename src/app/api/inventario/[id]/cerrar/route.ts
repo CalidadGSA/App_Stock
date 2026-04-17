@@ -45,6 +45,15 @@ export async function POST(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Refechar el detalle al momento de cierre para reflejar cuándo quedó consolidado.
+  const { error: detalleCloseError } = await admin
+    .from('controles_inventario_detalle')
+    .update({ fecha_registro: now })
+    .eq('control_id', controlId);
+  if (detalleCloseError) {
+    return NextResponse.json({ error: detalleCloseError.message }, { status: 500 });
+  }
+
   // Solo los inventarios diarios afectan vecesInventariado en base_productos.
   const categoriaMacro = control.categoria_macro as 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | null;
   if (esTipoDiario(tipoControl) && categoriaMacro && sucursalId) {

@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 
 export default function NuevoInventarioOcasionalPage() {
   const router = useRouter();
-  const [descripcion, setDescripcion] = useState('');
+  const [motivo, setMotivo] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -19,7 +19,7 @@ export default function NuevoInventarioOcasionalPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        descripcion: descripcion.trim() || null,
+        motivo: motivo.trim(),
         confirm_override: confirmOverride || undefined,
       }),
     });
@@ -27,6 +27,10 @@ export default function NuevoInventarioOcasionalPage() {
 
   async function handleCrear() {
     setError('');
+    if (!motivo.trim()) {
+      setError('El motivo es obligatorio.');
+      return;
+    }
     setLoading(true);
     try {
       let res = await crearInventario(false);
@@ -93,7 +97,7 @@ export default function NuevoInventarioOcasionalPage() {
         <div className="border-b border-gray-100 px-6 py-4">
           <h2 className="text-sm font-semibold text-gray-900">Inventario ocasional</h2>
           <p className="text-xs text-gray-500 mt-1">
-            Ingresá una descripción (opcional) para identificar este inventario.
+            Ingresá el motivo de este inventario ocasional.
           </p>
         </div>
         <div className="px-6 py-5">
@@ -105,10 +109,11 @@ export default function NuevoInventarioOcasionalPage() {
             className="flex flex-col gap-4"
           >
             <Input
-              label="Descripción (opcional)"
-              value={descripcion}
-              onChange={(e) => setDescripcion(e.target.value)}
+              label="Motivo"
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
               placeholder="Ej: Recuento góndola perfumería"
+              required
             />
 
             {error && (

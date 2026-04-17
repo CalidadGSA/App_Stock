@@ -42,7 +42,7 @@ export async function PATCH(request: NextRequest) {
 
   const admin = await createAdminClient();
   const { error } = await admin
-    .from('app_frontend_status')
+    .from('modo_mantenimiento')
     .upsert(
       {
         id: MAINTENANCE_ROW_ID,

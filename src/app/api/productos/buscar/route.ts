@@ -22,10 +22,10 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await admin
     .from('medicamentos')
-    .select('codplex, troquel, codebar, producto, presentaci, codlab, activo')
-    .or(`codebar.ilike.${like},troquel.ilike.${like},producto.ilike.${like},presentaci.ilike.${like}`)
+    .select('codplex, troquel, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, activo')
+    .or(`codebar.ilike.${like},codebar2.ilike.${like},codebar3.ilike.${like},codebar4.ilike.${like},producto.ilike.${like},presentaci.ilike.${like}`)
     .eq('activo', 'S')
-    .limit(20);
+    .limit(60);
 
   if (error) {
     console.error('Error buscando medicamentos por texto:', error);
@@ -36,7 +36,28 @@ export async function GET(request: NextRequest) {
     const row = m as { codplex: number };
     const id = Number(row.codplex);
     if (!seen.has(id)) seen.set(id, m as Record<string, unknown>);
-    if (seen.size >= 20) break;
+    if (seen.size >= 40) break;
+  }
+
+  const troquelBuscado = /^\d+$/.test(q) ? Number(q) : NaN;
+  if (!Number.isNaN(troquelBuscado)) {
+    const { data: troquelRows, error: troquelError } = await admin
+      .from('medicamentos')
+      .select('codplex, troquel, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, activo')
+      .eq('troquel', troquelBuscado)
+      .eq('activo', 'S')
+      .limit(20);
+
+    if (troquelError) {
+      console.error('Error buscando medicamentos por troquel:', troquelError);
+      return NextResponse.json({ error: 'Error al buscar productos' }, { status: 500 });
+    }
+
+    for (const m of troquelRows ?? []) {
+      const id = Number((m as { codplex: number }).codplex);
+      if (!seen.has(id)) seen.set(id, m as Record<string, unknown>);
+      if (seen.size >= 40) break;
+    }
   }
 
   const merged = Array.from(seen.values());
@@ -75,7 +96,7 @@ export async function GET(request: NextRequest) {
         m.codlab != null
           ? labMap.get(m.codlab as number) ?? String(m.codlab)
           : null,
-    }));
+    })).slice(0, 40);
 
   return NextResponse.json({ data: resultados });
 }

@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
   const pageSize = parseInt(searchParams.get('pageSize') ?? '20', 10);
   const desde = searchParams.get('desde');
   const hasta = searchParams.get('hasta');
+  const estado = searchParams.get('estado');
 
   let query = admin
     .from('controles_vencimientos')
@@ -30,6 +31,9 @@ export async function GET(request: NextRequest) {
   }
   if (hasta) {
     query = query.lte('fecha_inicio', `${hasta}T23:59:59.999Z`);
+  }
+  if (estado === 'en_progreso' || estado === 'cerrado') {
+    query = query.eq('estado', estado);
   }
 
   const from = (page - 1) * pageSize;

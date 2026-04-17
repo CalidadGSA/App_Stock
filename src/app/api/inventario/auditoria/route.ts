@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import {
   inferirTipoControlInventario,
   nombreTipoControlInventario,
@@ -11,7 +12,7 @@ type DetalleConDiferencia = {
   id: string;
   control_id: string;
   producto_id_sistema: string;
-  codigo_barras: string;
+  codigo_barras: string | null;
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
@@ -29,7 +30,7 @@ type DetalleConDiferencia = {
 export async function POST(request: Request) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') {
+  if (!isAdminLikeRole(operador.rol)) {
     return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
   }
 

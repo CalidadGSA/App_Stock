@@ -10,13 +10,13 @@ const MAINTENANCE_ROW_ID = 1;
 export async function getAppMaintenanceStatus(): Promise<AppMaintenanceStatus> {
   const admin = await createAdminClient();
   const { data, error } = await admin
-    .from('app_frontend_status')
+    .from('modo_mantenimiento')
     .select('is_active, updated_at')
     .eq('id', MAINTENANCE_ROW_ID)
     .maybeSingle();
 
   if (error) {
-    throw new Error(`No se pudo obtener app_frontend_status: ${error.message}`);
+    throw new Error(`No se pudo obtener modo_mantenimiento: ${error.message}`);
   }
 
   return {

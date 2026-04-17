@@ -28,6 +28,7 @@ export default function InventarioListPage() {
   const [hasMore, setHasMore] = useState(false);
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
+  const [estado, setEstado] = useState<'todos' | 'en_progreso' | 'cerrado'>('todos');
 
   async function cargar(p = 1) {
     setLoading(true);
@@ -38,6 +39,7 @@ export default function InventarioListPage() {
       params.set('pageSize', '20');
       if (desde) params.set('desde', desde);
       if (hasta) params.set('hasta', hasta);
+      if (estado !== 'todos') params.set('estado', estado);
 
       const res = await fetch(`/api/inventario?${params.toString()}`);
       const json = (await res.json()) as {
@@ -114,6 +116,21 @@ export default function InventarioListPage() {
                 value={hasta}
                 onChange={(e) => setHasta(e.target.value)}
               />
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium text-gray-700">Estado</label>
+                <select
+                  value={estado}
+                  onChange={(e) =>
+                    setEstado(e.target.value as 'todos' | 'en_progreso' | 'cerrado')
+                  }
+                  className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
+                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                >
+                  <option value="todos">Todos</option>
+                  <option value="en_progreso">En progreso</option>
+                  <option value="cerrado">Cerrado</option>
+                </select>
+              </div>
               <Button size="sm" onClick={handleAplicarFiltros}>
                 Aplicar
               </Button>

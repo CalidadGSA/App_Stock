@@ -45,7 +45,9 @@ export async function GET() {
 
   let invDetallesQuery = admin
     .from('controles_inventario_detalle')
-    .select('producto_id_sistema, con_diferencias, controles_inventario!inner(sucursal_id, origen, tipo)')
+    .select(
+      'producto_id_sistema, con_diferencias, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, controles_inventario!inner(sucursal_id, origen, tipo)'
+    )
     .eq('controles_inventario.sucursal_id', sucursalId)
     .gte('controles_inventario.fecha_inicio', inicio60dias)
     .neq('controles_inventario.tipo', 'auditoria')
@@ -119,11 +121,18 @@ export async function GET() {
     const d = det as {
       producto_id_sistema?: string | number | null;
       con_diferencias?: number | boolean | string | null;
+      stock_sist_cajas?: number | null;
+      stock_sist_unidades?: number | null;
+      stock_real_cajas?: number | null;
+      stock_real_unidades?: number | null;
     };
     const productoId = String(d.producto_id_sistema ?? '').trim();
     if (!productoId) continue;
-    // KPI por ítem: solo cuenta productos con flag de diferencia activo.
-    if (Number(d.con_diferencias ?? 0) !== 1 && d.con_diferencias !== true) continue;
+    // KPI por ítem: incluir diferencias históricas aunque luego se ajusten.
+    const conDifFlag = Number(d.con_diferencias ?? 0) === 1 || d.con_diferencias === true;
+    const deltaC = Number(d.stock_real_cajas ?? 0) - Number(d.stock_sist_cajas ?? 0);
+    const deltaU = Number(d.stock_real_unidades ?? 0) - Number(d.stock_sist_unidades ?? 0);
+    if (!conDifFlag && deltaC === 0 && deltaU === 0) continue;
     itemsConDiferenciaUnicos.add(productoId);
   }
 

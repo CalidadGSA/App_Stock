@@ -1,12 +1,13 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import { NextResponse } from 'next/server';
 
 /** GET /api/admin/sucursales - listado de todas las sucursales (solo admin) */
 export async function GET() {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') {
+  if (!isAdminLikeRole(operador.rol)) {
     return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
   }
 

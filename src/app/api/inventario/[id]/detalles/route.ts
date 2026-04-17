@@ -11,7 +11,7 @@ import { cookies } from 'next/headers';
 
 interface DetalleBody {
   producto_id_sistema: string;
-  codigo_barras: string;
+  codigo_barras?: string | null;
   descripcion: string;
   presentacion?: string;
   laboratorio?: string;
@@ -104,7 +104,7 @@ export async function POST(
     .insert({
       control_id: controlId,
       producto_id_sistema: body.producto_id_sistema,
-      codigo_barras: body.codigo_barras,
+      codigo_barras: body.codigo_barras ?? null,
       descripcion: body.descripcion,
       presentacion: body.presentacion ?? null,
       laboratorio: body.laboratorio ?? null,

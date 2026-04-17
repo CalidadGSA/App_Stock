@@ -207,7 +207,7 @@ create table controles_inventario_detalle (
   id                  uuid primary key default gen_random_uuid(),
   control_id          uuid not null references controles_inventario(id) on delete cascade,
   producto_id_sistema text not null,
-  codigo_barras       text not null,
+  codigo_barras       text,
   descripcion         text not null,
   presentacion        text,
   laboratorio         text,
@@ -303,7 +303,7 @@ create table controles_vencimientos_detalle (
   id                  uuid primary key default gen_random_uuid(),
   control_id          uuid not null references controles_vencimientos(id) on delete cascade,
   producto_id_sistema text not null,
-  codigo_barras       text not null,
+  codigo_barras       text,
   descripcion         text not null,
   presentacion        text,
   laboratorio         text,
@@ -432,19 +432,19 @@ create table if not exists auth_log (
 -- ------------------------------------------------------------
 -- ESTADO GLOBAL DEL FRONTEND (MODO MANTENIMIENTO)
 -- ------------------------------------------------------------
-create table if not exists app_frontend_status (
+create table if not exists modo_mantenimiento (
   id         integer primary key default 1,
   is_active  smallint not null default 1,
   updated_at timestamp without time zone not null default now(),
-  constraint app_frontend_status_singleton_chk check (id = 1),
-  constraint app_frontend_status_active_chk check (is_active in (0, 1))
+  constraint modo_mantenimiento_singleton_chk check (id = 1),
+  constraint modo_mantenimiento_active_chk check (is_active in (0, 1))
 );
 
-insert into app_frontend_status (id, is_active)
+insert into modo_mantenimiento (id, is_active)
 values (1, 1)
 on conflict (id) do nothing;
 
-create or replace function set_app_frontend_status_updated_at()
+create or replace function set_modo_mantenimiento_updated_at()
 returns trigger
 language plpgsql
 as $$
@@ -454,11 +454,17 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_app_frontend_status_updated_at on app_frontend_status;
-create trigger trg_app_frontend_status_updated_at
-before update on app_frontend_status
+drop trigger if exists trg_modo_mantenimiento_updated_at on modo_mantenimiento;
+create trigger trg_modo_mantenimiento_updated_at
+before update on modo_mantenimiento
 for each row
-execute function set_app_frontend_status_updated_at();
+execute function set_modo_mantenimiento_updated_at();
+
+-- Compatibilidad con instalaciones existentes
+alter table if exists controles_inventario_detalle
+  alter column codigo_barras drop not null;
+alter table if exists controles_vencimientos_detalle
+  alter column codigo_barras drop not null;
 
 -- ------------------------------------------------------------
 -- ROW LEVEL SECURITY  (habilitado; acceso via service_role desde backend)
@@ -476,7 +482,7 @@ alter table controles_inventario_detalle enable row level security;
 alter table controles_vencimientos       enable row level security;
 alter table controles_vencimientos_detalle enable row level security;
 alter table vencimientos_detalle_ventas enable row level security;
-alter table app_frontend_status          enable row level security;
+alter table modo_mantenimiento           enable row level security;
 
 -- ------------------------------------------------------------
 -- FUNCIÓN: incrementar vecesInventariado al cerrar un inventario diario

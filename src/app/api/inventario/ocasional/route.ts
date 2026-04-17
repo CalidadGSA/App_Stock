@@ -17,14 +17,11 @@ export async function POST(request: Request) {
   const sucursalId = cookieStore.get('sucursal_id')?.value;
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
-  let body: { descripcion?: string; confirm_override?: boolean } = {};
+  let body: { motivo?: string; confirm_override?: boolean } = {};
   try {
-    body = (await request.json()) as {
-      descripcion?: string;
-      confirm_override?: boolean;
-    };
+    body = (await request.json()) as { motivo?: string; confirm_override?: boolean };
   } catch {
-    // descripción opcional
+    // motivo obligatorio
   }
 
   const admin = await createAdminClient();
@@ -61,10 +58,10 @@ export async function POST(request: Request) {
     }
   }
 
-  const descripcion =
-    body.descripcion && body.descripcion.trim().length > 0
-      ? body.descripcion.trim()
-      : null;
+  const motivo = typeof body.motivo === 'string' ? body.motivo.trim() : '';
+  if (!motivo) {
+    return NextResponse.json({ error: 'El motivo es obligatorio' }, { status: 400 });
+  }
 
   const { data, error } = await admin
     .from('controles_inventario')
@@ -73,7 +70,7 @@ export async function POST(request: Request) {
       usuario_id: operador.idoperador,
       origen: esAdmin ? 'Auditoria' : 'Sucursal',
       tipo: esAdmin ? 'ocasional_auditoria' : 'ocasional_sucursal',
-      descripcion,
+      descripcion: motivo,
     })
     .select()
     .single();

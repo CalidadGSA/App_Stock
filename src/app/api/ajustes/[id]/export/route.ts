@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import { serializarCsvAjuste, type FormatoCsvAjuste } from '@/lib/csv-ajuste';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -10,7 +11,7 @@ export async function GET(
 ) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') {
+  if (!isAdminLikeRole(operador.rol)) {
     return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
   }
 
@@ -45,7 +46,7 @@ export async function GET(
 
   type Row = {
     idproducto: string;
-    codigo_barras: string;
+    codigo_barras: string | null;
     diferencia_cajas: number;
     diferencia_unidades: number;
   };

@@ -1,12 +1,13 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/inventario/diferencias - lista diferencias no ajustadas para una sucursal y rango de fechas (solo admin) */
 export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') {
+  if (!isAdminLikeRole(operador.rol)) {
     return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
   }
 
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') {
+  if (!isAdminLikeRole(operador.rol)) {
     return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
   }
 

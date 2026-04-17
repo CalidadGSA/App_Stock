@@ -9,7 +9,7 @@ export async function GET() {
       updated_at: status.updatedAt,
     });
   } catch (error) {
-    console.error('Error consultando app_frontend_status:', error);
+    console.error('Error consultando modo_mantenimiento:', error);
     return NextResponse.json(
       {
         maintenance: false,
