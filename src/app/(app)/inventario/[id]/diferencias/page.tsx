@@ -397,7 +397,7 @@ export default function InventarioDiferenciasPage() {
                     const sistCajas = det.stock_sist_cajas ?? 0;
                     const sistUnidades =
                       det.stock_sist_unidades ?? 0;
-                    const prod = productosPorBarcode[det.codigo_barras];
+                      const prod = det.codigo_barras ? productosPorBarcode[det.codigo_barras] : undefined;
                     const noPermitirUnidades =
                       prod &&
                       prod.fraccionable !== 1 &&
@@ -551,7 +551,7 @@ export default function InventarioDiferenciasPage() {
                 cajas: det.stock_real_cajas != null ? String(det.stock_real_cajas) : '',
                 unidades: det.stock_real_unidades != null ? String(det.stock_real_unidades) : '',
               };
-              const prod = productosPorBarcode[det.codigo_barras];
+              const prod = det.codigo_barras ? productosPorBarcode[det.codigo_barras] : undefined;
               const sistCajas = prod?.stock_cajas ?? det.stock_sist_cajas ?? 0;
               const sistUnidades = prod?.stock_unidades ?? det.stock_sist_unidades ?? 0;
               const realCajas = edit.cajas.trim() === '' ? 0 : Number(edit.cajas);
