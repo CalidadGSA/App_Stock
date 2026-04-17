@@ -68,9 +68,13 @@ export default function InventarioDiferenciasPage() {
     async function cargarProductos() {
       const detalles = control?.controles_inventario_detalle ?? [];
       
-      // Filtramos nulos y aseguramos que sean strings para evitar errores de tipo
-      const barcodes = Array.from(
-        new Set(detalles.map((d) => d.codigo_barras).filter((bc): bc is string => !!bc))
+      // Filtramos nulos/vacíos y forzamos tipado string[] para indexar el map sin error.
+      const barcodes: string[] = Array.from(
+        new Set(
+          detalles
+            .map((d) => d.codigo_barras)
+            .filter((bc): bc is string => typeof bc === 'string' && bc.trim().length > 0)
+        )
       );
 
       const faltantes = barcodes.filter(

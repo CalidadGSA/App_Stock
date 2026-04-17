@@ -119,7 +119,7 @@ export async function GET(request: NextRequest) {
     filasDet.push({
       idDetalle: d.id,
       idProducto: d.producto_id_sistema,
-      codigo: d.codigo_barras,
+      codigo: d.codigo_barras ?? '',
       diffCajas: deltaC,
       diffUnidades: deltaU,
       origenControl,

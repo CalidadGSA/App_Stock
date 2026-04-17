@@ -35,7 +35,7 @@ export interface Usuario {
 export interface ProductoCache {
   id: string;
   producto_id_sistema: string;
-  codigo_barras: string;
+  codigo_barras: string | null;
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
@@ -43,7 +43,7 @@ export interface ProductoCache {
 
 export interface ProductoLegacy {
   producto_id_sistema: string;
-  codigo_barras: string;
+  codigo_barras: string | null;
   codigos_secundarios?: string[];
   descripcion: string;
   presentacion: string | null;
