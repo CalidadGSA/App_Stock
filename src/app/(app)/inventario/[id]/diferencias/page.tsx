@@ -180,7 +180,7 @@ export default function InventarioDiferenciasPage() {
       return;
     }
 
-    const prod = productosPorBarcode[detalle.codigo_barras];
+    const prod = detalle.codigo_barras ? productosPorBarcode[detalle.codigo_barras] : undefined;
     const noFraccionableSinUnidades =
       prod &&
       prod.fraccionable !== 1 &&
