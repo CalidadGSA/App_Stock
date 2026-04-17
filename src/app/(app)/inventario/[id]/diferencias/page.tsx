@@ -71,7 +71,7 @@ export default function InventarioDiferenciasPage() {
         new Set(detalles.map((d) => d.codigo_barras))
       );
       const faltantes = barcodes.filter(
-        (bc) => productosPorBarcode[bc] === undefined
+        (bc) => bc && productosPorBarcode[bc] === undefined
       );
       if (faltantes.length === 0) return;
 
