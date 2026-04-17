@@ -67,17 +67,22 @@ export default function InventarioDiferenciasPage() {
   useEffect(() => {
     async function cargarProductos() {
       const detalles = control?.controles_inventario_detalle ?? [];
+      
+      // Filtramos nulos y aseguramos que sean strings para evitar errores de tipo
       const barcodes = Array.from(
-        new Set(detalles.map((d) => d.codigo_barras))
+        new Set(detalles.map((d) => d.codigo_barras).filter((bc): bc is string => !!bc))
       );
+
       const faltantes = barcodes.filter(
-        (bc) => bc && productosPorBarcode[bc] === undefined
+        (bc) => productosPorBarcode[bc] === undefined
       );
+      
       if (faltantes.length === 0) return;
 
       const nuevos: Record<string, ProductoLegacy | null> = {};
       for (const bc of faltantes) {
         try {
+          // Al ser 'bc' un string garantizado, encodeURIComponent no fallará
           const res = await fetch(
             `/api/productos/${encodeURIComponent(bc)}`
           );
