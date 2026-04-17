@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { LogOut, ClipboardList, CalendarClock, Menu, X, Moon, Sun } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 
 interface NavbarProps {
   nombreUsuario: string;
@@ -17,8 +18,10 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [rol, setRol] = useState<'admin' | 'operador_sucursal'>('operador_sucursal');
+  const [rol, setRol] = useState<'superadmin' | 'admin' | 'operador_sucursal'>('operador_sucursal');
   const [modoOscuro, setModoOscuro] = useState(false);
+  const [maintenanceActive, setMaintenanceActive] = useState(false);
+  const [changingMaintenance, setChangingMaintenance] = useState(false);
 
   const estaEnControlInventario =
     pathname.startsWith('/inventario/') &&
@@ -37,8 +40,12 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
       try {
         const res = await fetch('/api/dashboard');
         const json = await res.json();
-        if (json?.data?.rol === 'admin') {
-          setRol('admin');
+        if (
+          json?.data?.rol === 'admin' ||
+          json?.data?.rol === 'superadmin' ||
+          json?.data?.rol === 'operador_sucursal'
+        ) {
+          setRol(json.data.rol);
         }
       } catch {
         // Ignorar errores: se mantiene rol por defecto
@@ -46,6 +53,24 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
     }
     void cargarRol();
   }, []);
+
+  useEffect(() => {
+    if (rol !== 'superadmin') return;
+
+    async function cargarEstadoMantenimiento() {
+      try {
+        const res = await fetch('/api/admin/maintenance');
+        const json = await res.json();
+        if (res.ok) {
+          setMaintenanceActive(Boolean(json?.maintenance));
+        }
+      } catch {
+        // Si falla, mantenemos último estado.
+      }
+    }
+
+    void cargarEstadoMantenimiento();
+  }, [rol]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -86,6 +111,37 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
     router.push('/sucursal');
   }
 
+  async function handleToggleMaintenance() {
+    if (rol !== 'superadmin') return;
+
+    const next = !maintenanceActive;
+    const ok = window.confirm(
+      next
+        ? '¿Activar modo mantenimiento? Esto cerrará sesiones activas.'
+        : '¿Desactivar modo mantenimiento y reabrir el acceso?'
+    );
+    if (!ok) return;
+
+    setChangingMaintenance(true);
+    try {
+      const res = await fetch('/api/admin/maintenance', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: next ? 0 : 1 }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.alert(json?.error ?? 'No se pudo cambiar el modo mantenimiento.');
+        return;
+      }
+      setMaintenanceActive(Boolean(json?.maintenance));
+    } catch {
+      window.alert('No se pudo cambiar el modo mantenimiento.');
+    } finally {
+      setChangingMaintenance(false);
+    }
+  }
+
   return (
     <header className="sticky top-0 z-40 border-b border-gray-200 bg-white shadow-sm">
       <div className="flex h-14 items-center justify-between gap-4 px-4">
@@ -117,7 +173,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
           <div className="hidden xl:flex items-center gap-2">
             {!ocultarAccionesOperativas && (
               <>
-            {rol === 'admin' ? (
+            {isAdminLikeRole(rol) ? (
               <>
                 <Button
                   size="sm"
@@ -173,7 +229,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
               </>
             )}
           </div>
-          {rol === 'admin' && !ocultarAccionesOperativas && (
+          {isAdminLikeRole(rol) && !ocultarAccionesOperativas && (
             <button
               onClick={handleCambiarSucursal}
               className="hidden xl:flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
@@ -189,6 +245,23 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
           >
             {modoOscuro ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
+          {rol === 'superadmin' && (
+            <button
+              onClick={handleToggleMaintenance}
+              disabled={changingMaintenance}
+              className={`hidden xl:flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs transition-colors shrink-0 ${
+                maintenanceActive
+                  ? 'border-amber-300 text-amber-700 hover:bg-amber-50'
+                  : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {changingMaintenance
+                ? 'Actualizando...'
+                : maintenanceActive
+                ? 'Desactivar mantenimiento'
+                : 'Activar mantenimiento'}
+            </button>
+          )}
           {!ocultarAccionesOperativas && (
             <button
               onClick={handleLogout}
@@ -216,7 +289,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
             <p className="text-xs text-gray-500">{nombreUsuario}</p>
           </div>
           <nav className="flex flex-col gap-1">
-            {!ocultarAccionesOperativas && (rol === 'admin' ? (
+            {!ocultarAccionesOperativas && (isAdminLikeRole(rol) ? (
               <>
                 <Button
                   size="sm"
@@ -276,7 +349,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
                 </Button>
               </>
             ))}
-            {rol === 'admin' && !ocultarAccionesOperativas && (
+            {isAdminLikeRole(rol) && !ocultarAccionesOperativas && (
               <button
                 onClick={handleCambiarSucursal}
                 className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 text-left w-full"
@@ -292,6 +365,23 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
             >
               {modoOscuro ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
+            {rol === 'superadmin' && (
+              <button
+                onClick={handleToggleMaintenance}
+                disabled={changingMaintenance}
+                className={`flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-left w-full ${
+                  maintenanceActive
+                    ? 'text-amber-700 hover:bg-amber-50'
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                {changingMaintenance
+                  ? 'Actualizando...'
+                  : maintenanceActive
+                  ? 'Desactivar mantenimiento'
+                  : 'Activar mantenimiento'}
+              </button>
+            )}
             {!ocultarAccionesOperativas && (
               <button
                 onClick={handleLogout}

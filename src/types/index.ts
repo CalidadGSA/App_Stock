@@ -2,7 +2,7 @@
 // TIPOS GLOBALES - GestionStock Farmacia
 // ============================================================
 
-export type RolUsuario = 'admin' | 'operador_sucursal';
+export type RolUsuario = 'superadmin' | 'admin' | 'operador_sucursal';
 export type EstadoControl = 'en_progreso' | 'cerrado';
 export type TipoControlInventario =
   | 'diario'

@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { createOperadorSessionCookie } from '@/lib/auth/session';
+import { getAppMaintenanceStatus } from '@/lib/maintenance';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -46,6 +47,21 @@ async function logAuth(admin: AdminClient, params: AuthLogParams) {
 
 /** POST /api/auth/login — login con operador + código; opcional sucursal + contraseña para ir directo al dashboard */
 export async function POST(request: NextRequest) {
+  try {
+    const maintenanceStatus = await getAppMaintenanceStatus();
+    if (maintenanceStatus.isActive) {
+      return NextResponse.json(
+        {
+          error: 'La aplicación está en mantenimiento. Intentá nuevamente en unos minutos.',
+          maintenance: true,
+        },
+        { status: 503 }
+      );
+    }
+  } catch (error) {
+    console.error('No se pudo validar estado de mantenimiento en login:', error);
+  }
+
   let body: { operador?: string; codigo?: string | number; sucursal_id?: string; sucursal_password?: string };
   try {
     body = await request.json();

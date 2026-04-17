@@ -197,7 +197,7 @@ export default function DashboardPage() {
       </Card>
 
       {/* Ajustes (solo admin) */}
-      {stats?.rol === 'admin' && (
+      {(stats?.rol === 'admin' || stats?.rol === 'superadmin') && (
         <div className="flex justify-end">
           <Button
             size="lg"

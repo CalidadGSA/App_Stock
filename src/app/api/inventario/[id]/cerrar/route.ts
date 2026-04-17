@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import {
   esTipoDiario,
   esTipoControlVisibleParaOperadorSucursal,
@@ -19,7 +20,7 @@ export async function POST(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const esAdmin = operador.rol === 'admin';
+  const esAdmin = isAdminLikeRole(operador.rol);
 
   const admin = await createAdminClient();
   const { data: control } = await admin

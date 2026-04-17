@@ -48,7 +48,7 @@ export default function PorVencerPage() {
   const [catMacroFiltro, setCatMacroFiltro] = useState<string>('');
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>('');
   const [busquedaTexto, setBusquedaTexto] = useState('');
-  const [rol, setRol] = useState<'admin' | 'operador_sucursal'>('operador_sucursal');
+  const [rol, setRol] = useState<'superadmin' | 'admin' | 'operador_sucursal'>('operador_sucursal');
   const [gruposExpandidos, setGruposExpandidos] = useState<Record<string, boolean>>({});
   const [obsLocal, setObsLocal] = useState<Record<string, string>>({});
   const [guardandoObsId, setGuardandoObsId] = useState<string | null>(null);
@@ -208,8 +208,8 @@ export default function PorVencerPage() {
       try {
         const res = await fetch('/api/dashboard');
         const json = await res.json();
-        if (json?.data?.rol === 'admin') {
-          setRol('admin');
+        if (json?.data?.rol === 'admin' || json?.data?.rol === 'superadmin') {
+          setRol(json.data.rol);
         }
       } catch {
         // noop
@@ -352,7 +352,7 @@ export default function PorVencerPage() {
           <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">{tituloPrincipal}</h1>
         </div>
         <div className="flex items-center gap-2">
-          {rol === 'admin' && (
+          {(rol === 'admin' || rol === 'superadmin') && (
             <>
               <Link
                 href={`/vencimientos/por-vencer/consolidado?consolidado=1&days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}${vistaUrl === 'vendidos' || vistaUrl === 'vencidos' ? `&vista=${encodeURIComponent(vistaUrl)}` : ''}`}

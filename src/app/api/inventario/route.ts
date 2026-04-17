@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import { nombreTipoControlInventario } from '@/lib/inventario/tipo-control';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
@@ -214,7 +215,7 @@ export async function GET(request: NextRequest) {
   const pageSize = parseInt(searchParams.get('pageSize') ?? '20', 10);
   const desde = searchParams.get('desde');
   const hasta = searchParams.get('hasta');
-  const esAdmin = operador.rol === 'admin';
+  const esAdmin = isAdminLikeRole(operador.rol);
 
   let query = admin
     .from('controles_inventario')

@@ -7,11 +7,19 @@
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'rol_usuario') then
-    create type rol_usuario as enum ('admin', 'operador_sucursal');
+    create type rol_usuario as enum ('superadmin', 'admin', 'operador_sucursal');
   end if;
   if not exists (select 1 from pg_type where typname = 'estado_control') then
     create type estado_control as enum ('en_progreso', 'cerrado');
   end if;
+end
+$$;
+
+do $$
+begin
+  alter type rol_usuario add value if not exists 'superadmin';
+exception
+  when duplicate_object then null;
 end
 $$;
 
@@ -422,6 +430,37 @@ create table if not exists auth_log (
 );
 
 -- ------------------------------------------------------------
+-- ESTADO GLOBAL DEL FRONTEND (MODO MANTENIMIENTO)
+-- ------------------------------------------------------------
+create table if not exists app_frontend_status (
+  id         integer primary key default 1,
+  is_active  smallint not null default 1,
+  updated_at timestamp without time zone not null default now(),
+  constraint app_frontend_status_singleton_chk check (id = 1),
+  constraint app_frontend_status_active_chk check (is_active in (0, 1))
+);
+
+insert into app_frontend_status (id, is_active)
+values (1, 1)
+on conflict (id) do nothing;
+
+create or replace function set_app_frontend_status_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_app_frontend_status_updated_at on app_frontend_status;
+create trigger trg_app_frontend_status_updated_at
+before update on app_frontend_status
+for each row
+execute function set_app_frontend_status_updated_at();
+
+-- ------------------------------------------------------------
 -- ROW LEVEL SECURITY  (habilitado; acceso via service_role desde backend)
 -- ------------------------------------------------------------
 alter table sucursales                   enable row level security;
@@ -437,6 +476,7 @@ alter table controles_inventario_detalle enable row level security;
 alter table controles_vencimientos       enable row level security;
 alter table controles_vencimientos_detalle enable row level security;
 alter table vencimientos_detalle_ventas enable row level security;
+alter table app_frontend_status          enable row level security;
 
 -- ------------------------------------------------------------
 -- FUNCIÓN: incrementar vecesInventariado al cerrar un inventario diario

@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import {
   esTipoAuditoria,
   esTipoControlVisibleParaOperadorSucursal,
@@ -40,7 +41,7 @@ export async function POST(
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const esAdmin = operador.rol === 'admin';
+  const esAdmin = isAdminLikeRole(operador.rol);
 
   const admin = await createAdminClient();
 
@@ -141,7 +142,7 @@ export async function PATCH(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const esAdmin = operador.rol === 'admin';
+  const esAdmin = isAdminLikeRole(operador.rol);
 
   const admin = await createAdminClient();
 
@@ -298,7 +299,7 @@ export async function DELETE(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const esAdmin = operador.rol === 'admin';
+  const esAdmin = isAdminLikeRole(operador.rol);
 
   const detalleId = new URL(request.url).searchParams.get('detalle_id');
   if (!detalleId) return NextResponse.json({ error: 'detalle_id requerido' }, { status: 400 });

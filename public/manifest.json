@@ -1,6 +1,6 @@
 {
-  "name": "GestiónStock Farmacia",
-  "short_name": "GestiónStock",
+  "name": "Gestión Stock Farmacia",
+  "short_name": "Gestión Stock",
   "description": "Control de inventario y vencimientos para farmacias",
   "start_url": "/dashboard",
   "display": "standalone",

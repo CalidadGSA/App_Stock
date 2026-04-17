@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
@@ -23,7 +24,7 @@ export async function GET() {
   const en90dias = ymdAddDays(hoyVen, 90);
   /** Para base_productos: misma lógica que POST /api/inventario (fechainicio/fechafin vs “hoy” local AR). */
   const hoyStrArgentina = hoyVen;
-  const esAdmin = operador.rol === 'admin';
+  const esAdmin = isAdminLikeRole(operador.rol);
 
   let invTotalQuery = admin
     .from('controles_inventario')

@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import {
   inferirTipoControlInventario,
   nombreTipoControlInventario,
@@ -27,8 +28,9 @@ export async function POST(request: Request) {
   }
 
   const admin = await createAdminClient();
+  const esAdmin = isAdminLikeRole(operador.rol);
   const tipoObjetivo =
-    operador.rol === 'admin' ? 'ocasional_auditoria' : 'ocasional_sucursal';
+    esAdmin ? 'ocasional_auditoria' : 'ocasional_sucursal';
 
   const { data: controlesAbiertos, error: abiertosError } = await admin
     .from('controles_inventario')
@@ -69,8 +71,8 @@ export async function POST(request: Request) {
     .insert({
       sucursal_id: parseInt(sucursalId, 10),
       usuario_id: operador.idoperador,
-      origen: operador.rol === 'admin' ? 'Auditoria' : 'Sucursal',
-      tipo: operador.rol === 'admin' ? 'ocasional_auditoria' : 'ocasional_sucursal',
+      origen: esAdmin ? 'Auditoria' : 'Sucursal',
+      tipo: esAdmin ? 'ocasional_auditoria' : 'ocasional_sucursal',
       descripcion,
     })
     .select()

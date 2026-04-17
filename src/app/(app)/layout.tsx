@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import Navbar from '@/components/Navbar';
+import MaintenanceGuard from '@/components/MaintenanceGuard';
 import { getOperadorSession } from '@/lib/auth/session';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -19,6 +20,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen flex-col">
+      <MaintenanceGuard />
       <Navbar
         nombreUsuario={operador.nombrecompleto}
         nombreSucursal={sucursalNombre}

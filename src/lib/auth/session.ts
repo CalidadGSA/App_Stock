@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { createHmac } from 'crypto';
+import type { RolOperador } from '@/lib/auth/roles';
 
 const COOKIE_NAME = 'operador_session';
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 días
@@ -8,7 +9,7 @@ export interface OperadorSession {
   idoperador: number;
   operador: string;
   nombrecompleto: string;
-  rol?: 'admin' | 'operador_sucursal';
+  rol?: RolOperador;
 }
 
 function getSecret(): string {
@@ -50,7 +51,9 @@ function verifyAndDecode(value: string): OperadorSession | null {
     const data = Buffer.from(encoded, 'base64url').toString('utf8');
     const parsed = JSON.parse(data) as OperadorSession;
     if (typeof parsed.idoperador !== 'number' || typeof parsed.operador !== 'string') return null;
-    if (parsed.rol && !['admin', 'operador_sucursal'].includes(parsed.rol)) parsed.rol = 'operador_sucursal';
+    if (parsed.rol && !['superadmin', 'admin', 'operador_sucursal'].includes(parsed.rol)) {
+      parsed.rol = 'operador_sucursal';
+    }
     return parsed;
   } catch {
     return null;

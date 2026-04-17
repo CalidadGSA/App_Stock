@@ -16,6 +16,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [maintenance, setMaintenance] = useState(false);
 
   useEffect(() => {
     fetch('/api/auth/sucursales')
@@ -28,16 +29,48 @@ export default function LoginPage() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+
+    async function checkMaintenance() {
+      try {
+        const res = await fetch('/api/app-status', {
+          cache: 'no-store',
+          headers: { 'cache-control': 'no-cache' },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!mounted) return;
+        setMaintenance(Boolean(data?.maintenance));
+      } catch {
+        // Si falla, no bloquear por falso positivo.
+      }
+    }
+
+    void checkMaintenance();
+    const intervalId = window.setInterval(() => void checkMaintenance(), 10000);
+    return () => {
+      mounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   const formComplete =
     operador.trim() !== '' &&
     codigo.trim() !== '' &&
     sucursalId !== '' &&
-    sucursalPassword.trim() !== '';
+    sucursalPassword.trim() !== '' &&
+    !maintenance;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     setLoading(true);
+
+    if (maintenance) {
+      setError('La aplicación está en modo mantenimiento. El acceso está temporalmente deshabilitado.');
+      setLoading(false);
+      return;
+    }
 
     try {
       const res = await fetch('/api/auth/login', {
@@ -54,6 +87,9 @@ export default function LoginPage() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
+        if (res.status === 503 || data?.maintenance) {
+          setMaintenance(true);
+        }
         setError(data.error || 'Operador o código incorrectos');
         return;
       }
@@ -85,6 +121,12 @@ export default function LoginPage() {
 
       <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-slate-900 p-8 shadow-sm">
         <h2 className="mb-6 text-lg font-semibold text-gray-800 dark:text-gray-100">Iniciar sesión</h2>
+
+        {maintenance && (
+          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            La aplicación está en modo mantenimiento. No es posible iniciar sesión en este momento.
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Input
