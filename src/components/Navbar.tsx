@@ -127,7 +127,7 @@ export default function Navbar({ nombreUsuario, nombreSucursal, codigoSucursal }
       const res = await fetch('/api/admin/maintenance', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_active: next ? 0 : 1 }),
+        body: JSON.stringify({ is_active: next ? 1 : 0 }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {

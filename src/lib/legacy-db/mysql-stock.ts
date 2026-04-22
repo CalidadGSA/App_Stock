@@ -235,3 +235,33 @@ export async function getVentaPosteriorFlagsForDetalles(
     return out;
   }
 }
+
+export type StockmovimientosHealthResult =
+  | { ok: true; latencyMs: number }
+  | { ok: false; latencyMs: number; error: string };
+
+/**
+ * Consulta liviana para comprobar latencia/disponibilidad de Onze (misma DB que stock).
+ * Query acordada con operación: último movimiento de stock.
+ */
+export async function queryStockmovimientosHealthCheck(
+  timeoutMs: number
+): Promise<StockmovimientosHealthResult> {
+  const t0 = Date.now();
+  try {
+    const pool = await getPool();
+    if (!pool) {
+      return { ok: false, latencyMs: Date.now() - t0, error: 'MySQL Onze no configurado' };
+    }
+    const q = pool.query(
+      'SELECT * FROM stockmovimientos ORDER BY IDMovimiento DESC LIMIT 1'
+    );
+    const timeout = new Promise<never>((_, rej) =>
+      setTimeout(() => rej(new Error(`timeout ${timeoutMs}ms`)), timeoutMs)
+    );
+    await Promise.race([q, timeout]);
+    return { ok: true, latencyMs: Date.now() - t0 };
+  } catch (e) {
+    return { ok: false, latencyMs: Date.now() - t0, error: String((e as Error).message) };
+  }
+}

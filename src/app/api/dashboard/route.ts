@@ -43,11 +43,11 @@ export async function GET() {
     .neq('tipo', 'auditoria')
     .neq('tipo', 'ocasional_auditoria');
 
-  let invDetallesQuery = admin
+  /** Líneas de detalle marcadas con diferencia (BD), de controles de esta sucursal y ventana de fechas. */
+  let invItemsConDiferenciaQuery = admin
     .from('controles_inventario_detalle')
-    .select(
-      'producto_id_sistema, con_diferencias, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, controles_inventario!inner(sucursal_id, origen, tipo)'
-    )
+    .select('id, controles_inventario!inner(sucursal_id, tipo, fecha_inicio)', { count: 'exact', head: true })
+    .eq('con_diferencias', 1)
     .eq('controles_inventario.sucursal_id', sucursalId)
     .gte('controles_inventario.fecha_inicio', inicio60dias)
     .neq('controles_inventario.tipo', 'auditoria')
@@ -65,15 +65,18 @@ export async function GET() {
   if (!esAdmin) {
     invTotalQuery = invTotalQuery.in('tipo', ['diario', 'ocasional_sucursal']);
     invMesQuery = invMesQuery.in('tipo', ['diario', 'ocasional_sucursal']);
-    invDetallesQuery = invDetallesQuery.in('controles_inventario.tipo', ['diario', 'ocasional_sucursal']);
+    invItemsConDiferenciaQuery = invItemsConDiferenciaQuery.in('controles_inventario.tipo', [
+      'diario',
+      'ocasional_sucursal',
+    ]);
     ultimosInvQuery = ultimosInvQuery.in('tipo', ['diario', 'ocasional_sucursal']);
   }
 
-  const [invTotal, invMes, invDetalles, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc] =
+  const [invTotal, invMes, invItemsConDiferencia, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc] =
     await Promise.all([
       invTotalQuery,
       invMesQuery,
-      invDetallesQuery,
+      invItemsConDiferenciaQuery,
       admin.from('controles_vencimientos').select('id', { count: 'exact', head: true }).eq('sucursal_id', sucursalId),
       admin
         .from('controles_vencimientos_detalle')
@@ -115,26 +118,6 @@ export async function GET() {
         .order('created_at', { ascending: false })
         .limit(5),
     ]);
-
-  const itemsConDiferenciaUnicos = new Set<string>();
-  for (const det of invDetalles.data ?? []) {
-    const d = det as {
-      producto_id_sistema?: string | number | null;
-      con_diferencias?: number | boolean | string | null;
-      stock_sist_cajas?: number | null;
-      stock_sist_unidades?: number | null;
-      stock_real_cajas?: number | null;
-      stock_real_unidades?: number | null;
-    };
-    const productoId = String(d.producto_id_sistema ?? '').trim();
-    if (!productoId) continue;
-    // KPI por ítem: incluir diferencias históricas aunque luego se ajusten.
-    const conDifFlag = Number(d.con_diferencias ?? 0) === 1 || d.con_diferencias === true;
-    const deltaC = Number(d.stock_real_cajas ?? 0) - Number(d.stock_sist_cajas ?? 0);
-    const deltaU = Number(d.stock_real_unidades ?? 0) - Number(d.stock_sist_unidades ?? 0);
-    if (!conDifFlag && deltaC === 0 && deltaU === 0) continue;
-    itemsConDiferenciaUnicos.add(productoId);
-  }
 
   const sumarCantidad = (rows: Array<{ cantidad?: number | null }> | null | undefined): number =>
     Math.max(
@@ -250,7 +233,7 @@ export async function GET() {
       rol: operador.rol ?? 'operador_sucursal',
       inventarios_total: invTotal.count ?? 0,
       inventarios_mes: invMes.count ?? 0,
-      items_con_diferencia: itemsConDiferenciaUnicos.size,
+      items_con_diferencia: invItemsConDiferencia.count ?? 0,
       controles_vencimientos_total: vencTotal.count ?? 0,
       productos_vencidos: vencidos.count ?? 0,
       productos_por_vencer_30: sumarCantidad((porVencer30.data ?? []) as Array<{ cantidad?: number | null }>),

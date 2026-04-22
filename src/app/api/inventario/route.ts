@@ -16,7 +16,10 @@ async function obtenerIdsMedicamentosExistentes(
   const { data, error } = await admin
     .from('medicamentos')
     .select('codplex')
-    .in('codplex', idsProductos);
+    .in('codplex', idsProductos)
+    .eq('activo', 'S')
+    .eq('visible', 1)
+    .neq('troquel', 0);
 
   if (error) {
     throw error;
@@ -413,7 +416,10 @@ export async function POST(request: NextRequest) {
     const { data: meds, error: medsError } = await admin
       .from('medicamentos')
       .select('codplex, codebar, producto, presentaci, codlab')
-      .in('codplex', idsProductos);
+      .in('codplex', idsProductos)
+      .eq('activo', 'S')
+      .eq('visible', 1)
+      .neq('troquel', 0);
 
     if (medsError || !meds || meds.length === 0) {
       await admin.from('controles_inventario').delete().eq('id', controlId);

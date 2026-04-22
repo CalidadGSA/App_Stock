@@ -155,7 +155,7 @@ export default function DiferenciasResumenPage() {
             <ArrowLeft className="h-4 w-4" />
           </button>
           <h1 className="text-xl font-bold text-gray-900">
-            Resumen de items con diferencia
+            Resumen de productos con diferencia
           </h1>
         </div>
       </div>
@@ -217,7 +217,7 @@ export default function DiferenciasResumenPage() {
             <p className="px-5 py-4 text-sm text-red-600">{error}</p>
           ) : items.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400">
-              No hay items con diferencias para los períodos seleccionados.
+              No hay productos con diferencias para los períodos seleccionados.
             </p>
           ) : (
             <div className="overflow-x-auto">

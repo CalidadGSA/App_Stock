@@ -41,12 +41,14 @@ export async function PATCH(request: NextRequest) {
   }
 
   const admin = await createAdminClient();
+  const now = new Date().toISOString();
   const { error } = await admin
     .from('modo_mantenimiento')
     .upsert(
       {
         id: MAINTENANCE_ROW_ID,
         is_active: body.is_active,
+        updated_at: now,
       },
       { onConflict: 'id' }
     );

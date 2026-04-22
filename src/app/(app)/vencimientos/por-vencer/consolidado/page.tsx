@@ -14,6 +14,7 @@ import {
   estiloFilaProgresoVenta,
 } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 
 interface ConsolidadoItem {
   id: string;
@@ -56,7 +57,9 @@ export default function PorVencerConsolidadoPage() {
   const categoriaFiltro = searchParams.get('categoria') ?? '';
   const vistaUrl = searchParams.get('vista');
   const vistaSelect =
-    vistaUrl === 'vendidos' || vistaUrl === 'vencidos' ? vistaUrl : 'por_vencer';
+    vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial'
+      ? vistaUrl
+      : 'por_vencer';
 
   const desdeHastaLabel = useMemo(() => {
     switch (rangeKey) {
@@ -143,15 +146,16 @@ export default function PorVencerConsolidadoPage() {
       else setRangeKey('all');
 
       const params = new URLSearchParams();
-      params.set('consolidado', '1');
       params.set('days', String(daysParam));
       params.set('daysMin', String(daysMinParam));
       if (sucursalFiltro) params.set('sucursal', sucursalFiltro);
       if (catMacroFiltro) params.set('cat_macro', catMacroFiltro);
       if (categoriaFiltro) params.set('categoria', categoriaFiltro);
-      if (vistaUrl === 'vendidos' || vistaUrl === 'vencidos') params.set('vista', vistaUrl);
+      if (vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial') {
+        params.set('vista', vistaUrl);
+      }
 
-      const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`);
+      const res = await fetch(`/api/vencimientos/por-vencer/consolidado?${params.toString()}`);
       const json = await res.json() as {
         data?: ConsolidadoItem[];
         cat_macros?: string[];
@@ -181,7 +185,7 @@ export default function PorVencerConsolidadoPage() {
       try {
         const res = await fetch('/api/dashboard');
         const json = await res.json();
-        if (json?.data?.rol !== 'admin') {
+        if (!isAdminLikeRole(json?.data?.rol)) {
           router.replace('/vencimientos/por-vencer?days=365&daysMin=0');
           return;
         }
@@ -222,7 +226,7 @@ export default function PorVencerConsolidadoPage() {
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Link
-            href={`/vencimientos/por-vencer?days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}${vistaUrl === 'vendidos' || vistaUrl === 'vencidos' ? `&vista=${encodeURIComponent(vistaUrl)}` : ''}`}
+            href={`/vencimientos/por-vencer?days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}${vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial' ? `&vista=${encodeURIComponent(vistaUrl)}` : ''}`}
             className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-200 dark:hover:bg-slate-800"
             aria-label="Volver"
           >
@@ -230,6 +234,8 @@ export default function PorVencerConsolidadoPage() {
           </Link>
           <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
             {vistaSelect === 'por_vencer' && `Por vencer — consolidado (${desdeHastaLabel})`}
+            {vistaSelect === 'vendido_parcial' &&
+              `Por vencer — consolidado (${desdeHastaLabel}) · solo vendido parcial`}
             {vistaSelect === 'vendidos' && `Por vencer — consolidado (${desdeHastaLabel}) · solo liquidados`}
             {vistaSelect === 'vencidos' && `Vencidos — consolidado (${desdeHastaLabel} atrás)`}
           </h1>
@@ -247,9 +253,12 @@ export default function PorVencerConsolidadoPage() {
             <div>
               <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Filtros</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
+                Listado multi-sucursal: no consulta ventas posteriores a la carga (solo la pantalla por sucursal lo hace).
                 {vistaSelect === 'por_vencer' &&
-                  'Todas las sucursales · Incluye liquidados · Totales según filtros y búsqueda.'}
+                  ' Todas las sucursales · Incluye liquidados · Totales según filtros y búsqueda.'}
                 {vistaSelect === 'vendidos' && 'Solo liquidados en el rango de vencimientos · Todas las sucursales.'}
+                {vistaSelect === 'vendido_parcial' &&
+                  'Restante en control, al menos 1 unidad vendida registrada y sin liquidar (vendido=0) · Todas las sucursales.'}
                 {vistaSelect === 'vencidos' && 'Solo vencidos en los últimos N días (periodo) · Todas las sucursales.'}
               </p>
             </div>
@@ -268,7 +277,8 @@ export default function PorVencerConsolidadoPage() {
                   className="min-w-[160px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="por_vencer">Por vencer</option>
-                  <option value="vendidos">Solo vendidos</option>
+                  <option value="vendido_parcial">Solo vendido parcial</option>
+                  <option value="vendidos">Solo vendidos (liquidados)</option>
                   <option value="vencidos">Solo vencidos</option>
                 </select>
               </div>
@@ -450,6 +460,7 @@ export default function PorVencerConsolidadoPage() {
           ) : itemsFiltrados.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400 dark:text-gray-500">
               {vistaSelect === 'vendidos' && 'No hay liquidados en ese rango.'}
+              {vistaSelect === 'vendido_parcial' && 'No hay líneas con venta parcial sin liquidar en ese rango.'}
               {vistaSelect === 'vencidos' && 'No hay vencidos en ese rango.'}
               {vistaSelect === 'por_vencer' && 'No hay registros con esos filtros.'}
             </p>

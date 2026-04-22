@@ -540,7 +540,21 @@ export default function VencimientoDetailPage() {
                     <p className="font-semibold text-gray-900 dark:text-gray-100">{productoEscaneado.descripcion}</p>
                     <p className="text-base text-gray-900 dark:text-gray-200">{productoEscaneado.presentacion} · {productoEscaneado.laboratorio}</p>
                     <p className="text-sm font-mono text-gray-900 dark:text-gray-300">
-                      {productoEscaneado.codigo_barras || 'Sin código'} · ID {productoEscaneado.producto_id_sistema}
+                      {productoEscaneado.codigo_barras || 'Sin código'}
+                      {(() => {
+                        const tr = productoEscaneado.troquel;
+                        if (tr == null || `${tr}`.trim() === '') return null;
+                        const n = Number(tr);
+                        if (Number.isFinite(n) && n === 0) return null;
+                        return (
+                          <>
+                            {' '}
+                            · Troquel {Number.isFinite(n) ? n : tr}
+                          </>
+                        );
+                      })()}
+                      {' '}
+                      · ID {productoEscaneado.producto_id_sistema}
                     </p>
                     {Object.values(duplicadosPorFecha).some(Boolean) ? (
                       <p className="mt-2 rounded-md border border-amber-400 bg-amber-100/90 px-2 py-1 text-xs font-semibold text-amber-950 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100">

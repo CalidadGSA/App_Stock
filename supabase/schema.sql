@@ -441,8 +441,17 @@ create table if not exists modo_mantenimiento (
 );
 
 insert into modo_mantenimiento (id, is_active)
-values (1, 1)
+values (1, 0)
 on conflict (id) do nothing;
+
+-- Throttle de alertas Onze (opcional; puede actualizarlo n8n al enviar mails)
+create table if not exists onze_health_cron_state (
+  id smallint primary key default 1,
+  last_maintenance_alert_at timestamptz,
+  last_recovery_alert_at timestamptz,
+  constraint onze_health_cron_state_singleton_chk check (id = 1)
+);
+insert into onze_health_cron_state (id) values (1) on conflict (id) do nothing;
 
 create or replace function set_modo_mantenimiento_updated_at()
 returns trigger

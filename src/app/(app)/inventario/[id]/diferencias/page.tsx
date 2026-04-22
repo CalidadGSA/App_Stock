@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -18,6 +18,18 @@ import type {
 
 interface ControlConDetalles extends ControlInventario {
   controles_inventario_detalle: ControlInventarioDetalle[];
+}
+
+/** Con código de barras: bloquear unidades mientras carga o si no es fraccionable (solo 1 = sí). Sin código no bloqueamos por maestro. */
+function debeBloquearUnidadesStockReal(
+  codigoBarras: string | null | undefined,
+  prod: ProductoLegacy | null | undefined
+): boolean {
+  if (!codigoBarras || String(codigoBarras).trim() === '') return false;
+  if (prod === undefined) return true;
+  if (prod === null) return true;
+  const n = Number(prod.fraccionable);
+  return !Number.isFinite(n) || n !== 1;
 }
 
 export default function InventarioDiferenciasPage() {
@@ -185,17 +197,14 @@ export default function InventarioDiferenciasPage() {
     }
 
     const prod = detalle.codigo_barras ? productosPorBarcode[detalle.codigo_barras] : undefined;
-    const noFraccionableSinUnidades =
-      prod &&
-      prod.fraccionable !== 1 &&
-      (prod.stock_unidades ?? 0) === 0;
-    if (noFraccionableSinUnidades && unidadesNum !== 0) {
-      alert(
-        'Este producto no es fraccionable y el stock de unidades es 0; no se pueden cargar unidades sueltas.'
-      );
+    if (detalle.codigo_barras?.trim() && prod === undefined) {
+      alert('Esperá a que cargue la información del producto antes de guardar.');
       return;
     }
-    const unidadesFinal = noFraccionableSinUnidades ? 0 : unidadesNum;
+    const sistUnidadesBloqueo =
+      detalle.stock_sist_unidades ?? prod?.stock_unidades ?? 0;
+    const bloquearUnidades = debeBloquearUnidadesStockReal(detalle.codigo_barras, prod);
+    const unidadesFinal = bloquearUnidades ? sistUnidadesBloqueo : unidadesNum;
 
     // Estimamos unidades_por_caja a partir del stock de sistema si es posible
     let unidadesPorCaja = 1;
@@ -351,6 +360,7 @@ export default function InventarioDiferenciasPage() {
             </h2>
             <Badge variant="info">
               {detallesConDiferencias.length} ítem
+              {detallesConDiferencias.length !== 1 ? 's' : ''} con diferencia
               {detallesConDiferencias.length !== 1 ? 's' : ''}
             </Badge>
           </div>
@@ -365,47 +375,25 @@ export default function InventarioDiferenciasPage() {
               <table className="w-full text-sm">
                 <thead className="border-b border-gray-100 bg-gray-50">
                   <tr>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600">
+                    <th className="px-4 py-3 text-left font-medium text-gray-500">
                       Producto
                     </th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">
-                      Stock sistema
-                      <br />
-                      (cajas / unidades)
+                    <th className="px-4 py-3 text-right font-medium text-gray-500">
+                      Sist.
                     </th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">
-                      Stock real
-                      <br />
-                      (cajas / unidades)
+                    <th className="px-4 py-3 text-right font-medium text-gray-500">
+                      Real
                     </th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">
-                      Diferencia
-                    </th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">
-                      Acción
+                    <th className="px-4 py-3 text-right font-medium text-gray-500">
+                      Dif.
                     </th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-gray-100">
                   {detallesConDiferencias.map((det) => {
-                    const edit = edits[det.id] ?? {
-                      cajas:
-                        det.stock_real_cajas != null
-                          ? String(det.stock_real_cajas)
-                          : '',
-                      unidades:
-                        det.stock_real_unidades != null
-                          ? String(det.stock_real_unidades)
-                          : '',
-                    };
                     const sistCajas = det.stock_sist_cajas ?? 0;
                     const sistUnidades =
                       det.stock_sist_unidades ?? 0;
-                      const prod = det.codigo_barras ? productosPorBarcode[det.codigo_barras] : undefined;
-                    const noPermitirUnidades =
-                      prod &&
-                      prod.fraccionable !== 1 &&
-                      (prod.stock_unidades ?? 0) === 0;
                     const row = det as unknown as {
                       ajustado?: number | null;
                       estado?: string | null;
@@ -420,92 +408,70 @@ export default function InventarioDiferenciasPage() {
                     const diffCajas = realCajas - sistCajas;
                     const diffUnidades =
                       realUnidades - sistUnidades;
-                    const diffColorC =
-                      diffCajas === 0
-                        ? 'text-gray-700'
-                        : diffCajas > 0
-                        ? 'text-blue-700'
-                        : 'text-red-700';
-                    const diffColorU =
-                      diffUnidades === 0
-                        ? 'text-gray-700'
-                        : diffUnidades > 0
-                        ? 'text-blue-700'
-                        : 'text-red-700';
+                    const isSelected = detalleSeleccionadoId === det.id;
 
                     return (
                       <tr
                         key={det.id}
-                        className={`border-b border-gray-50 ${
-                          det.verificado === 1 ? 'bg-blue-50' : ''
-                        } cursor-pointer hover:bg-gray-50`}
+                        className={`hover:bg-gray-50 cursor-pointer ${
+                          yaAjustado
+                            ? 'bg-gray-50 dark:bg-gray-900/25 opacity-80'
+                            : det.verificado === 1
+                              ? 'bg-blue-50 dark:bg-blue-950/35'
+                              : 'bg-red-50 dark:bg-red-950/35'
+                        } ${isSelected ? 'ring-2 ring-blue-300' : ''}`}
                         onClick={() => {
                           if (yaAjustado) return;
                           setDetalleSeleccionadoId(det.id);
                         }}
                       >
-                        <td className="px-4 py-3 align-top">
-                          <div className="font-medium text-gray-900">
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-gray-900">
                             {det.descripcion}
-                          </div>
-                          <div className="text-sm text-gray-900">
-                            {det.presentacion}{' '}
-                            {det.laboratorio
-                              ? `· ${det.laboratorio}`
-                              : ''}
-                          </div>
-                          <div className="text-sm text-gray-900 mt-0.5">
-                            {det.codigo_barras}
+                          </p>
+                          <p className="text-base text-gray-900">
+                            {det.presentacion}
+                            {det.laboratorio ? ` · ${det.laboratorio}` : ''}
+                          </p>
+                          <p className="mt-0.5 font-mono text-sm text-gray-700">
+                            {det.codigo_barras ?? 'Sin código de barras'}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3 text-right text-gray-700">
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className="text-[11px] uppercase tracking-wide text-gray-400">Cajas</span>
+                            <span>{det.stock_sist_cajas == null ? '-' : sistCajas}</span>
+                            <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
+                            <span>{det.stock_sist_unidades == null ? '-' : sistUnidades}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-center align-top">
-                          <div className="inline-grid min-w-[200px] grid-cols-[92px_1fr] gap-y-2 text-sm text-gray-900">
-                            <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Cajas</span>
-                            <span className="h-9 flex items-center justify-center tabular-nums">{sistCajas}</span>
-                            <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
-                            <span className="h-9 flex items-center justify-center tabular-nums">{sistUnidades}</span>
+                        <td className="px-4 py-3 text-right text-gray-700">
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className="text-[11px] uppercase tracking-wide text-gray-400">Cajas</span>
+                            <span>{det.stock_real_cajas == null ? '-' : realCajas}</span>
+                            <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
+                            <span>{det.stock_real_unidades == null ? '-' : realUnidades}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-center align-top">
-                          <div className="inline-grid min-w-[200px] grid-cols-[92px_1fr] gap-y-2 text-sm text-gray-900">
-                            <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Cajas</span>
-                            <span className="h-9 flex items-center justify-center tabular-nums">
-                              {det.stock_real_cajas ?? 0}
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className={`inline-flex items-center gap-0.5 font-semibold ${
+                              diffCajas === 0 ? 'text-gray-500'
+                              : diffCajas > 0 ? 'text-blue-600'
+                              : 'text-red-600'
+                            }`}>
+                              {diffCajas > 0 ? <TrendingUp className="h-3 w-3" /> : diffCajas < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
+                              {diffCajas > 0 ? '+' : ''}{diffCajas}
                             </span>
-                            <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
-                            <span className="h-9 flex items-center justify-center tabular-nums">
-                              {det.stock_real_unidades ?? 0}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-center align-top">
-                          <div className="inline-grid min-w-[200px] grid-cols-[92px_1fr] gap-y-2 text-xs">
-                            <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Cajas</span>
-                            <span className={`h-9 flex items-center justify-center font-semibold tabular-nums ${diffColorC}`}>
-                              {diffCajas > 0 ? '+' : ''}
-                              {diffCajas.toFixed(0)}
-                            </span>
-                            <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
-                            <span className={`h-9 flex items-center justify-center font-semibold tabular-nums ${diffColorU}`}>
-                              {diffUnidades > 0 ? '+' : ''}
-                              {diffUnidades.toFixed(0)}
+                            <span className={`inline-flex items-center gap-0.5 font-semibold ${
+                              diffUnidades === 0 ? 'text-gray-500'
+                              : diffUnidades > 0 ? 'text-blue-600'
+                              : 'text-red-600'
+                            }`}>
+                              {diffUnidades > 0 ? <TrendingUp className="h-3 w-3" /> : diffUnidades < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
+                              {diffUnidades > 0 ? '+' : ''}{diffUnidades}
                             </span>
                           </div>
-                        </td>
-                        <td className="px-4 py-3 text-center align-top">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (yaAjustado) return;
-                              setDetalleSeleccionadoId(det.id);
-                            }}
-                            disabled={yaAjustado}
-                            title={yaAjustado ? 'Ítem ya ajustado' : 'Editar'}
-                          >
-                            Editar
-                          </Button>
                         </td>
                       </tr>
                     );
@@ -561,9 +527,11 @@ export default function InventarioDiferenciasPage() {
               const realCajas = edit.cajas.trim() === '' ? 0 : Number(edit.cajas);
               const realUnidades = edit.unidades.trim() === '' ? 0 : Number(edit.unidades);
               const diffCajas = realCajas - sistCajas;
-              const diffUnidades = realUnidades - sistUnidades;
-              const noPermitirUnidades =
-                !!prod && prod.fraccionable !== 1 && (prod.stock_unidades ?? 0) === 0;
+              const noPermitirUnidades = debeBloquearUnidadesStockReal(det.codigo_barras, prod);
+              const efectivoRealUnidades = noPermitirUnidades ? sistUnidades : realUnidades;
+              const diffUnidades = efectivoRealUnidades - sistUnidades;
+              const cargandoProd =
+                !!det.codigo_barras?.trim() && prod === undefined;
               return (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
                   <div className="rounded-md border border-gray-200 bg-white p-3">
@@ -598,7 +566,7 @@ export default function InventarioDiferenciasPage() {
                         type="number"
                         min="0"
                         step="1"
-                        value={noPermitirUnidades ? '0' : edit.unidades}
+                        value={noPermitirUnidades ? String(sistUnidades) : edit.unidades}
                         onChange={(e) =>
                           !noPermitirUnidades &&
                           setEdits((prev) => ({
@@ -609,6 +577,13 @@ export default function InventarioDiferenciasPage() {
                         className="h-9 w-full text-center text-sm"
                         placeholder="Unidades"
                         disabled={noPermitirUnidades}
+                        title={
+                          cargandoProd
+                            ? 'Cargando datos del producto…'
+                            : noPermitirUnidades
+                              ? 'Producto no fraccionable o sin dato: solo podés corregir cajas.'
+                              : undefined
+                        }
                       />
                     </div>
                   </div>
@@ -637,6 +612,7 @@ export default function InventarioDiferenciasPage() {
                       variant="primary"
                       onClick={() => handleGuardarLinea(det)}
                       loading={guardando}
+                      disabled={cargandoProd}
                       className="w-full"
                     >
                       Guardar cambios

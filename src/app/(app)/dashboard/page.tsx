@@ -108,7 +108,7 @@ export default function DashboardPage() {
           />
           <KpiCard
             icon={TrendingDown}
-            label="Items con diferencia"
+            label="Productos con diferencia"
             value={stats?.items_con_diferencia ?? 0}
             sublabel="en los últimos 60 días"
             color="bg-orange-100 text-orange-600"

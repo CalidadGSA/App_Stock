@@ -44,6 +44,8 @@ export interface ProductoCache {
 export interface ProductoLegacy {
   producto_id_sistema: string;
   codigo_barras: string | null;
+  /** Troquel del medicamento (ficha PLEX / medicamentos). */
+  troquel?: number | string | null;
   codigos_secundarios?: string[];
   descripcion: string;
   presentacion: string | null;

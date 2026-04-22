@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -39,14 +39,10 @@ export default function PorVencerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [items, setItems] = useState<PorVencerItem[]>([]);
-  const [catMacros, setCatMacros] = useState<string[]>([]);
-  const [categorias, setCategorias] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [days, setDays] = useState(30);
   const [daysMin, setDaysMin] = useState(0);
-  const [catMacroFiltro, setCatMacroFiltro] = useState<string>('');
-  const [categoriaFiltro, setCategoriaFiltro] = useState<string>('');
   const [busquedaTexto, setBusquedaTexto] = useState('');
   const [rol, setRol] = useState<'superadmin' | 'admin' | 'operador_sucursal'>('operador_sucursal');
   const [gruposExpandidos, setGruposExpandidos] = useState<Record<string, boolean>>({});
@@ -55,10 +51,42 @@ export default function PorVencerPage() {
   const [rangeKey, setRangeKey] = useState<
     'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
   >('all');
+  /**
+   * Tras el primer GET exitoso con chequeo MySQL, no volvemos a pedir check_venta_posterior aunque cambien
+   * vista o periodo (evita lentitud). Los ids nuevos en un periodo distante quedan sin flag hasta "Actualizar"
+   * El botón «Actualizar» limpia cache y vuelve a pedir el chequeo MySQL una vez.
+   */
+  const ventaPosteriorCacheRef = useRef<Map<string, boolean>>(new Map());
+  const ventaPosteriorCheckHechoRef = useRef(false);
 
   const vistaUrl = searchParams.get('vista');
   const vistaSelect =
-    vistaUrl === 'vendidos' || vistaUrl === 'vencidos' ? vistaUrl : 'por_vencer';
+    vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial'
+      ? vistaUrl
+      : 'por_vencer';
+
+  const catMacroFiltro = searchParams.get('cat_macro') ?? '';
+  const categoriaFiltro = searchParams.get('categoria') ?? '';
+  const soloVentaPosterior = searchParams.get('solo_venta_posterior') === '1';
+
+  const catMacrosDisponibles = useMemo(() => {
+    const s = new Set<string>();
+    for (const i of items) {
+      const m = String(i.cat_macro ?? '').trim();
+      if (m) s.add(m);
+    }
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const categoriasDisponibles = useMemo(() => {
+    const s = new Set<string>();
+    for (const i of items) {
+      if (catMacroFiltro && String(i.cat_macro ?? '') !== catMacroFiltro) continue;
+      const c = String(i.categoria ?? '').trim();
+      if (c) s.add(c);
+    }
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [items, catMacroFiltro]);
 
   const desdeHastaLabel = useMemo(() => {
     switch (rangeKey) {
@@ -83,14 +111,25 @@ export default function PorVencerPage() {
   const tituloPrincipal = useMemo(() => {
     const base = `Productos próximos a vencer (${desdeHastaLabel})`;
     if (vistaSelect === 'vendidos') return `${base} — solo liquidados`;
+    if (vistaSelect === 'vendido_parcial') return `${base} — solo vendido parcial (no liquidado)`;
     if (vistaSelect === 'vencidos') return `Productos vencidos (${desdeHastaLabel} hacia atrás)`;
     return base;
   }, [desdeHastaLabel, vistaSelect]);
 
   const itemsFiltrados = useMemo(() => {
+    let list = items;
+    if (catMacroFiltro) {
+      list = list.filter((i) => String(i.cat_macro ?? '') === catMacroFiltro);
+    }
+    if (categoriaFiltro) {
+      list = list.filter((i) => String(i.categoria ?? '') === categoriaFiltro);
+    }
+    if (soloVentaPosterior) {
+      list = list.filter((i) => i.venta_posterior_a_carga === true);
+    }
     const q = busquedaTexto.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((i) => {
+    if (!q) return list;
+    return list.filter((i) => {
       const texto = [
         i.descripcion,
         i.presentacion ?? '',
@@ -102,7 +141,7 @@ export default function PorVencerPage() {
         .toLowerCase();
       return texto.includes(q);
     });
-  }, [items, busquedaTexto]);
+  }, [items, catMacroFiltro, categoriaFiltro, soloVentaPosterior, busquedaTexto]);
 
   type FilaAgrupada =
     | { tipo: 'uno'; item: PorVencerItem }
@@ -156,14 +195,12 @@ export default function PorVencerPage() {
       const params = new URLSearchParams();
       params.set('days', String(daysParam));
       params.set('daysMin', String(daysMinParam));
-      if (catMacroFiltro) {
-        params.set('cat_macro', catMacroFiltro);
-      }
-      if (categoriaFiltro) {
-        params.set('categoria', categoriaFiltro);
-      }
-      if (vistaUrl === 'vendidos' || vistaUrl === 'vencidos') {
+      if (vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial') {
         params.set('vista', vistaUrl);
+      }
+      const solicitarCheckVentaPosterior = !ventaPosteriorCheckHechoRef.current;
+      if (solicitarCheckVentaPosterior) {
+        params.set('check_venta_posterior', '1');
       }
       const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`);
       const json = await res.json() as {
@@ -177,10 +214,21 @@ export default function PorVencerPage() {
         setItems([]);
         return;
       }
-      setItems(json.data ?? []);
+      const rawList = json.data ?? [];
+      let nextList = rawList;
+      if (solicitarCheckVentaPosterior) {
+        for (const i of rawList) {
+          ventaPosteriorCacheRef.current.set(i.id, !!i.venta_posterior_a_carga);
+        }
+        ventaPosteriorCheckHechoRef.current = true;
+      } else {
+        nextList = rawList.map((i) => ({
+          ...i,
+          venta_posterior_a_carga: ventaPosteriorCacheRef.current.get(i.id) ?? false,
+        }));
+      }
+      setItems(nextList);
       setObsLocal({});
-      setCatMacros(json.cat_macros ?? []);
-      setCategorias(json.categorias ?? []);
     } catch {
       setError('Error al cargar productos por vencer');
       setItems([]);
@@ -188,6 +236,12 @@ export default function PorVencerPage() {
       setLoading(false);
     }
   }
+
+  const claveCargaDatos = [
+    searchParams.get('days') ?? '365',
+    searchParams.get('daysMin') ?? '0',
+    searchParams.get('vista') ?? '',
+  ].join('|');
 
   useEffect(() => {
     const currentDays = searchParams.get('days');
@@ -201,7 +255,7 @@ export default function PorVencerPage() {
     }
     void cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, catMacroFiltro, categoriaFiltro]);
+  }, [claveCargaDatos]);
 
   useEffect(() => {
     async function cargarRol() {
@@ -355,7 +409,7 @@ export default function PorVencerPage() {
           {(rol === 'admin' || rol === 'superadmin') && (
             <>
               <Link
-                href={`/vencimientos/por-vencer/consolidado?consolidado=1&days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}${vistaUrl === 'vendidos' || vistaUrl === 'vencidos' ? `&vista=${encodeURIComponent(vistaUrl)}` : ''}`}
+                href={`/vencimientos/por-vencer/consolidado?consolidado=1&days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}${vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial' ? `&vista=${encodeURIComponent(vistaUrl)}` : ''}`}
               >
                 <Button size="sm" variant="secondary">
                   Consolidado
@@ -383,11 +437,13 @@ export default function PorVencerPage() {
               <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Filtros</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 {vistaSelect === 'por_vencer' &&
-                  'Por vencer: fechas desde hoy según el periodo. Incluye liquidados (restante 0).'}
+                  ' Por vencer: fechas desde hoy según el periodo. Incluye liquidados (restante 0).'}
                 {vistaSelect === 'vendidos' &&
-                  'Solo líneas liquidadas dentro del rango de fechas de vencimiento (según periodo).'}
+                  ' Solo líneas liquidadas dentro del rango de fechas de vencimiento (según periodo).'}
                 {vistaSelect === 'vencidos' &&
-                  'Solo productos ya vencidos: fechas de vencimiento en los últimos N días (según periodo), antes de hoy.'}
+                  ' Solo productos ya vencidos: fechas de vencimiento en los últimos N días (según periodo), antes de hoy.'}
+                {vistaSelect === 'vendido_parcial' &&
+                  ' Solo líneas no liquidadas (restante y stock en control), con al menos 1 unidad vendida registrada y vendido=0 en el control.'}
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
@@ -406,7 +462,8 @@ export default function PorVencerPage() {
                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="por_vencer">Por vencer</option>
-                  <option value="vendidos">Solo vendidos</option>
+                  <option value="vendido_parcial">Solo vendido parcial</option>
+                  <option value="vendidos">Solo vendidos (liquidados)</option>
                   <option value="vencidos">Solo vencidos</option>
                 </select>
               </div>
@@ -445,7 +502,6 @@ export default function PorVencerPage() {
                     const params = new URLSearchParams(searchParams.toString());
                       params.set('days', String(nextDays));
                       params.set('daysMin', String(nextDaysMin));
-                      setRangeKey(nextKey);
                     router.push(`/vencimientos/por-vencer?${params.toString()}`);
                   }}
                   className="min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
@@ -476,14 +532,17 @@ export default function PorVencerPage() {
                 <select
                   value={catMacroFiltro}
                   onChange={(e) => {
-                    setCatMacroFiltro(e.target.value);
-                    setCategoriaFiltro('');
+                    const p = new URLSearchParams(searchParams.toString());
+                    if (e.target.value) p.set('cat_macro', e.target.value);
+                    else p.delete('cat_macro');
+                    p.delete('categoria');
+                    router.replace(`/vencimientos/por-vencer?${p.toString()}`);
                   }}
                   className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="">Todas</option>
-                  {catMacros.map((m) => (
+                  {catMacrosDisponibles.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
@@ -494,19 +553,47 @@ export default function PorVencerPage() {
                 <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Categoría</label>
                 <select
                   value={categoriaFiltro}
-                  onChange={(e) => setCategoriaFiltro(e.target.value)}
+                  onChange={(e) => {
+                    const p = new URLSearchParams(searchParams.toString());
+                    if (e.target.value) p.set('categoria', e.target.value);
+                    else p.delete('categoria');
+                    router.replace(`/vencimientos/por-vencer?${p.toString()}`);
+                  }}
                   className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="">Todas</option>
-                  {categorias.map((c) => (
+                  {categoriasDisponibles.map((c) => (
                     <option key={c} value={c}>
                       {c}
                     </option>
                   ))}
                 </select>
               </div>
-              <Button size="sm" variant="secondary" onClick={cargar} disabled={loading}>
+              <label className="flex cursor-pointer items-center gap-2 pb-0.5 text-sm text-gray-800 dark:text-gray-200">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-gray-300"
+                  checked={soloVentaPosterior}
+                  onChange={(e) => {
+                    const p = new URLSearchParams(searchParams.toString());
+                    if (e.target.checked) p.set('solo_venta_posterior', '1');
+                    else p.delete('solo_venta_posterior');
+                    router.replace(`/vencimientos/por-vencer?${p.toString()}`);
+                  }}
+                />
+                Solo venta posterior a la carga
+              </label>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={loading}
+                onClick={() => {
+                  ventaPosteriorCheckHechoRef.current = false;
+                  ventaPosteriorCacheRef.current.clear();
+                  void cargar();
+                }}
+              >
                 Actualizar
               </Button>
             </div>
@@ -533,9 +620,17 @@ export default function PorVencerPage() {
             <p className="px-5 py-4 text-sm text-red-600">{error}</p>
           ) : filasAgrupadas.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400 dark:text-gray-500">
-              {vistaSelect === 'vendidos' && 'No hay productos liquidados en ese rango.'}
-              {vistaSelect === 'vencidos' && 'No hay productos vencidos en ese rango.'}
-              {vistaSelect === 'por_vencer' && 'No hay productos por vencer con esos filtros.'}
+              {items.length > 0 && itemsFiltrados.length === 0
+                ? 'Ninguna fila coincide con los filtros o la búsqueda en pantalla. Probá relajar categoría, venta posterior o el texto de búsqueda.'
+                : null}
+              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'vendidos' &&
+                'No hay productos liquidados en ese rango.'}
+              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'vencidos' &&
+                'No hay productos vencidos en ese rango.'}
+              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'vendido_parcial' &&
+                'No hay líneas con venta parcial sin liquidar en ese rango.'}
+              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'por_vencer' &&
+                'No hay productos por vencer en ese periodo.'}
             </p>
           ) : (
             <div className="overflow-x-auto">

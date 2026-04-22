@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,7 @@ interface SucursalOption {
 interface DiferenciaItem {
   id: string;
   producto_id_sistema: string;
+  /** Puede repetirse el mismo producto+código en más de un control del periodo */
   codigo_barras: string;
   descripcion: string;
   presentacion: string | null;
@@ -40,6 +41,19 @@ export default function AjustesPage() {
   const [diferencias, setDiferencias] = useState<DiferenciaItem[]>([]);
   const [exportando, setExportando] = useState(false);
   const [error, setError] = useState('');
+
+  const clavesDuplicadas = useMemo(() => {
+    const cuenta = new Map<string, number>();
+    for (const d of diferencias) {
+      const k = `${String(d.producto_id_sistema).trim()}::${String(d.codigo_barras ?? '').trim()}`;
+      cuenta.set(k, (cuenta.get(k) ?? 0) + 1);
+    }
+    const dup = new Set<string>();
+    for (const [k, n] of cuenta) {
+      if (n > 1) dup.add(k);
+    }
+    return dup;
+  }, [diferencias]);
 
   useEffect(() => {
     async function cargarSucursales() {
@@ -322,9 +336,6 @@ export default function AjustesPage() {
           <h2 className="font-semibold text-gray-900">
             Diferencias pendientes de ajuste
           </h2>
-          <p className="text-sm text-gray-600">
-            Solo se muestran los ítems con diferencias en cajas o unidades que aún no fueron ajustados.
-          </p>
         </CardHeader>
         <CardContent className="p-0">
           {loadingDiferencias ? (
@@ -364,8 +375,18 @@ export default function AjustesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {diferencias.map((d) => (
-                    <tr key={d.id}>
+                  {diferencias.map((d) => {
+                    const claveDup = `${String(d.producto_id_sistema).trim()}::${String(d.codigo_barras ?? '').trim()}`;
+                    const esDuplicadoPeriodo = clavesDuplicadas.has(claveDup);
+                    return (
+                    <tr
+                      key={d.id}
+                      className={
+                        esDuplicadoPeriodo
+                          ? 'bg-amber-50 dark:bg-amber-950/25'
+                          : undefined
+                      }
+                    >
                       <td className="px-4 py-2">
                         <p className="font-medium text-gray-900">
                           {d.descripcion}
@@ -401,7 +422,8 @@ export default function AjustesPage() {
                         </Button>
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>

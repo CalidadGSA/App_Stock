@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
 import { getPadronOpcionesPerfumeria, getPadronPerfumeriaMap } from '@/lib/padron-final-db';
 import { cookies } from 'next/headers';
 
@@ -50,7 +51,7 @@ async function resolverColumnasReglas(
 async function requireAdmin() {
   const operador = await getOperadorSession();
   if (!operador) return { error: NextResponse.json({ error: 'No autenticado' }, { status: 401 }) };
-  if (operador.rol !== 'admin') return { error: NextResponse.json({ error: 'Sin permisos' }, { status: 403 }) };
+  if (!isAdminLikeRole(operador.rol)) return { error: NextResponse.json({ error: 'Sin permisos' }, { status: 403 }) };
   return { ok: true as const };
 }
 

@@ -23,15 +23,26 @@ export async function GET(
 
   const { data: med, error } = await admin
     .from('medicamentos')
-    .select('codplex, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, fraccionable, refrigeracion, activo')
+    .select('codplex, troquel, codebar, codebar2, codebar3, codebar4, producto, presentaci, codlab, fraccionable, refrigeracion, activo, visible')
     .eq('codplex', idProducto)
+    .eq('activo', 'S')
+    .eq('visible', 1)
+    .neq('troquel', 0)
     .maybeSingle();
 
   if (error) {
     console.error('Error buscando medicamento por ID (codplex):', error);
     return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
   }
-  if (!med || (med.activo as string | null)?.toUpperCase() === 'N') {
+  if (
+    !med ||
+    (med.activo as string | null)?.toUpperCase() !== 'S' ||
+    Number((med as { visible?: number | null }).visible ?? 0) !== 1
+  ) {
+    return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
+  }
+  const troquelNum = Number((med as { troquel?: number | string | null }).troquel);
+  if (!Number.isFinite(troquelNum) || troquelNum === 0) {
     return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
   }
 
@@ -118,6 +129,10 @@ export async function GET(
   const producto = {
     producto_id_sistema: String(med.codplex),
     codigo_barras: med.codebar,
+    troquel:
+      med.troquel != null && String(med.troquel).trim() !== ''
+        ? Number(med.troquel) || med.troquel
+        : null,
     codigos_secundarios: [med.codebar2, med.codebar3, med.codebar4]
       .filter((code: unknown): code is string => typeof code === 'string' && code.trim().length > 0)
       .filter((code, index, arr) => code !== med.codebar && arr.indexOf(code) === index),

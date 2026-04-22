@@ -162,7 +162,10 @@ export async function POST(request: Request) {
           const { data: meds, error: medsError } = await admin
             .from('medicamentos')
             .select('codplex, idpsicofarmaco, idsubrubro')
-            .in('codplex', codplexIds);
+            .in('codplex', codplexIds)
+            .eq('activo', 'S')
+            .eq('visible', 1)
+            .neq('troquel', 0);
 
           if (medsError) {
             return NextResponse.json(

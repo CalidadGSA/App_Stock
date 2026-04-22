@@ -182,7 +182,9 @@ export async function PATCH(
   // Obtener stock de sistema actual de la fila para recalcular diferencias
   const { data: detalleActual } = await admin
     .from('controles_inventario_detalle')
-    .select('stock_sist_cajas, stock_sist_unidades, verificado, estado, ajustado')
+    .select(
+      'stock_sist_cajas, stock_sist_unidades, stock_sistema, verificado, estado, ajustado, producto_id_sistema, codigo_barras'
+    )
     .eq('id', body.detalle_id)
     .maybeSingle();
 
@@ -229,10 +231,62 @@ export async function PATCH(
     sistUnidades = body.stock_sist_unidades;
   }
 
-  const deltaC =
-    cajas != null ? cajas - sistCajas : 0;
+  const detRow = detalleActual as {
+    producto_id_sistema?: string | null;
+    stock_sistema?: number | string | null;
+  };
+  const codPlex = parseInt(String(detRow.producto_id_sistema ?? ''), 10);
+  let esFraccionable = true;
+  if (Number.isFinite(codPlex)) {
+    const { data: med } = await admin
+      .from('medicamentos')
+      .select('fraccionable')
+      .eq('codplex', codPlex)
+      .maybeSingle();
+    if (med && (med as { fraccionable?: number | null }).fraccionable != null) {
+      esFraccionable = Number((med as { fraccionable?: number | null }).fraccionable) === 1;
+    }
+  }
+
+  let unidadesSueltasFinal =
+    typeof unidadesSueltas === 'number' && !Number.isNaN(unidadesSueltas) ? unidadesSueltas : null;
+  if (!esFraccionable) {
+    unidadesSueltasFinal = sistUnidades;
+  }
+
+  function inferirUnidadesPorCaja(d: {
+    stock_sist_cajas?: number | null;
+    stock_sist_unidades?: number | null;
+    stock_sistema?: number | string | null;
+  }): number {
+    let upc = 1;
+    const sc = d.stock_sist_cajas != null ? Number(d.stock_sist_cajas) : NaN;
+    const su = d.stock_sist_unidades != null ? Number(d.stock_sist_unidades) : NaN;
+    const ss = d.stock_sistema != null ? Number(d.stock_sistema) : NaN;
+    if (Number.isFinite(sc) && sc > 0 && Number.isFinite(su) && su >= 0 && Number.isFinite(ss)) {
+      const num = ss - su;
+      const den = sc;
+      if (den > 0) {
+        const estimado = num / den;
+        if (Number.isFinite(estimado) && estimado > 0) upc = estimado;
+      }
+    }
+    return upc;
+  }
+
+  const cajasNum = cajas != null && !Number.isNaN(cajas) ? cajas : 0;
+  const uSueltasNum =
+    unidadesSueltasFinal != null && !Number.isNaN(unidadesSueltasFinal) ? unidadesSueltasFinal : 0;
+  const upc = inferirUnidadesPorCaja({
+    stock_sist_cajas: sistCajas,
+    stock_sist_unidades: sistUnidades,
+    stock_sistema: detRow.stock_sistema,
+  });
+  const stockRealRecalculado = cajasNum * upc + uSueltasNum;
+
+  const deltaC = cajas != null ? cajas - sistCajas : 0;
   const deltaU =
-    unidadesSueltas != null ? unidadesSueltas - sistUnidades : 0;
+    unidadesSueltasFinal != null ? unidadesSueltasFinal - sistUnidades : 0;
 
   let estado = 'en_progreso';
   let conDiferencias = 0;
@@ -269,8 +323,8 @@ export async function PATCH(
       stock_sist_cajas: sistCajas,
       stock_sist_unidades: sistUnidades,
       stock_real_cajas: cajas,
-      stock_real_unidades: unidadesSueltas,
-      stock_real: body.stock_real,
+      stock_real_unidades: unidadesSueltasFinal,
+      stock_real: stockRealRecalculado,
       estado,
       con_diferencias: conDiferencias,
       auditado,

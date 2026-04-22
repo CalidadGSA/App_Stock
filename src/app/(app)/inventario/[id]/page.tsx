@@ -103,6 +103,8 @@ export default function InventarioDetailPage() {
   const sequenceStartUnidadesRef = useRef('');
   const pendingManualTimerRef = useRef<number | null>(null);
   const pendingManualFieldRef = useRef<'cajas' | 'unidades' | null>(null);
+  /** Valor que aplicaría el timeout diferido de teclado (Enter debe confirmar con el último dígito pendiente). */
+  const pendingManualNextRef = useRef<string | null>(null);
   const scanRequestIdRef = useRef(0);
   const scanAbortRef = useRef<AbortController | null>(null);
   const lastConfirmedBarcodeRef = useRef<{ value: string; at: number } | null>(null);
@@ -209,6 +211,23 @@ export default function InventarioDetailPage() {
       pendingManualTimerRef.current = null;
     }
     pendingManualFieldRef.current = null;
+    pendingManualNextRef.current = null;
+  }
+
+  function flushPendingManualStockInput() {
+    if (pendingManualTimerRef.current != null) {
+      window.clearTimeout(pendingManualTimerRef.current);
+      pendingManualTimerRef.current = null;
+    }
+    const field = pendingManualFieldRef.current;
+    const nextVal = pendingManualNextRef.current;
+    pendingManualFieldRef.current = null;
+    pendingManualNextRef.current = null;
+    if (field && nextVal != null && !scannerEnInputRef.current) {
+      setFieldValue(field, nextVal);
+    }
+    scannerBufferRef.current = '';
+    ultimoKeyMsRef.current = 0;
   }
 
   function setFieldValue(field: 'cajas' | 'unidades', value: string) {
@@ -274,6 +293,7 @@ export default function InventarioDetailPage() {
           pendingManualTimerRef.current = null;
         }
         pendingManualFieldRef.current = null;
+        pendingManualNextRef.current = null;
         if (field === 'cajas') {
           setStockRealCajas(sequenceStartCajasRef.current);
           if (inputCajasRef.current) {
@@ -299,9 +319,11 @@ export default function InventarioDetailPage() {
         const current = field === 'cajas' ? stockRealCajas : stockRealUnidades;
         const maxDigits = field === 'cajas' ? 4 : 3;
         const next = `${current}${e.key}`.slice(0, maxDigits);
+        pendingManualNextRef.current = next;
         pendingManualTimerRef.current = window.setTimeout(() => {
           if (!scannerEnInputRef.current && pendingManualFieldRef.current === field) {
             setFieldValue(field, next);
+            pendingManualNextRef.current = null;
             scannerBufferRef.current = '';
             ultimoKeyMsRef.current = 0;
           }
@@ -325,6 +347,22 @@ export default function InventarioDetailPage() {
       }
       if (barcode) {
         void handleScan(barcode);
+      }
+      return;
+    }
+
+    if (isEnter && !scannerEnInputRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      flushPendingManualStockInput();
+      resetScannerInputCapture();
+      setEditandoCard(false);
+      const cajasStr = (inputCajasRef.current?.value ?? stockRealCajas).trim();
+      const uniStr = (inputUnidadesRef.current?.value ?? stockRealUnidades).trim();
+      inputCajasRef.current?.blur();
+      inputUnidadesRef.current?.blur();
+      if ((cajasStr !== '' || uniStr !== '') && !guardando) {
+        void handleGuardarLinea();
       }
       return;
     }
@@ -524,6 +562,7 @@ export default function InventarioDetailPage() {
             pendingManualTimerRef.current = null;
           }
           pendingManualFieldRef.current = null;
+          pendingManualNextRef.current = null;
           if (field === 'cajas') {
             setFieldValue('cajas', sequenceStartCajasRef.current);
           } else {
@@ -541,9 +580,11 @@ export default function InventarioDetailPage() {
           const current = field === 'cajas' ? stockRealCajas : stockRealUnidades;
           const maxDigits = field === 'cajas' ? 4 : 3;
           const next = `${current}${e.key}`.slice(0, maxDigits);
+          pendingManualNextRef.current = next;
           pendingManualTimerRef.current = window.setTimeout(() => {
             if (!scannerEnInputRef.current && pendingManualFieldRef.current === field) {
               setFieldValue(field, next);
+              pendingManualNextRef.current = null;
               scannerBufferRef.current = '';
               ultimoKeyMsRef.current = 0;
             }
@@ -569,6 +610,20 @@ export default function InventarioDetailPage() {
         return;
       }
 
+      if (isEnter && !scannerEnInputRef.current) {
+        flushPendingManualStockInput();
+        resetScannerInputCapture();
+        setEditandoCard(false);
+        const cajasStr = (inputCajasRef.current?.value ?? stockRealCajas).trim();
+        const uniStr = (inputUnidadesRef.current?.value ?? stockRealUnidades).trim();
+        inputCajasRef.current?.blur();
+        inputUnidadesRef.current?.blur();
+        if ((cajasStr !== '' || uniStr !== '') && !guardando) {
+          void handleGuardarLinea();
+        }
+        return;
+      }
+
       if (isBackspace) {
         resetScannerInputCapture();
         const current = field === 'cajas' ? stockRealCajas : stockRealUnidades;
@@ -590,6 +645,7 @@ export default function InventarioDetailPage() {
     productoEscaneado,
     stockRealCajas,
     stockRealUnidades,
+    guardando,
   ]);
 
   async function cargarProductoParaDetalle(
@@ -597,46 +653,75 @@ export default function InventarioDetailPage() {
     canApply: () => boolean = () => true,
     signal?: AbortSignal
   ) {
-    // Solo abrimos la card si pudimos obtener el stock actual.
-    try {
-      const res = await fetch(
-        `/api/productos/id/${encodeURIComponent(detalle.producto_id_sistema)}${qsAllowMissingStock(control)}`,
-        { signal }
+    const SLOW_MS = 4000;
+    const MAX_TRY = 3;
+    const url = `/api/productos/id/${encodeURIComponent(detalle.producto_id_sistema)}${qsAllowMissingStock(control)}`;
+
+    const aplicarProducto = (prod: ProductoLegacy) => {
+      setProductoEscaneado(prod);
+      setStockRealCajas(
+        detalle.stock_real_cajas != null ? String(detalle.stock_real_cajas) : ''
       );
-      const json = await res.json() as { data?: ProductoLegacy; error?: string };
-      if (!canApply()) return false;
-      if (res.ok && json.data) {
-        const prod = json.data;
+      setStockRealUnidades(
+        detalle.stock_real_unidades != null ? String(detalle.stock_real_unidades) : ''
+      );
+    };
+
+    for (let attempt = 0; attempt < MAX_TRY; attempt++) {
+      if (signal?.aborted || !canApply()) return false;
+      const t0 = Date.now();
+      try {
+        const res = await fetch(url, { signal });
+        const elapsed = Date.now() - t0;
+        const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
         if (!canApply()) return false;
-        setProductoEscaneado(prod);
-        setStockRealCajas(
-          detalle.stock_real_cajas != null ? String(detalle.stock_real_cajas) : ''
+
+        const okData = res.ok && !!json.data;
+        const muyLento = elapsed >= SLOW_MS;
+
+        if (okData && !muyLento) {
+          if (!canApply()) return false;
+          aplicarProducto(json.data!);
+          return true;
+        }
+
+        if (okData && muyLento && attempt < MAX_TRY - 1) {
+          continue;
+        }
+
+        if (okData && muyLento) {
+          if (!canApply()) return false;
+          aplicarProducto(json.data!);
+          return true;
+        }
+
+        if (!okData && attempt < MAX_TRY - 1) {
+          continue;
+        }
+
+        if (!canApply()) return false;
+        setProductoEscaneado(null);
+        setStockRealCajas('');
+        setStockRealUnidades('');
+        setErrorProducto(
+          json.error ??
+            'No se pudo consultar el stock del sistema. Volvé a intentar para evitar contar con datos incorrectos.'
         );
-        setStockRealUnidades(
-          detalle.stock_real_unidades != null ? String(detalle.stock_real_unidades) : ''
-        );
-        return true;
-      }
-      if (!canApply()) return false;
-      setProductoEscaneado(null);
-      setStockRealCajas('');
-      setStockRealUnidades('');
-      setErrorProducto(
-        json.error ??
+        return false;
+      } catch {
+        if (signal?.aborted) return false;
+        if (!canApply()) return false;
+        if (attempt < MAX_TRY - 1) continue;
+        setProductoEscaneado(null);
+        setStockRealCajas('');
+        setStockRealUnidades('');
+        setErrorProducto(
           'No se pudo consultar el stock del sistema. Volvé a intentar para evitar contar con datos incorrectos.'
-      );
-      return false;
-    } catch {
-      if (signal?.aborted) return false;
-      if (!canApply()) return false;
-      setProductoEscaneado(null);
-      setStockRealCajas('');
-      setStockRealUnidades('');
-      setErrorProducto(
-        'No se pudo consultar el stock del sistema. Volvé a intentar para evitar contar con datos incorrectos.'
-      );
-      return false;
+        );
+        return false;
+      }
     }
+    return false;
   }
 
   async function handleScan(barcode: string): Promise<boolean> {
@@ -1016,10 +1101,13 @@ export default function InventarioDetailPage() {
       }
     }
 
+    const cajasStrRaw = (inputCajasRef.current?.value ?? stockRealCajas).trim();
+    const unidadesStrRaw = (inputUnidadesRef.current?.value ?? stockRealUnidades).trim();
+
     const cajasNum =
-      stockRealCajas.trim() === '' ? 0 : parseFloat(stockRealCajas);
+      cajasStrRaw === '' ? 0 : parseFloat(cajasStrRaw);
     const unidadesNum =
-      stockRealUnidades.trim() === '' ? 0 : parseFloat(stockRealUnidades);
+      unidadesStrRaw === '' ? 0 : parseFloat(unidadesStrRaw);
 
     if (isNaN(cajasNum) || cajasNum < 0) {
       setErrorProducto('Ingresá una cantidad válida de cajas (>= 0)');
@@ -1158,10 +1246,13 @@ export default function InventarioDetailPage() {
       (control?.controles_inventario_detalle ?? []).find((d) => d.id === detalleSeleccionadoId) ?? null;
     const nextVerificado = detalleActual?.verificado === 1 ? 0 : 1;
 
+    const cajasStrRaw = (inputCajasRef.current?.value ?? stockRealCajas).trim();
+    const unidadesStrRaw = (inputUnidadesRef.current?.value ?? stockRealUnidades).trim();
+
     const cajasNum =
-      stockRealCajas.trim() === '' ? 0 : parseFloat(stockRealCajas);
+      cajasStrRaw === '' ? 0 : parseFloat(cajasStrRaw);
     const unidadesNum =
-      stockRealUnidades.trim() === '' ? 0 : parseFloat(stockRealUnidades);
+      unidadesStrRaw === '' ? 0 : parseFloat(unidadesStrRaw);
 
     if (isNaN(cajasNum) || cajasNum < 0 || isNaN(unidadesNum) || unidadesNum < 0) {
       setErrorProducto('Ingresá cantidades válidas antes de marcar como verificado.');
@@ -1491,8 +1582,19 @@ export default function InventarioDetailPage() {
                       )}
                     </div>
                     <p className="text-base text-gray-900">{productoEscaneado.presentacion} . {productoEscaneado.laboratorio}</p>
-                    <p className="mt-2 font-mono text-base text-gray-800">
-                      {productoEscaneado.codigo_barras ?? 'Sin código de barras'}
+                    <p className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-base text-gray-800">
+                      <span>{productoEscaneado.codigo_barras ?? 'Sin código de barras'}</span>
+                      {(() => {
+                        const tr = productoEscaneado.troquel;
+                        if (tr == null || `${tr}`.trim() === '') return null;
+                        const n = Number(tr);
+                        if (Number.isFinite(n) && n === 0) return null;
+                        return (
+                          <span className="text-gray-600">
+                            · Troquel {Number.isFinite(n) ? n : tr}
+                          </span>
+                        );
+                      })()}
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-2">
