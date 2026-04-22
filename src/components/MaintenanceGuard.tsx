@@ -12,9 +12,42 @@ type AppStatusResponse = {
 export default function MaintenanceGuard() {
   const [maintenanceActive, setMaintenanceActive] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(COUNTDOWN_SECONDS);
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
+  const [roleResolved, setRoleResolved] = useState(false);
   const logoutTriggeredRef = useRef(false);
 
   useEffect(() => {
+    let isMounted = true;
+
+    async function cargarRol() {
+      try {
+        const res = await fetch('/api/dashboard', {
+          cache: 'no-store',
+          headers: { 'cache-control': 'no-cache' },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!isMounted) return;
+        const superadmin = String(data?.data?.rol ?? '').toLowerCase() === 'superadmin';
+        setIsSuperadmin(superadmin);
+        if (superadmin) {
+          setMaintenanceActive(false);
+        }
+      } catch {
+        // Si falla, tratamos como no superadmin para no relajar controles.
+      } finally {
+        if (isMounted) setRoleResolved(true);
+      }
+    }
+
+    void cargarRol();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!roleResolved || isSuperadmin) return;
+
     let isMounted = true;
 
     async function checkMaintenance() {
@@ -40,9 +73,10 @@ export default function MaintenanceGuard() {
       isMounted = false;
       window.clearInterval(pollId);
     };
-  }, []);
+  }, [roleResolved, isSuperadmin]);
 
   useEffect(() => {
+    if (isSuperadmin) return;
     if (!maintenanceActive) return;
     if (logoutTriggeredRef.current) return;
 
@@ -65,7 +99,7 @@ export default function MaintenanceGuard() {
     return () => {
       window.clearInterval(countdownId);
     };
-  }, [maintenanceActive]);
+  }, [maintenanceActive, isSuperadmin]);
 
   if (!maintenanceActive) return null;
 

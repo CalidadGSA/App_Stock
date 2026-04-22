@@ -58,19 +58,12 @@ export default function LoginPage() {
     operador.trim() !== '' &&
     codigo.trim() !== '' &&
     sucursalId !== '' &&
-    sucursalPassword.trim() !== '' &&
-    !maintenance;
+    sucursalPassword.trim() !== '';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     setLoading(true);
-
-    if (maintenance) {
-      setError('La aplicación está en modo mantenimiento. El acceso está temporalmente deshabilitado.');
-      setLoading(false);
-      return;
-    }
 
     try {
       const res = await fetch('/api/auth/login', {
@@ -124,7 +117,7 @@ export default function LoginPage() {
 
         {maintenance && (
           <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            La aplicación está en modo mantenimiento. No es posible iniciar sesión en este momento.
+            La aplicación está en modo mantenimiento. Solo superadmin puede iniciar sesión para desactivarlo.
           </div>
         )}
 
