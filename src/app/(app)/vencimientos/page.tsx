@@ -123,7 +123,7 @@ export default function VencimientosListPage() {
                   <option value="cerrado">Cerrado</option>
                 </select>
               </div>
-              <Button size="sm" onClick={handleAplicarFiltros}>
+              <Button size="sm" onClick={handleAplicarFiltros} disabled={loading}>
                 Aplicar
               </Button>
             </div>

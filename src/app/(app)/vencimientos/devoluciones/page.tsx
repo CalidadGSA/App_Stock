@@ -27,8 +27,6 @@ type DevolucionRow = {
   lineas_con_observacion?: number;
 };
 
-const CATEGORIAS = ['FARMA', 'BIENESTAR', 'PSICOTROPICOS'] as const;
-
 export default function DevolucionesVencimientosPage() {
   const router = useRouter();
   const [items, setItems] = useState<DevolucionRow[]>([]);
@@ -36,7 +34,6 @@ export default function DevolucionesVencimientosPage() {
   const [error, setError] = useState('');
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
-  const [categoriaMacro, setCategoriaMacro] = useState<string>('');
 
   async function cargar() {
     setLoading(true);
@@ -45,7 +42,6 @@ export default function DevolucionesVencimientosPage() {
       const params = new URLSearchParams();
       if (desde) params.set('desde', desde);
       if (hasta) params.set('hasta', hasta);
-      if (categoriaMacro) params.set('categoria_macro', categoriaMacro);
 
       const res = await fetch(`/api/vencimientos/devoluciones?${params.toString()}`);
       const json = (await res.json()) as { data?: DevolucionRow[]; error?: string };
@@ -96,7 +92,7 @@ export default function DevolucionesVencimientosPage() {
                 Filtros
               </p>
               <p className="text-xs text-gray-500">
-                Filtra por fecha de devolución y categoría macro (opcional).
+                Filtra por fecha de devolución.
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
@@ -112,24 +108,7 @@ export default function DevolucionesVencimientosPage() {
                 value={hasta}
                 onChange={(e) => setHasta(e.target.value)}
               />
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-gray-700">
-                  Categoría macro
-                </label>
-                <select
-                  className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  value={categoriaMacro}
-                  onChange={(e) => setCategoriaMacro(e.target.value)}
-                >
-                  <option value="">Todas</option>
-                  {CATEGORIAS.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <Button size="sm" onClick={handleAplicarFiltros}>
+              <Button size="sm" onClick={handleAplicarFiltros} disabled={loading}>
                 Aplicar
               </Button>
             </div>

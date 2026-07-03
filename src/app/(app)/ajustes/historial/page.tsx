@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/utils';
+import { calendarioActualArgentina, clampYmNoFuturo } from '@/lib/vencimientos-mes-anio-filtro';
+import AjustesHistorialListMobile from '@/components/ajustes/AjustesHistorialListMobile';
 
 interface AjusteRow {
   id: string;
@@ -31,6 +33,7 @@ export default function HistorialAjustesPage() {
   const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
   const [sucursalId, setSucursalId] = useState('');
   const [mes, setMes] = useState(''); // formato YYYY-MM
+  const mesMaximoYm = calendarioActualArgentina().ym;
 
   useEffect(() => {
     async function cargarSucursales() {
@@ -124,6 +127,7 @@ export default function HistorialAjustesPage() {
         <Button
           variant="outline"
           size="sm"
+          className="w-full sm:w-auto"
           onClick={() => router.push('/ajustes')}
         >
           Volver a ajustes
@@ -136,18 +140,18 @@ export default function HistorialAjustesPage() {
             <div>
               <h2 className="font-semibold text-gray-900">Ajustes realizados</h2>
               <p className="text-sm text-gray-600">
-                Listado de exportaciones de diferencias realizadas. Podés volver a descargar el archivo CSV original de cada ajuste.
+                Listado para volver a descargar el archivo CSV original de cada ajuste.
               </p>
             </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex flex-col gap-1">
+            <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-end">
+              <div className="flex w-full flex-col gap-1 sm:min-w-[180px] sm:w-auto">
                 <label className="text-sm font-medium text-gray-700">
                   Sucursal
                 </label>
                 <select
                   value={sucursalId}
                   onChange={(e) => setSucursalId(e.target.value)}
-                  className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
                   <option value="">Todas las sucursales</option>
@@ -158,21 +162,23 @@ export default function HistorialAjustesPage() {
                   ))}
                 </select>
               </div>
-              <div className="flex flex-col gap-1">
+              <div className="flex w-full flex-col gap-1 sm:w-auto">
                 <label className="text-sm font-medium text-gray-700">
                   Mes
                 </label>
                 <input
                   type="month"
                   value={mes}
-                  onChange={(e) => setMes(e.target.value)}
-                  className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
+                  max={mesMaximoYm}
+                  onChange={(e) => setMes(clampYmNoFuturo(e.target.value, mesMaximoYm))}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 />
               </div>
               <Button
                 size="sm"
                 variant="secondary"
+                className="w-full sm:w-auto"
                 onClick={() => void cargar(1)}
                 disabled={loading}
               >
@@ -193,8 +199,15 @@ export default function HistorialAjustesPage() {
               Todavía no hay ajustes registrados.
             </p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <>
+            <div className="md:hidden">
+              <AjustesHistorialListMobile
+                items={items}
+                onReexportar={(id) => void handleReexportar(id)}
+              />
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="min-w-[520px] w-full text-sm">
                 <thead className="border-b border-gray-100 bg-gray-50">
                   <tr>
                     <th className="px-4 py-2 text-left font-medium text-gray-600">
@@ -243,23 +256,26 @@ export default function HistorialAjustesPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <Button
           size="sm"
           variant="outline"
+          className="w-full sm:w-auto"
           disabled={page <= 1 || loading}
           onClick={() => void cargar(page - 1)}
         >
           Página anterior
         </Button>
-        <p className="text-xs text-gray-500">Página {page}</p>
+        <p className="text-center text-xs text-gray-500">Página {page}</p>
         <Button
           size="sm"
           variant="outline"
+          className="w-full sm:w-auto"
           disabled={!hasMore || loading}
           onClick={() => void cargar(page + 1)}
         >

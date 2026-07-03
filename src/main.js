@@ -1,11 +1,12 @@
-require('dotenv').config();
+require('./load-env');
 
 const express = require('express');
 const cors = require('cors');
 
 const datosRouter = require('./routes/obrasSociales/routes');
 const { ensureDatos } = require('./controllers/obrasSociales/ensureSucursales');
-require('./jobs/obrasSocialesSync.job');
+const { startLegacySyncCron } = require('./jobs/obrasSocialesSync.job');
+startLegacySyncCron();
 
 const app = express();
 

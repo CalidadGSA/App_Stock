@@ -7,6 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
+import DescuentosProductosListMobile from '@/components/vencimientos/DescuentosProductosListMobile';
 
 type ProductoConDescuento = {
   codigo_barras: string;
@@ -148,13 +149,13 @@ export default function ProductosConDescuentosPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="grid w-full grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-end">
             <div className="flex flex-col gap-1">
               <label className="text-sm font-medium text-gray-700">Sucursal</label>
               <select
                 value={sucursalSel}
                 onChange={(e) => setSucursalSel(e.target.value)}
-                className="min-w-[260px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 sm:min-w-[260px]"
               >
                 <option value="">Seleccionar sucursal</option>
                 {sucursales.map((s) => (
@@ -171,7 +172,7 @@ export default function ProductosConDescuentosPage() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Codebar o categoría final..."
-                className="min-w-[240px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 sm:min-w-[240px]"
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -179,7 +180,7 @@ export default function ProductosConDescuentosPage() {
               <select
                 value={categoriaFinalFiltro}
                 onChange={(e) => setCategoriaFinalFiltro(e.target.value)}
-                className="min-w-[260px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 sm:min-w-[260px]"
               >
                 <option value="">Todas</option>
                 {categoriasFinales.map((c) => (
@@ -210,7 +211,11 @@ export default function ProductosConDescuentosPage() {
           ) : filtrados.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400">No hay productos con descuento para mostrar.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              <div className="md:hidden">
+                <DescuentosProductosListMobile items={filtrados} />
+              </div>
+              <div className="hidden overflow-x-auto md:block">
               <table className="min-w-full text-sm">
                 <thead className="border-b bg-gray-50 text-xs text-gray-600">
                   <tr>
@@ -234,6 +239,7 @@ export default function ProductosConDescuentosPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

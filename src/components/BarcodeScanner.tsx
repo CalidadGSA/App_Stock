@@ -287,10 +287,6 @@ export default function BarcodeScanner({
       {cameraError && (
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{cameraError}</p>
       )}
-
-      <p className="text-xs text-gray-400 text-center">
-        Leer con escáner USB/PDA · También podés usar la cámara con el botón
-      </p>
     </div>
   );
 }

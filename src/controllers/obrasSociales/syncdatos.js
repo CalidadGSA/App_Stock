@@ -5,8 +5,6 @@ const { getSupabaseAdmin } = require('../../lib/supabaseAdmin'); // Supabase (in
 
 const SYNC_LIMIT = parseInt(process.env.SYNC_LIMIT || '0', 10);
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_SUCURSALES || '5000', 10);
-const DEFAULT_SUCURSAL_PASSWORD =
-  process.env.DEFAULT_SUCURSAL_PASSWORD || 'changeme';
 
 /* ======================================================
    🧠 ESTADO GLOBAL SYNC sucursales
@@ -176,17 +174,39 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
           `📦 Lote sucursales #${batchNumber} → ${rows.length} registros (desde Sucursal > ${lastSucursal})`
         );
 
+        const sucursalIds = rows.map((r) => r.sucursal);
+        const { data: existentes, error: fetchExistentesError } = await supabase
+          .from('sucursales')
+          .select('sucursal')
+          .in('sucursal', sucursalIds);
+
+        if (fetchExistentesError) {
+          throw fetchExistentesError;
+        }
+
+        const existingSet = new Set(
+          (existentes ?? []).map((e) => Number(e.sucursal))
+        );
+
         const batchToInsert = [];
         let processedInBatch = 0;
+        let skippedNew = 0;
         let lastSucursalInBatch = lastSucursal;
 
         for (const r of rows) {
+          lastSucursalInBatch = r.sucursal;
+
           if (
             SYNC_MODE_LOCAL === 'LAST' &&
             effectiveLimit > 0 &&
             syncState.processed + processedInBatch >= syncState.total
           ) {
             break;
+          }
+
+          if (!existingSet.has(Number(r.sucursal))) {
+            skippedNew++;
+            continue;
           }
 
           batchToInsert.push({
@@ -196,16 +216,24 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
             telefono: r.telefono,
             email: r.email,
             _codpostal: r._codpostal,
-            // Campo obligatorio en Supabase; usamos un valor por defecto
-            contraseña: DEFAULT_SUCURSAL_PASSWORD,
           });
 
           processedInBatch++;
-          lastSucursalInBatch = r.sucursal;
+        }
+
+        if (skippedNew > 0) {
+          console.warn(
+            `⚠️ Lote #${batchNumber}: ${skippedNew} sucursal(es) nueva(s) omitida(s) (crear en Supabase con contraseña antes del sync)`
+          );
         }
 
         if (!processedInBatch) {
-          // Ya alcanzamos el límite efectivo dentro de este lote
+          if (rows.length) {
+            lastSucursal = lastSucursalInBatch;
+          }
+          if (skippedNew > 0 && skippedNew >= rows.length) {
+            continue;
+          }
           break;
         }
 

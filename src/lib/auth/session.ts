@@ -1,9 +1,10 @@
 import { cookies } from 'next/headers';
 import { createHmac } from 'crypto';
 import type { RolOperador } from '@/lib/auth/roles';
+import { OPERADOR_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
 
 const COOKIE_NAME = 'operador_session';
-const MAX_AGE = 60 * 60 * 24 * 7; // 7 días
+const MAX_AGE = OPERADOR_SESSION_MAX_AGE_SEC;
 
 export interface OperadorSession {
   idoperador: number;

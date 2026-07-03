@@ -5,7 +5,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "GestiónStock Farmacia",
+  title: "Gestión Stock GSA",
   description: "Control de inventario y vencimientos para farmacias",
   manifest: "/manifest.json",
 };

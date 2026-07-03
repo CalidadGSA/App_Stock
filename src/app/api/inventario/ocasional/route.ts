@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import { canSeeAllInventarioTipos, getOperadorRbacContext } from '@/lib/auth/rbac';
 import {
   inferirTipoControlInventario,
   nombreTipoControlInventario,
@@ -25,7 +25,9 @@ export async function POST(request: Request) {
   }
 
   const admin = await createAdminClient();
-  const esAdmin = isAdminLikeRole(operador.rol);
+  const rbac = await getOperadorRbacContext();
+  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const esAdmin = canSeeAllInventarioTipos(rbac);
   const tipoObjetivo =
     esAdmin ? 'ocasional_auditoria' : 'ocasional_sucursal';
 

@@ -3,13 +3,17 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, AlertTriangle } from 'lucide-react';
 import { PageSpinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useMaintenanceStatus } from '@/components/MaintenanceGuard';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 
 export default function NuevoInventarioOcasionalPage() {
   const router = useRouter();
+  const notify = useAppNotify();
+  const { maintenance } = useMaintenanceStatus();
   const [motivo, setMotivo] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -42,9 +46,15 @@ export default function NuevoInventarioOcasionalPage() {
       };
 
       if (!res.ok && json.requires_confirmation) {
-        const confirmar = window.confirm(
-          json.warning ?? 'Ya existe un inventario ocasional abierto. ¿Querés crearlo igual?'
-        );
+        const confirmar = await notify.confirm({
+          title: 'Inventario ocasional abierto',
+          message:
+            json.warning ??
+            'Ya existe un inventario ocasional abierto. ¿Querés crearlo igual?',
+          confirmLabel: 'Crear igual',
+          cancelLabel: 'Cancelar',
+          variant: 'warning',
+        });
 
         if (!confirmar) {
           setLoading(false);
@@ -116,13 +126,20 @@ export default function NuevoInventarioOcasionalPage() {
               required
             />
 
+            {maintenance && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <span>No se pueden crear inventarios ocasionales hasta que se restablezca la base de datos.</span>
+              </div>
+            )}
+
             {error && (
               <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
                 {error}
               </div>
             )}
 
-            <Button type="submit" size="lg" loading={loading} className="mt-2 w-full">
+            <Button type="submit" size="lg" loading={loading} disabled={maintenance} className="mt-2 w-full">
               Crear inventario ocasional y comenzar escaneo
             </Button>
           </form>

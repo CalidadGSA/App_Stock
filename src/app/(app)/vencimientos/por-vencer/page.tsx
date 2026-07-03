@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -13,7 +13,90 @@ import {
   colorVencimiento,
   estiloFilaProgresoVenta,
 } from '@/lib/utils';
-import { ArrowLeft, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Filter,
+  Trash2,
+} from 'lucide-react';
+import { clientHasPermission } from '@/lib/auth/permissions-client';
+import PorVencerListMobile from '@/components/vencimientos/PorVencerListMobile';
+import { PorVencerFiltrosPanel } from '@/components/vencimientos/PorVencerFiltrosPanel';
+import {
+  PorVencerDatatableBar,
+  PorVencerDatatableFooter,
+  type TamPaginaPorVencer,
+} from '@/components/vencimientos/PorVencerDatatableBar';
+import { VencimientosTablaContenedor } from '@/components/vencimientos/VencimientosTablaContenedor';
+import { TablaImpresionVencimientosCompacta } from '@/components/vencimientos/TablaImpresionVencimientosCompacta';
+import {
+  MESES_CALENDARIO,
+  opcionesAnioVencimiento,
+  pasaFiltroMesAnioYmd,
+  validarAnioVencFiltro,
+  validarMesVencFiltro,
+} from '@/lib/vencimientos-mes-anio-filtro';
+import {
+  BotonImprimirListadoVencimientos,
+  EncabezadoImpresionListadoVencimientos,
+  VENCIMIENTOS_PRINT_AREA_ATTR,
+} from '@/components/vencimientos/ImprimirListadoVencimientos';
+import {
+  filtrarPorVencerPorPeriodo,
+  periodoCubiertoPorCache,
+} from '@/lib/vencimientos/por-vencer-filtro-periodo';
+import {
+  fusionarFlagsVentaPosteriorEnItems,
+  guardarFlagsVentaPosteriorSesion,
+  leerFlagsVentaPosteriorSesion,
+  marcarVentaPosteriorCheckSesion,
+  ventaPosteriorCheckHechoEnSesion,
+} from '@/lib/vencimientos/por-vencer-venta-posterior-cache';
+import type { VistaPorVencerList } from '@/lib/vencimientos-por-vencer-list';
+import { usePaginacionServidor, useTotalPaginas } from '@/components/list/datatable-pagination';
+import {
+  DATATABLE_CARD_BODY_CLASS,
+  DATATABLE_CARD_CLASS,
+  DATATABLE_PAGE_ROOT,
+  DATATABLE_SCROLL_SCREEN,
+  DATATABLE_SECTION_CLASS,
+  DATATABLE_STICKY_THEAD,
+} from '@/components/list/datatable-classes';
+import { tamPaginaToPageSizeParam } from '@/lib/api/pagination';
+
+const TAM_PAGINA_DEFAULT: TamPaginaPorVencer = 20;
+
+type SortKeyPorVencer =
+  | 'producto'
+  | 'categoria'
+  | 'carga'
+  | 'vencimiento'
+  | 'restante'
+  | 'vendido';
+
+function valorItemPorVencer(item: PorVencerItem, sortKey: SortKeyPorVencer): string | number {
+  const rest = Number(item.cantidad ?? 0);
+  const vend = Number(item.cantidad_vendida_acumulada ?? 0);
+  if (sortKey === 'producto') return String(item.descripcion ?? '').toLowerCase();
+  if (sortKey === 'categoria') return String(item.categoria ?? '').toLowerCase();
+  if (sortKey === 'carga') return String(item.fecha_registro ?? '');
+  if (sortKey === 'vencimiento') return String(item.fecha_vencimiento ?? '');
+  if (sortKey === 'restante') return rest;
+  return vend;
+}
+
+function compararValoresSort(
+  va: string | number,
+  vb: string | number,
+  sortDir: 'asc' | 'desc'
+): number {
+  let cmp = 0;
+  if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb;
+  else cmp = String(va).localeCompare(String(vb), 'es', { sensitivity: 'base' });
+  return sortDir === 'asc' ? cmp : -cmp;
+}
 
 interface PorVencerItem {
   id: string;
@@ -39,25 +122,54 @@ export default function PorVencerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [items, setItems] = useState<PorVencerItem[]>([]);
+  const [itemsImpresion, setItemsImpresion] = useState<PorVencerItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [days, setDays] = useState(30);
   const [daysMin, setDaysMin] = useState(0);
-  const [busquedaTexto, setBusquedaTexto] = useState('');
   const [rol, setRol] = useState<'superadmin' | 'admin' | 'operador_sucursal'>('operador_sucursal');
+  const [permissions, setPermissions] = useState<string[]>([]);
   const [gruposExpandidos, setGruposExpandidos] = useState<Record<string, boolean>>({});
   const [obsLocal, setObsLocal] = useState<Record<string, string>>({});
   const [guardandoObsId, setGuardandoObsId] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKeyPorVencer>('vencimiento');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [totalFilas, setTotalFilas] = useState(0);
+  const [totalLineas, setTotalLineas] = useState(0);
+  const [catMacrosDisponibles, setCatMacrosDisponibles] = useState<string[]>([]);
+  const [categoriasDisponibles, setCategoriasDisponibles] = useState<string[]>([]);
+  const [laboratoriosDisponibles, setLaboratoriosDisponibles] = useState<string[]>([]);
+  const [busquedaAplicada, setBusquedaAplicada] = useState('');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
+  const [ventaPosteriorCheckStatus, setVentaPosteriorCheckStatus] = useState<
+    'off' | 'full' | 'skipped_slow_db' | 'skipped_unavailable'
+  >('off');
   const [rangeKey, setRangeKey] = useState<
     'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
   >('all');
   /**
-   * Tras el primer GET exitoso con chequeo MySQL, no volvemos a pedir check_venta_posterior aunque cambien
-   * vista o periodo (evita lentitud). Los ids nuevos en un periodo distante quedan sin flag hasta "Actualizar"
-   * El botón «Actualizar» limpia cache y vuelve a pedir el chequeo MySQL una vez.
+   * Chequeo MySQL (onze_center) solo la primera vez por sesión del navegador.
+   * Filtros de periodo/vista reutilizan datos ya cargados cuando el rango es más acotado.
+   * «Actualizar» limpia cachés y vuelve a consultar todo (incl. venta posterior).
    */
   const ventaPosteriorCacheRef = useRef<Map<string, boolean>>(new Map());
   const ventaPosteriorCheckHechoRef = useRef(false);
+  const cachePorVistaRef = useRef<
+    Map<string, { days: number; daysMin: number; items: PorVencerItem[] }>
+  >(new Map());
+
+  function parseVistaDesdeUrl(raw: string | null): VistaPorVencerList {
+    if (raw === 'vendidos' || raw === 'vencidos' || raw === 'vendido_parcial') return raw;
+    return 'por_vencer';
+  }
+
+  function aplicarFlagsVentaPosterior(lista: PorVencerItem[]): PorVencerItem[] {
+    return fusionarFlagsVentaPosteriorEnItems(lista, ventaPosteriorCacheRef.current);
+  }
+
+  function invalidarCachePorVencer() {
+    cachePorVistaRef.current.clear();
+  }
 
   const vistaUrl = searchParams.get('vista');
   const vistaSelect =
@@ -67,26 +179,38 @@ export default function PorVencerPage() {
 
   const catMacroFiltro = searchParams.get('cat_macro') ?? '';
   const categoriaFiltro = searchParams.get('categoria') ?? '';
+  const laboratorioFiltro = searchParams.get('laboratorio') ?? '';
   const soloVentaPosterior = searchParams.get('solo_venta_posterior') === '1';
+  const mesVencFiltro = parseInt(searchParams.get('mes_venc') ?? '', 10);
+  const anioVencFiltro = parseInt(searchParams.get('anio_venc') ?? '', 10);
+  const anioVencValido = validarAnioVencFiltro(
+    Number.isFinite(anioVencFiltro) ? anioVencFiltro : undefined
+  );
+  const mesVencValido = validarMesVencFiltro(
+    Number.isFinite(mesVencFiltro) ? mesVencFiltro : undefined,
+    anioVencValido ?? null
+  );
+  const mesesVencOpts = MESES_CALENDARIO;
+  const aniosVencOpts = useMemo(() => opcionesAnioVencimiento(3, 5), []);
 
-  const catMacrosDisponibles = useMemo(() => {
-    const s = new Set<string>();
-    for (const i of items) {
-      const m = String(i.cat_macro ?? '').trim();
-      if (m) s.add(m);
-    }
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [items]);
-
-  const categoriasDisponibles = useMemo(() => {
-    const s = new Set<string>();
-    for (const i of items) {
-      if (catMacroFiltro && String(i.cat_macro ?? '') !== catMacroFiltro) continue;
-      const c = String(i.categoria ?? '').trim();
-      if (c) s.add(c);
-    }
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [items, catMacroFiltro]);
+  const {
+    paginaActual,
+    setPaginaActual,
+    tamPagina,
+    onTamPaginaChange,
+  } = usePaginacionServidor([
+    searchParams.toString(),
+    busquedaAplicada,
+    sortKey,
+    sortDir,
+    catMacroFiltro,
+    categoriaFiltro,
+    laboratorioFiltro,
+    soloVentaPosterior,
+    mesVencValido,
+    anioVencValido,
+  ]);
+  const totalPaginas = useTotalPaginas(totalFilas, tamPagina);
 
   const desdeHastaLabel = useMemo(() => {
     switch (rangeKey) {
@@ -116,36 +240,42 @@ export default function PorVencerPage() {
     return base;
   }, [desdeHastaLabel, vistaSelect]);
 
-  const itemsFiltrados = useMemo(() => {
-    let list = items;
-    if (catMacroFiltro) {
-      list = list.filter((i) => String(i.cat_macro ?? '') === catMacroFiltro);
-    }
-    if (categoriaFiltro) {
-      list = list.filter((i) => String(i.categoria ?? '') === categoriaFiltro);
-    }
-    if (soloVentaPosterior) {
-      list = list.filter((i) => i.venta_posterior_a_carga === true);
-    }
-    const q = busquedaTexto.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((i) => {
-      const texto = [
-        i.descripcion,
-        i.presentacion ?? '',
-        i.laboratorio ?? '',
-        i.codigo_barras,
-        i.producto_id_sistema,
-      ]
-        .join(' ')
-        .toLowerCase();
-      return texto.includes(q);
-    });
-  }, [items, catMacroFiltro, categoriaFiltro, soloVentaPosterior, busquedaTexto]);
+  const filtrosActivos = useMemo(() => {
+    let n = 0;
+    if (vistaSelect !== 'por_vencer') n += 1;
+    if (rangeKey !== 'all') n += 1;
+    if (catMacroFiltro) n += 1;
+    if (categoriaFiltro) n += 1;
+    if (laboratorioFiltro) n += 1;
+    if (soloVentaPosterior) n += 1;
+    if (mesVencValido) n += 1;
+    if (anioVencValido) n += 1;
+    return n;
+  }, [
+    vistaSelect,
+    rangeKey,
+    catMacroFiltro,
+    categoriaFiltro,
+    laboratorioFiltro,
+    soloVentaPosterior,
+    mesVencValido,
+    anioVencValido,
+  ]);
+
+  const itemsFiltrados = items;
 
   type FilaAgrupada =
     | { tipo: 'uno'; item: PorVencerItem }
     | { tipo: 'grupo'; key: string; items: PorVencerItem[] };
+
+  function toggleSort(key: SortKeyPorVencer) {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(key);
+    setSortDir(key === 'vencimiento' || key === 'carga' ? 'asc' : 'desc');
+  }
 
   const filasAgrupadas = useMemo((): FilaAgrupada[] => {
     const map = new Map<string, PorVencerItem[]>();
@@ -167,81 +297,234 @@ export default function PorVencerPage() {
         });
       }
     }
-    filas.sort((a, b) => {
-      const fa = a.tipo === 'uno' ? a.item.fecha_vencimiento : a.items[0]!.fecha_vencimiento;
-      const fb = b.tipo === 'uno' ? b.item.fecha_vencimiento : b.items[0]!.fecha_vencimiento;
-      return fa.localeCompare(fb);
-    });
     return filas;
   }, [itemsFiltrados]);
 
-  async function cargar() {
+  const filasPaginadas = filasAgrupadas;
+
+  const ordenarItemsGrupo = useCallback(
+    (items: PorVencerItem[]) =>
+      [...items].sort((a, b) =>
+        compararValoresSort(
+          valorItemPorVencer(a, sortKey),
+          valorItemPorVencer(b, sortKey),
+          sortDir
+        )
+      ),
+    [sortDir, sortKey]
+  );
+
+  function encabezadoSort(
+    key: SortKeyPorVencer,
+    label: string,
+    opts?: { align?: 'left' | 'right'; className?: string }
+  ) {
+    const align = opts?.align ?? 'left';
+    const activo = sortKey === key;
+    return (
+      <th
+        scope="col"
+        className={`px-3 py-2 font-medium text-gray-600 dark:text-gray-300 cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-800 ${
+          align === 'right' ? 'text-right' : 'text-left'
+        } ${opts?.className ?? ''}`}
+        onClick={() => toggleSort(key)}
+        aria-sort={activo ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      >
+        <span
+          className={`inline-flex items-center gap-1 ${align === 'right' ? 'ml-auto justify-end' : ''}`}
+        >
+          {label}
+          {activo ? (
+            sortDir === 'asc' ? (
+              <ChevronUp className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            )
+          ) : null}
+        </span>
+      </th>
+    );
+  }
+
+  function sincronizarRangeKey(daysParam: number, daysMinParam: number) {
+    if (daysParam === 365 && daysMinParam === 0) setRangeKey('all');
+    else if (daysParam === 30 && daysMinParam === 0) setRangeKey('30_all');
+    else if (daysParam === 30 && daysMinParam === 1) setRangeKey('30_only');
+    else if (daysParam === 60 && daysMinParam === 31) setRangeKey('60_only');
+    else if (daysParam === 60 && daysMinParam === 0) setRangeKey('60_all');
+    else if (daysParam === 90 && daysMinParam === 61) setRangeKey('90_only');
+    else if (daysParam === 90 && daysMinParam === 0) setRangeKey('90_all');
+    else setRangeKey('all');
+  }
+
+  async function cargar(opciones?: { forzarApi?: boolean }) {
     setLoading(true);
     setError('');
     try {
       const daysParam = parseInt(searchParams.get('days') ?? '365', 10) || 365;
       const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
+      const vista = parseVistaDesdeUrl(searchParams.get('vista'));
       setDays(daysParam);
       setDaysMin(daysMinParam);
-      // Determinar selección actual según (days, daysMin)
-      if (daysParam === 365 && daysMinParam === 0) setRangeKey('all');
-      else if (daysParam === 30 && daysMinParam === 0) setRangeKey('30_all');
-      else if (daysParam === 30 && daysMinParam === 1) setRangeKey('30_only');
-      else if (daysParam === 60 && daysMinParam === 31) setRangeKey('60_only');
-      else if (daysParam === 60 && daysMinParam === 0) setRangeKey('60_all');
-      else if (daysParam === 90 && daysMinParam === 61) setRangeKey('90_only');
-      else if (daysParam === 90 && daysMinParam === 0) setRangeKey('90_all');
-      else setRangeKey('all');
+      sincronizarRangeKey(daysParam, daysMinParam);
+
+      if (opciones?.forzarApi) {
+        invalidarCachePorVencer();
+      }
+
       const params = new URLSearchParams();
       params.set('days', String(daysParam));
       params.set('daysMin', String(daysMinParam));
-      if (vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial') {
-        params.set('vista', vistaUrl);
+      if (vista !== 'por_vencer') {
+        params.set('vista', vista);
       }
-      const solicitarCheckVentaPosterior = !ventaPosteriorCheckHechoRef.current;
+      if (catMacroFiltro) params.set('cat_macro', catMacroFiltro);
+      if (categoriaFiltro) params.set('categoria', categoriaFiltro);
+      if (laboratorioFiltro) params.set('laboratorio', laboratorioFiltro);
+      if (soloVentaPosterior) params.set('solo_venta_posterior', '1');
+      if (mesVencValido) params.set('mes_venc', String(mesVencValido));
+      if (anioVencValido) params.set('anio_venc', String(anioVencValido));
+      if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
+      params.set('sortBy', sortKey);
+      params.set('sortDir', sortDir);
+      params.set('page', String(paginaActual));
+      params.set('pageSize', tamPaginaToPageSizeParam(tamPagina === 'all' ? 'all' : tamPagina));
+
+      const checkYaHecho =
+        ventaPosteriorCheckHechoRef.current || ventaPosteriorCheckHechoEnSesion();
+      const solicitarCheckVentaPosterior =
+        opciones?.forzarApi || (!checkYaHecho && !soloVentaPosterior);
       if (solicitarCheckVentaPosterior) {
+        ventaPosteriorCheckHechoRef.current = true;
+        marcarVentaPosteriorCheckSesion(true);
         params.set('check_venta_posterior', '1');
       }
+
       const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`);
       const json = await res.json() as {
         data?: PorVencerItem[];
+        total?: number;
+        total_lineas?: number;
         cat_macros?: string[];
         categorias?: string[];
+        laboratorios?: string[];
         error?: string;
+        venta_posterior_check?: 'off' | 'full' | 'skipped_slow_db' | 'skipped_unavailable';
       };
       if (!res.ok) {
         setError(json.error ?? 'Error al cargar productos por vencer');
         setItems([]);
+        setTotalFilas(0);
+        setTotalLineas(0);
         return;
       }
+
       const rawList = json.data ?? [];
-      let nextList = rawList;
       if (solicitarCheckVentaPosterior) {
         for (const i of rawList) {
           ventaPosteriorCacheRef.current.set(i.id, !!i.venta_posterior_a_carga);
         }
-        ventaPosteriorCheckHechoRef.current = true;
-      } else {
-        nextList = rawList.map((i) => ({
-          ...i,
-          venta_posterior_a_carga: ventaPosteriorCacheRef.current.get(i.id) ?? false,
-        }));
+        guardarFlagsVentaPosteriorSesion(ventaPosteriorCacheRef.current);
+        if (json.venta_posterior_check) {
+          setVentaPosteriorCheckStatus(json.venta_posterior_check);
+        }
+      } else if (json.venta_posterior_check === 'off') {
+        for (const i of rawList) {
+          if (!ventaPosteriorCacheRef.current.has(i.id) && i.venta_posterior_a_carga) {
+            ventaPosteriorCacheRef.current.set(i.id, true);
+          }
+        }
+        guardarFlagsVentaPosteriorSesion(ventaPosteriorCacheRef.current);
       }
-      setItems(nextList);
+
+      setItems(aplicarFlagsVentaPosterior(rawList));
+      setTotalFilas(json.total ?? 0);
+      setTotalLineas(json.total_lineas ?? json.total ?? 0);
+      setCatMacrosDisponibles(json.cat_macros ?? []);
+      setCategoriasDisponibles(json.categorias ?? []);
+      setLaboratoriosDisponibles(json.laboratorios ?? []);
       setObsLocal({});
     } catch {
       setError('Error al cargar productos por vencer');
       setItems([]);
+      setTotalFilas(0);
+      setTotalLineas(0);
     } finally {
       setLoading(false);
     }
   }
 
+  const prepararImpresion = useCallback(async () => {
+    if (tamPagina === 'all' && items.length >= totalLineas && totalLineas > 0) {
+      setItemsImpresion(null);
+      return;
+    }
+    const daysParam = parseInt(searchParams.get('days') ?? '365', 10) || 365;
+    const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
+    const vista = parseVistaDesdeUrl(searchParams.get('vista'));
+    const params = new URLSearchParams();
+    params.set('days', String(daysParam));
+    params.set('daysMin', String(daysMinParam));
+    if (vista !== 'por_vencer') params.set('vista', vista);
+    if (catMacroFiltro) params.set('cat_macro', catMacroFiltro);
+    if (categoriaFiltro) params.set('categoria', categoriaFiltro);
+    if (laboratorioFiltro) params.set('laboratorio', laboratorioFiltro);
+    if (soloVentaPosterior) params.set('solo_venta_posterior', '1');
+    if (mesVencValido) params.set('mes_venc', String(mesVencValido));
+    if (anioVencValido) params.set('anio_venc', String(anioVencValido));
+    if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
+    params.set('sortBy', sortKey);
+    params.set('sortDir', sortDir);
+    params.set('page', '1');
+    params.set('pageSize', 'all');
+    params.set('check_venta_posterior', '0');
+    const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`);
+    const json = (await res.json()) as { data?: PorVencerItem[]; error?: string };
+    if (!res.ok) throw new Error(json.error ?? 'Error al preparar impresión');
+    setItemsImpresion(aplicarFlagsVentaPosterior(json.data ?? []));
+  }, [
+    tamPagina,
+    items.length,
+    totalLineas,
+    searchParams,
+    catMacroFiltro,
+    categoriaFiltro,
+    laboratorioFiltro,
+    soloVentaPosterior,
+    mesVencValido,
+    anioVencValido,
+    busquedaAplicada,
+    sortKey,
+    sortDir,
+  ]);
+
   const claveCargaDatos = [
     searchParams.get('days') ?? '365',
     searchParams.get('daysMin') ?? '0',
     searchParams.get('vista') ?? '',
+    catMacroFiltro,
+    categoriaFiltro,
+    laboratorioFiltro,
+    soloVentaPosterior ? '1' : '0',
+    mesVencValido ?? '',
+    anioVencValido ?? '',
+    busquedaAplicada,
+    sortKey,
+    sortDir,
+    String(paginaActual),
+    String(tamPagina),
   ].join('|');
+
+  useEffect(() => {
+    setItemsImpresion(null);
+  }, [claveCargaDatos]);
+
+  useEffect(() => {
+    if (ventaPosteriorCheckHechoEnSesion()) {
+      ventaPosteriorCheckHechoRef.current = true;
+      ventaPosteriorCacheRef.current = leerFlagsVentaPosteriorSesion();
+    }
+  }, []);
 
   useEffect(() => {
     const currentDays = searchParams.get('days');
@@ -262,8 +545,11 @@ export default function PorVencerPage() {
       try {
         const res = await fetch('/api/dashboard');
         const json = await res.json();
-        if (json?.data?.rol === 'admin' || json?.data?.rol === 'superadmin') {
+        if (json?.data?.rol) {
           setRol(json.data.rol);
+        }
+        if (Array.isArray(json?.data?.permissions)) {
+          setPermissions(json.data.permissions);
         }
       } catch {
         // noop
@@ -299,6 +585,7 @@ export default function PorVencerPage() {
         return;
       }
       const restante = Number(json.cantidad_restante ?? 0);
+      invalidarCachePorVencer();
       setItems((prev) =>
         prev.map((x) =>
           x.id === id
@@ -314,6 +601,73 @@ export default function PorVencerPage() {
       );
     } catch {
       setError('Error al eliminar el registro');
+    }
+  }
+
+  async function arreglarCantidadVendida(
+    detalleId: string,
+    cantidadRestante: number,
+    cantidadVendidaActual: number
+  ) {
+    const rest = Math.max(0, Math.floor(Number(cantidadRestante) || 0));
+    const vendida = Math.max(0, Math.floor(Number(cantidadVendidaActual) || 0));
+    const totalLinea = rest + vendida;
+    if (totalLinea <= 0 || vendida <= 0) {
+      setError('Esta línea no tiene ventas registradas para corregir.');
+      return;
+    }
+    const ingresado = window.prompt(
+      `Cantidad vendida correcta (0 a ${totalLinea}).\nCargada en la línea: ${totalLinea} · Registrada vendida: ${vendida} · Restante: ${rest}`,
+      String(vendida)
+    );
+    if (ingresado == null) return;
+    const nuevaVendida = parseInt(ingresado, 10);
+    if (!Number.isFinite(nuevaVendida) || nuevaVendida < 0 || nuevaVendida > totalLinea) {
+      setError(`Ingresá un entero entre 0 y ${totalLinea}.`);
+      return;
+    }
+    if (nuevaVendida === vendida) {
+      setError('La cantidad ingresada es igual a la vendida actual.');
+      return;
+    }
+    setError('');
+    try {
+      const res = await fetch('/api/vencimientos/por-vencer/ajustar-vendido', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          detalle_id: detalleId,
+          cantidad_vendida_total: nuevaVendida,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        cantidad_vendida_total?: number;
+        cantidad_restante?: number;
+        vendido?: number;
+      };
+      if (!res.ok) {
+        setError(json.error ?? 'Error al ajustar la cantidad vendida');
+        return;
+      }
+      const vendidaFinal = Number(json.cantidad_vendida_total ?? nuevaVendida);
+      const restanteFinal = Number(json.cantidad_restante ?? totalLinea - nuevaVendida);
+      const vendidoFlag = Number(json.vendido ?? (restanteFinal <= 0 ? 1 : 0));
+      invalidarCachePorVencer();
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === detalleId
+            ? {
+                ...x,
+                cantidad: restanteFinal,
+                cantidad_vendida_acumulada: vendidaFinal,
+                vendido: vendidoFlag,
+              }
+            : x
+        )
+      );
+    } catch {
+      setError('Error al ajustar la cantidad vendida');
     }
   }
 
@@ -345,18 +699,19 @@ export default function PorVencerPage() {
         setError(json.error ?? 'Error al quitar cantidad');
         return;
       }
-      await cargar();
+      invalidarCachePorVencer();
+      await cargar({ forzarApi: true });
     } catch {
       setError('Error al quitar cantidad');
     }
   }
 
-  function textoObs(item: PorVencerItem) {
+  function textoObs(item: { id: string; accion_observacion?: string | null }) {
     if (obsLocal[item.id] !== undefined) return obsLocal[item.id];
     return String(item.accion_observacion ?? '');
   }
 
-  async function guardarObservacion(item: PorVencerItem) {
+  async function guardarObservacion(item: { id: string; accion_observacion?: string | null }) {
     const texto = textoObs(item).trim();
     setGuardandoObsId(item.id);
     setError('');
@@ -392,8 +747,8 @@ export default function PorVencerPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
+    <div className={DATATABLE_PAGE_ROOT}>
+      <div className="flex shrink-0 items-center justify-between gap-3 print:hidden">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -406,10 +761,11 @@ export default function PorVencerPage() {
           <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">{tituloPrincipal}</h1>
         </div>
         <div className="flex items-center gap-2">
-          {(rol === 'admin' || rol === 'superadmin') && (
+          {(clientHasPermission(permissions, rol, 'vencimientos.consolidado') ||
+            clientHasPermission(permissions, rol, 'vencimientos.descuentos')) && (
             <>
               <Link
-                href={`/vencimientos/por-vencer/consolidado?consolidado=1&days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}${vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial' ? `&vista=${encodeURIComponent(vistaUrl)}` : ''}`}
+                href={`/vencimientos/por-vencer/consolidado?consolidado=1&days=${searchParams.get('days') ?? '365'}&daysMin=${searchParams.get('daysMin') ?? '0'}${vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial' ? `&vista=${encodeURIComponent(vistaUrl)}` : ''}${mesVencValido ? `&mes_venc=${mesVencValido}` : ''}${anioVencValido ? `&anio_venc=${anioVencValido}` : ''}`}
               >
                 <Button size="sm" variant="secondary">
                   Consolidado
@@ -430,244 +786,154 @@ export default function PorVencerPage() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Filtros</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                {vistaSelect === 'por_vencer' &&
-                  ' Por vencer: fechas desde hoy según el periodo. Incluye liquidados (restante 0).'}
-                {vistaSelect === 'vendidos' &&
-                  ' Solo líneas liquidadas dentro del rango de fechas de vencimiento (según periodo).'}
-                {vistaSelect === 'vencidos' &&
-                  ' Solo productos ya vencidos: fechas de vencimiento en los últimos N días (según periodo), antes de hoy.'}
-                {vistaSelect === 'vendido_parcial' &&
-                  ' Solo líneas no liquidadas (restante y stock en control), con al menos 1 unidad vendida registrada y vendido=0 en el control.'}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Vista</label>
-                <select
-                  value={vistaSelect}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    const params = new URLSearchParams(searchParams.toString());
-                    if (next === 'por_vencer') params.delete('vista');
-                    else params.set('vista', next);
-                    router.push(`/vencimientos/por-vencer?${params.toString()}`);
-                  }}
-                  className="min-w-[160px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="por_vencer">Por vencer</option>
-                  <option value="vendido_parcial">Solo vendido parcial</option>
-                  <option value="vendidos">Solo vendidos (liquidados)</option>
-                  <option value="vencidos">Solo vencidos</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Periodo</label>
-                <select
-                    value={rangeKey}
-                  onChange={(e) => {
-                      const nextKey = e.target.value as typeof rangeKey;
-                      let nextDays = 30;
-                      let nextDaysMin = 0;
-                      if (nextKey === 'all') {
-                        nextDays = 365;
-                        nextDaysMin = 0;
-                      }
-                      if (nextKey === '60_all') {
-                        nextDays = 60;
-                        nextDaysMin = 0;
-                      }
-                      if (nextKey === '90_all') {
-                        nextDays = 90;
-                        nextDaysMin = 0;
-                      }
-                      if (nextKey === '60_only') {
-                        nextDays = 60;
-                        nextDaysMin = 31;
-                      }
-                      if (nextKey === '30_only') {
-                        nextDays = 30;
-                        nextDaysMin = 1;
-                      }
-                      if (nextKey === '90_only') {
-                        nextDays = 90;
-                        nextDaysMin = 61;
-                      }
-                    const params = new URLSearchParams(searchParams.toString());
-                      params.set('days', String(nextDays));
-                      params.set('daysMin', String(nextDaysMin));
-                    router.push(`/vencimientos/por-vencer?${params.toString()}`);
-                  }}
-                  className="min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                    <option value="all">Todos</option>
-                    <option value="30_all">Todos hasta 30 días</option>
-                    <option value="60_all">Todos hasta 60 días</option>
-                    <option value="90_all">Todos hasta 90 días</option>
-                    <option value="30_only">Solo a 30 días</option>
-                    <option value="60_only">Solo a 60 días</option>
-                    <option value="90_only">Solo a 90 días</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Buscar</label>
-                <input
-                  type="text"
-                  value={busquedaTexto}
-                  onChange={(e) => setBusquedaTexto(e.target.value)}
-                  placeholder="Producto, código, id, laboratorio…"
-                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:placeholder:text-gray-400 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Cat. Macro</label>
-                <select
-                  value={catMacroFiltro}
-                  onChange={(e) => {
-                    const p = new URLSearchParams(searchParams.toString());
-                    if (e.target.value) p.set('cat_macro', e.target.value);
-                    else p.delete('cat_macro');
-                    p.delete('categoria');
-                    router.replace(`/vencimientos/por-vencer?${p.toString()}`);
-                  }}
-                  className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="">Todas</option>
-                  {catMacrosDisponibles.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Categoría</label>
-                <select
-                  value={categoriaFiltro}
-                  onChange={(e) => {
-                    const p = new URLSearchParams(searchParams.toString());
-                    if (e.target.value) p.set('categoria', e.target.value);
-                    else p.delete('categoria');
-                    router.replace(`/vencimientos/por-vencer?${p.toString()}`);
-                  }}
-                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
-                    focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="">Todas</option>
-                  {categoriasDisponibles.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <label className="flex cursor-pointer items-center gap-2 pb-0.5 text-sm text-gray-800 dark:text-gray-200">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-gray-300"
-                  checked={soloVentaPosterior}
-                  onChange={(e) => {
-                    const p = new URLSearchParams(searchParams.toString());
-                    if (e.target.checked) p.set('solo_venta_posterior', '1');
-                    else p.delete('solo_venta_posterior');
-                    router.replace(`/vencimientos/por-vencer?${p.toString()}`);
-                  }}
-                />
-                Solo venta posterior a la carga
-              </label>
+      {(ventaPosteriorCheckStatus === 'skipped_slow_db' ||
+        ventaPosteriorCheckStatus === 'skipped_unavailable') && (
+        <div className="shrink-0 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200 print:hidden">
+          {ventaPosteriorCheckStatus === 'skipped_slow_db'
+            ? 'La base onze_center respondió lento. Se omitió la verificación de ventas posteriores para cargar el listado más rápido.'
+            : 'No se pudo consultar onze_center a tiempo. Se omitió la verificación de ventas posteriores.'}{' '}
+          Usá «Actualizar» para reintentar.
+        </div>
+      )}
+
+      <Card
+        className={DATATABLE_CARD_CLASS}
+        {...{ [VENCIMIENTOS_PRINT_AREA_ATTR]: '' }}
+      >
+        <CardHeader className="shrink-0 py-3 print:hidden">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
-                variant="secondary"
-                disabled={loading}
-                onClick={() => {
-                  ventaPosteriorCheckHechoRef.current = false;
-                  ventaPosteriorCacheRef.current.clear();
-                  void cargar();
-                }}
+                variant={filtrosAbiertos ? 'secondary' : 'outline'}
+                onClick={() => setFiltrosAbiertos((v) => !v)}
               >
-                Actualizar
+                <Filter className="h-4 w-4 mr-1" />
+                Filtros
+                {filtrosActivos > 0 ? (
+                  <span className="ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-semibold text-white">
+                    {filtrosActivos}
+                  </span>
+                ) : null}
               </Button>
+              <BotonImprimirListadoVencimientos
+                disabled={loading || totalLineas === 0}
+                onPreparePrint={prepararImpresion}
+              />
             </div>
           </div>
         </CardHeader>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-2">
-            <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
-            {!loading && !error && filasAgrupadas.length > 0 ? (
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-              </p>
-            ) : null}
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className={DATATABLE_CARD_BODY_CLASS}>
+          <EncabezadoImpresionListadoVencimientos
+            titulo={tituloPrincipal}
+            detalle={`Periodo: ${desdeHastaLabel}${catMacroFiltro ? ` · Macro: ${catMacroFiltro}` : ''}${categoriaFiltro ? ` · Categoría: ${categoriaFiltro}` : ''}${laboratorioFiltro ? ` · Laboratorio: ${laboratorioFiltro}` : ''}`}
+            cantidadRegistros={totalLineas}
+          />
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+            <PorVencerFiltrosPanel
+              abierto={filtrosAbiertos}
+              onCerrar={() => setFiltrosAbiertos(false)}
+              vistaSelect={vistaSelect}
+              rangeKey={rangeKey}
+              catMacroFiltro={catMacroFiltro}
+              categoriaFiltro={categoriaFiltro}
+              laboratorioFiltro={laboratorioFiltro}
+              soloVentaPosterior={soloVentaPosterior}
+              mesVencValido={mesVencValido}
+              anioVencValido={anioVencValido}
+              mesesVencOpts={mesesVencOpts}
+              aniosVencOpts={aniosVencOpts}
+              catMacrosDisponibles={catMacrosDisponibles}
+              categoriasDisponibles={categoriasDisponibles}
+              laboratoriosDisponibles={laboratoriosDisponibles}
+              loading={loading}
+              onActualizar={() => {
+                ventaPosteriorCheckHechoRef.current = false;
+                ventaPosteriorCacheRef.current.clear();
+                marcarVentaPosteriorCheckSesion(false);
+                invalidarCachePorVencer();
+                void cargar({ forzarApi: true });
+              }}
+            />
           {loading ? (
-            <div className="py-6">
+            <div className="flex flex-1 items-center justify-center py-6">
               <PageSpinner />
             </div>
           ) : error ? (
             <p className="px-5 py-4 text-sm text-red-600">{error}</p>
-          ) : filasAgrupadas.length === 0 ? (
-            <p className="px-5 py-4 text-sm text-gray-400 dark:text-gray-500">
-              {items.length > 0 && itemsFiltrados.length === 0
-                ? 'Ninguna fila coincide con los filtros o la búsqueda en pantalla. Probá relajar categoría, venta posterior o el texto de búsqueda.'
-                : null}
-              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'vendidos' &&
-                'No hay productos liquidados en ese rango.'}
-              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'vencidos' &&
-                'No hay productos vencidos en ese rango.'}
-              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'vendido_parcial' &&
-                'No hay líneas con venta parcial sin liquidar en ese rango.'}
-              {!(items.length > 0 && itemsFiltrados.length === 0) && vistaSelect === 'por_vencer' &&
-                'No hay productos por vencer en ese periodo.'}
-            </p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="border-b border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-slate-900/60">
+            <div className={`${DATATABLE_SECTION_CLASS} print:min-h-0 print:flex-none print:overflow-visible`}>
+              <PorVencerDatatableBar
+                busquedaTexto={busquedaAplicada}
+                onBusquedaChange={(v) => setBusquedaAplicada(v.trim())}
+                tamPagina={tamPagina}
+                onTamPaginaChange={onTamPaginaChange}
+                paginaActual={paginaActual}
+                onPaginaChange={setPaginaActual}
+                totalFilas={totalFilas}
+              />
+              {totalFilas === 0 ? (
+                <p className="px-5 py-4 text-sm text-gray-400 dark:text-gray-500">
+                  {vistaSelect === 'vendidos' && 'No hay productos liquidados en ese rango.'}
+                  {vistaSelect === 'vencidos' &&
+                    'No hay productos vencidos sin liquidar en ese rango.'}
+                  {vistaSelect === 'vendido_parcial' &&
+                    'No hay líneas con venta parcial sin liquidar en ese rango.'}
+                  {vistaSelect === 'por_vencer' &&
+                    'No hay productos por vencer con los filtros actuales.'}
+                </p>
+              ) : (
+              <>
+              <div className="datatable-rows-scroll row-start-2 min-h-0 overflow-auto overscroll-contain md:hidden print:hidden">
+                <PorVencerListMobile
+                  filas={filasPaginadas}
+                  gruposExpandidos={gruposExpandidos}
+                  onToggleGrupo={(key) =>
+                    setGruposExpandidos((p) => ({ ...p, [key]: !p[key] }))
+                  }
+                  textoObs={textoObs}
+                  onObsChange={(id, value) =>
+                    setObsLocal((prev) => ({ ...prev, [id]: value }))
+                  }
+                  guardandoObsId={guardandoObsId}
+                  onGuardarObs={(item) => void guardarObservacion(item)}
+                  onVendido={(id, cant) => void eliminarRegistro(id, cant)}
+                  onReducirCarga={(id, cant) => void reducirCarga(id, cant)}
+                  onArreglarVendido={(id, rest, vend) =>
+                    void arreglarCantidadVendida(id, rest, vend)
+                  }
+                  ordenarItemsGrupo={(items) => ordenarItemsGrupo(items as PorVencerItem[])}
+                />
+              </div>
+              <TablaImpresionVencimientosCompacta items={itemsImpresion ?? items} />
+              <VencimientosTablaContenedor className={DATATABLE_SCROLL_SCREEN}>
+              <table className="w-full min-w-[960px] text-sm print:min-w-0 print:text-[8px]">
+                <thead className={DATATABLE_STICKY_THEAD}>
                   <tr>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
-                      Producto
+                    {encabezadoSort('producto', 'Producto')}
+                    {encabezadoSort('categoria', 'Categoría', {
+                      className: 'hidden lg:table-cell',
+                    })}
+                    {encabezadoSort('carga', 'Carga', {
+                      className: 'hidden xl:table-cell',
+                    })}
+                    {encabezadoSort('vencimiento', 'Vencimiento')}
+                    {encabezadoSort('restante', 'Rest.', { align: 'right' })}
+                    {encabezadoSort('vendido', 'Vend.', { align: 'right' })}
+                    <th className="hidden px-3 py-2 text-right font-medium text-gray-600 xl:table-cell dark:text-gray-300">
+                      Desc.
                     </th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
-                      Categoría
-                    </th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
-                      Carga
-                    </th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
-                      Vencimiento
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
-                      Restante
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
-                      Vendido
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
-                      Descuento
-                    </th>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
-                      Acción / observación
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
-                      Acciones
+                    <th
+                      data-print-hide
+                      className="min-w-[220px] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300"
+                    >
+                      Observación y acciones
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {filasAgrupadas.map((fila) => {
+                  {filasPaginadas.map((fila) => {
                     if (fila.tipo === 'uno') {
                       const r = fila.item;
                       const dias = diasHastaVencimiento(r.fecha_vencimiento);
@@ -694,7 +960,7 @@ export default function PorVencerPage() {
                               {r.presentacion} · {r.laboratorio}
                             </p>
                             <p className="mt-0.5 font-mono text-sm text-gray-900 dark:text-gray-300">
-                              {r.codigo_barras} · ID {r.producto_id_sistema}
+                              {r.codigo_barras}
                             </p>
                             {r.venta_posterior_a_carga ? (
                               <p className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
@@ -702,17 +968,20 @@ export default function PorVencerPage() {
                               </p>
                             ) : null}
                           </td>
-                          <td className="px-4 py-2 align-top text-xs text-gray-700 dark:text-gray-300">
+                          <td className="hidden px-3 py-2 align-top text-xs text-gray-700 lg:table-cell dark:text-gray-300">
                             {r.categoria ?? '-'}
                           </td>
-                          <td className="px-4 py-2 align-top text-xs whitespace-nowrap text-gray-700 dark:text-gray-300">
+                          <td className="hidden px-3 py-2 align-top text-xs whitespace-nowrap text-gray-700 xl:table-cell dark:text-gray-300">
                             {formatDateTime(r.fecha_registro)}
                           </td>
-                          <td className="px-4 py-2 align-top text-xs">
+                          <td className="px-3 py-2 align-top text-xs">
                             <div className="flex flex-col gap-0.5">
                               <span className="text-gray-800 dark:text-gray-200">{formatDate(r.fecha_vencimiento)}</span>
                               <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
                                 {dias < 0 ? 'Vencido' : `En ${dias} día${dias !== 1 ? 's' : ''}`}
+                              </span>
+                              <span className="text-[10px] text-gray-500 xl:hidden">
+                                Carga: {formatDateTime(r.fecha_registro)}
                               </span>
                             </div>
                           </td>
@@ -722,7 +991,7 @@ export default function PorVencerPage() {
                           <td className="px-4 py-2 align-top text-right text-xs text-gray-800 dark:text-gray-200">
                             {vendHist.toFixed(0)}
                           </td>
-                          <td className="px-4 py-2 align-top text-right text-xs">
+                          <td className="hidden px-3 py-2 align-top text-right text-xs xl:table-cell">
                             {typeof r.descuento_aplicado === 'number' ? (
                               <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
                                 -{Math.abs(r.descuento_aplicado)}%
@@ -731,28 +1000,25 @@ export default function PorVencerPage() {
                               <span className="text-gray-400 dark:text-gray-500">-</span>
                             )}
                           </td>
-                          <td className="px-4 py-2 align-top">
+                          <td data-print-hide className="min-w-[220px] px-3 py-2 align-top">
                             <textarea
                               rows={2}
                               value={textoObs(r)}
                               onChange={(e) =>
                                 setObsLocal((prev) => ({ ...prev, [r.id]: e.target.value }))
                               }
-                              className="w-full min-w-[190px] resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                              className="w-full resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
                               placeholder="Acción tomada..."
                             />
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="mt-1"
-                              disabled={guardandoObsId === r.id}
-                              onClick={() => void guardarObservacion(r)}
-                            >
-                              {guardandoObsId === r.id ? 'Guardando…' : 'Guardar'}
-                            </Button>
-                          </td>
-                          <td className="px-4 py-2 align-top text-right">
-                            <div className="flex flex-wrap justify-end gap-1">
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={guardandoObsId === r.id}
+                                onClick={() => void guardarObservacion(r)}
+                              >
+                                {guardandoObsId === r.id ? 'Guardando…' : 'Guardar'}
+                              </Button>
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -761,6 +1027,22 @@ export default function PorVencerPage() {
                               >
                                 Vendido
                               </Button>
+                              {vendHist > 0 ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  title="Corregir unidades vendidas registradas por error"
+                                  onClick={() =>
+                                    void arreglarCantidadVendida(
+                                      r.id,
+                                      Number(r.cantidad ?? 0),
+                                      vendHist
+                                    )
+                                  }
+                                >
+                                  Arreglar vendido
+                                </Button>
+                              ) : null}
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -813,7 +1095,7 @@ export default function PorVencerPage() {
                               {primero.presentacion} · {primero.laboratorio}
                             </p>
                             <p className="mt-0.5 font-mono text-sm text-gray-900 dark:text-gray-300">
-                              {primero.codigo_barras} · ID {primero.producto_id_sistema}
+                              {primero.codigo_barras}
                             </p>
                             {grp.some((x) => x.venta_posterior_a_carga) ? (
                               <p className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
@@ -821,13 +1103,13 @@ export default function PorVencerPage() {
                               </p>
                             ) : null}
                           </td>
-                          <td className="px-4 py-2 align-top text-xs text-gray-700 dark:text-gray-300">
+                          <td className="hidden px-3 py-2 align-top text-xs text-gray-700 lg:table-cell dark:text-gray-300">
                             {primero.categoria ?? '-'}
                           </td>
-                          <td className="px-4 py-2 align-top text-xs text-gray-600 dark:text-gray-400">
+                          <td className="hidden px-3 py-2 align-top text-xs text-gray-600 xl:table-cell dark:text-gray-400">
                             Varias cargas
                           </td>
-                          <td className="px-4 py-2 align-top text-xs">
+                          <td className="px-3 py-2 align-top text-xs">
                             <div className="flex flex-col gap-0.5">
                               <span className="text-gray-800 dark:text-gray-200">{formatDate(primero.fecha_vencimiento)}</span>
                               <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
@@ -835,13 +1117,13 @@ export default function PorVencerPage() {
                               </span>
                             </div>
                           </td>
-                          <td className="px-4 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">
+                          <td className="px-3 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">
                             {restG.toFixed(0)}
                           </td>
-                          <td className="px-4 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">
+                          <td className="px-3 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">
                             {vendG.toFixed(0)}
                           </td>
-                          <td className="px-4 py-2 align-top text-right text-xs">
+                          <td className="hidden px-3 py-2 align-top text-right text-xs xl:table-cell">
                             {descTodosIguales && typeof desc0 === 'number' ? (
                               <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
                                 -{Math.abs(desc0)}%
@@ -850,10 +1132,10 @@ export default function PorVencerPage() {
                               <span className="text-gray-400 dark:text-gray-500">-</span>
                             )}
                           </td>
-                          <td className="px-4 py-2 align-top text-xs text-gray-500 dark:text-gray-400">
-                            Editá por línea
-                          </td>
-                          <td className="px-4 py-2 align-top text-right">
+                          <td data-print-hide className="min-w-[220px] px-3 py-2 align-top">
+                            <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+                              Varias cargas — editá por línea
+                            </p>
                             <Button
                               size="sm"
                               variant="secondary"
@@ -867,12 +1149,12 @@ export default function PorVencerPage() {
                               ) : (
                                 <ChevronRight className="h-4 w-4" />
                               )}
-                              Líneas
+                              {exp ? 'Ocultar líneas' : `Ver ${grp.length} líneas`}
                             </Button>
                           </td>
                         </tr>
                         {exp
-                          ? grp.map((r) => {
+                          ? ordenarItemsGrupo(grp).map((r) => {
                               const d = diasHastaVencimiento(r.fecha_vencimiento);
                               const col = colorVencimiento(d);
                               const vh = Number(r.cantidad_vendida_acumulada) || 0;
@@ -883,23 +1165,23 @@ export default function PorVencerPage() {
                                   key={r.id}
                                   className="bg-slate-50/90 dark:bg-slate-900/40"
                                 >
-                                  <td className="px-4 py-2 pl-8 align-top text-xs text-gray-600 dark:text-gray-400">
+                                  <td className="px-3 py-2 pl-8 align-top text-xs text-gray-600 dark:text-gray-400">
                                     Línea · control {r.control_id.slice(0, 8)}…
                                   </td>
-                                  <td className="px-4 py-2 align-top text-xs text-gray-500 dark:text-gray-500">
+                                  <td className="hidden px-3 py-2 align-top text-xs text-gray-500 lg:table-cell dark:text-gray-500">
                                     {r.categoria ?? '-'}
                                   </td>
-                                  <td className="px-4 py-2 align-top text-xs whitespace-nowrap text-gray-600 dark:text-gray-400">
+                                  <td className="hidden px-3 py-2 align-top text-xs whitespace-nowrap text-gray-600 xl:table-cell dark:text-gray-400">
                                     {r.fecha_registro ? formatDateTime(r.fecha_registro) : '—'}
                                   </td>
-                                  <td className="px-4 py-2 align-top text-xs">
+                                  <td className="px-3 py-2 align-top text-xs">
                                     <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${col}`}>
                                       {formatDate(r.fecha_vencimiento)}
                                     </span>
                                   </td>
-                                  <td className="px-4 py-2 align-top text-right text-xs">{rest.toFixed(0)}</td>
-                                  <td className="px-4 py-2 align-top text-right text-xs">{vh.toFixed(0)}</td>
-                                  <td className="px-4 py-2 align-top text-right text-xs">
+                                  <td className="px-3 py-2 align-top text-right text-xs">{rest.toFixed(0)}</td>
+                                  <td className="px-3 py-2 align-top text-right text-xs">{vh.toFixed(0)}</td>
+                                  <td className="hidden px-3 py-2 align-top text-right text-xs xl:table-cell">
                                     {typeof r.descuento_aplicado === 'number' ? (
                                       <span className="text-emerald-700 dark:text-emerald-300">
                                         -{Math.abs(r.descuento_aplicado)}%
@@ -908,33 +1190,25 @@ export default function PorVencerPage() {
                                       '-'
                                     )}
                                   </td>
-                                  <td className="px-4 py-2 align-top">
+                                  <td data-print-hide className="min-w-[220px] px-3 py-2 align-top">
                                     <textarea
                                       rows={2}
                                       value={textoObs(r)}
                                       onChange={(e) =>
                                         setObsLocal((prev) => ({ ...prev, [r.id]: e.target.value }))
                                       }
-                                      className="w-full min-w-[180px] resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                                      className="w-full resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
                                       placeholder="Acción tomada..."
                                     />
-                                    <Button
-                                      size="sm"
-                                      variant="secondary"
-                                      className="mt-1"
-                                      disabled={guardandoObsId === r.id}
-                                      onClick={() => void guardarObservacion(r)}
-                                    >
-                                      {guardandoObsId === r.id ? 'Guardando…' : 'Guardar'}
-                                    </Button>
-                                    {r.venta_posterior_a_carga ? (
-                                      <p className="mt-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">
-                                        Venta posterior a la carga
-                                      </p>
-                                    ) : null}
-                                  </td>
-                                  <td className="px-4 py-2 align-top text-right">
-                                    <div className="flex flex-wrap justify-end gap-1">
+                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        disabled={guardandoObsId === r.id}
+                                        onClick={() => void guardarObservacion(r)}
+                                      >
+                                        {guardandoObsId === r.id ? 'Guardando…' : 'Guardar'}
+                                      </Button>
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -943,6 +1217,22 @@ export default function PorVencerPage() {
                                       >
                                         Vendido
                                       </Button>
+                                      {vh > 0 ? (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          title="Corregir unidades vendidas registradas por error"
+                                          onClick={() =>
+                                            void arreglarCantidadVendida(
+                                              r.id,
+                                              Number(r.cantidad ?? 0),
+                                              vh
+                                            )
+                                          }
+                                        >
+                                          Arreglar vendido
+                                        </Button>
+                                      ) : null}
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -954,6 +1244,11 @@ export default function PorVencerPage() {
                                         <Trash2 className="h-4 w-4" />
                                       </Button>
                                     </div>
+                                    {r.venta_posterior_a_carga ? (
+                                      <p className="mt-1.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                        Venta posterior a la carga
+                                      </p>
+                                    ) : null}
                                   </td>
                                 </tr>
                               );
@@ -964,8 +1259,19 @@ export default function PorVencerPage() {
                   })}
                 </tbody>
               </table>
+            </VencimientosTablaContenedor>
+              <PorVencerDatatableFooter
+                paginaActual={paginaActual}
+                onPaginaChange={setPaginaActual}
+                totalFilas={totalFilas}
+                tamPagina={tamPagina}
+                detalle={`${totalFilas} fila${totalFilas !== 1 ? 's' : ''} (${totalLineas} línea${totalLineas !== 1 ? 's' : ''})`}
+              />
+              </>
+              )}
             </div>
           )}
+          </div>
         </CardContent>
       </Card>
     </div>

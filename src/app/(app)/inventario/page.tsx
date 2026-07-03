@@ -26,20 +26,26 @@ export default function InventarioListPage() {
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
-  const [desde, setDesde] = useState('');
-  const [hasta, setHasta] = useState('');
+  const [desde, setDesde] = useState(() => searchParams.get('desde') ?? '');
+  const [hasta, setHasta] = useState(() => searchParams.get('hasta') ?? '');
   const [estado, setEstado] = useState<'todos' | 'en_progreso' | 'cerrado'>('todos');
 
-  async function cargar(p = 1) {
+  async function cargar(
+    p = 1,
+    filtros?: { desde?: string; hasta?: string; estado?: typeof estado },
+  ) {
     setLoading(true);
     setError('');
     try {
+      const desdeFiltro = filtros?.desde ?? desde;
+      const hastaFiltro = filtros?.hasta ?? hasta;
+      const estadoFiltro = filtros?.estado ?? estado;
       const params = new URLSearchParams();
       params.set('page', String(p));
       params.set('pageSize', '20');
-      if (desde) params.set('desde', desde);
-      if (hasta) params.set('hasta', hasta);
-      if (estado !== 'todos') params.set('estado', estado);
+      if (desdeFiltro) params.set('desde', desdeFiltro);
+      if (hastaFiltro) params.set('hasta', hastaFiltro);
+      if (estadoFiltro !== 'todos') params.set('estado', estadoFiltro);
 
       const res = await fetch(`/api/inventario?${params.toString()}`);
       const json = (await res.json()) as {
@@ -65,14 +71,20 @@ export default function InventarioListPage() {
   }
 
   useEffect(() => {
-    // Tomar fechas iniciales desde la URL (si existen), por ejemplo cuando se viene desde el dashboard.
     const desdeUrl = searchParams.get('desde') ?? '';
     const hastaUrl = searchParams.get('hasta') ?? '';
     if (desdeUrl) setDesde(desdeUrl);
     if (hastaUrl) setHasta(hastaUrl);
-    void cargar(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  useEffect(() => {
+    void cargar(1, {
+      desde: searchParams.get('desde') ?? '',
+      hasta: searchParams.get('hasta') ?? '',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleAplicarFiltros() {
     void cargar(1);
@@ -131,7 +143,7 @@ export default function InventarioListPage() {
                   <option value="cerrado">Cerrado</option>
                 </select>
               </div>
-              <Button size="sm" onClick={handleAplicarFiltros}>
+              <Button size="sm" onClick={handleAplicarFiltros} disabled={loading}>
                 Aplicar
               </Button>
             </div>

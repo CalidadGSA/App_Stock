@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/server';
+import { filtroSucursalesExcluidasLogin } from '@/lib/sucursales/login-sucursales';
 import { NextResponse } from 'next/server';
 
 /** GET /api/auth/sucursales — listado público de sucursales para el dropdown del login (sin auth) */
@@ -8,7 +9,7 @@ export async function GET() {
     .from('sucursales')
     .select('sucursal, nombrefantasia')
     .eq('activa', true)
-    .not('sucursal', 'in', '(9,10,15,18)')
+    .not('sucursal', 'in', filtroSucursalesExcluidasLogin())
     .order('nombrefantasia');
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

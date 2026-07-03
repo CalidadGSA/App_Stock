@@ -1,6 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import { requirePermission } from '@/lib/auth/rbac';
 import { serializarCsvAjuste, type FormatoCsvAjuste } from '@/lib/csv-ajuste';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -9,11 +8,8 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (!isAdminLikeRole(operador.rol)) {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
+  const guard = await requirePermission('admin.ajustes_historial');
+  if (!guard.ok) return guard.response;
 
   const { id } = await params;
   const formatoParam = request.nextUrl.searchParams.get('formato');

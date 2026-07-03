@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDate, formatDateTime, diasHastaVencimiento, colorVencimiento } from '@/lib/utils';
 import type { ControlVencimiento, ControlVencimientoDetalle, ProductoLegacy } from '@/types';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 
 interface ControlConDetalles extends ControlVencimiento {
   controles_vencimientos_detalle: ControlVencimientoDetalle[];
@@ -45,9 +46,19 @@ function ymToLastDayYmd(ym: string): string | null {
   return `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 }
 
+function textoAvisoDuplicadoOtroControl(
+  fechaYmd: string,
+  cantidadPorFecha: Record<string, number>
+): string | null {
+  const cant = cantidadPorFecha[fechaYmd] ?? 0;
+  if (cant <= 0) return null;
+  return `Ya hay ${cant} unid. cargadas en otro control (venc. ${formatDate(fechaYmd)})`;
+}
+
 export default function VencimientoDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const notify = useAppNotify();
 
   const [control, setControl] = useState<ControlConDetalles | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,8 +84,8 @@ export default function VencimientoDetailPage() {
 
   const [cerrando, setCerrando] = useState(false);
   const [confirmCerrar, setConfirmCerrar] = useState(false);
-  /** Misma fecha+producto ya cargada en otro control (misma sucursal). */
-  const [duplicadosPorFecha, setDuplicadosPorFecha] = useState<Record<string, boolean>>({});
+  /** Unidades ya cargadas en otro control (misma sucursal, misma fecha de venc.). */
+  const [cantidadDuplicadaPorFecha, setCantidadDuplicadaPorFecha] = useState<Record<string, number>>({});
 
   const cargarControl = useCallback(async () => {
     try {
@@ -93,12 +104,12 @@ export default function VencimientoDetailPage() {
 
   useEffect(() => {
     if (!control?.id || control.estado !== 'en_progreso' || !productoEscaneado) {
-      setDuplicadosPorFecha({});
+      setCantidadDuplicadaPorFecha({});
       return;
     }
     const fechas = lotes.map((l) => (l.fecha_vencimiento ?? '').trim()).filter(Boolean);
     if (fechas.length === 0) {
-      setDuplicadosPorFecha({});
+      setCantidadDuplicadaPorFecha({});
       return;
     }
     const handle = window.setTimeout(() => {
@@ -114,15 +125,15 @@ export default function VencimientoDetailPage() {
         try {
           const res = await fetch(`/api/vencimientos/duplicado-otro-control?${params.toString()}`);
           const json = (await res.json()) as {
-            data?: { duplicados_por_fecha?: Record<string, boolean> };
+            data?: { cantidad_duplicada_por_fecha?: Record<string, number> };
           };
-          if (res.ok && json.data?.duplicados_por_fecha) {
-            setDuplicadosPorFecha(json.data.duplicados_por_fecha);
+          if (res.ok && json.data?.cantidad_duplicada_por_fecha) {
+            setCantidadDuplicadaPorFecha(json.data.cantidad_duplicada_por_fecha);
           } else {
-            setDuplicadosPorFecha({});
+            setCantidadDuplicadaPorFecha({});
           }
         } catch {
-          setDuplicadosPorFecha({});
+          setCantidadDuplicadaPorFecha({});
         }
       })();
     }, 450);
@@ -131,7 +142,7 @@ export default function VencimientoDetailPage() {
 
   async function handleScan(barcode: string): Promise<boolean> {
     setErrorProducto('');
-    setDuplicadosPorFecha({});
+    setCantidadDuplicadaPorFecha({});
     setProductoEscaneado(null);
     setLotes([LOTE_VACIO]);
     setEditandoProductoId(null);
@@ -157,7 +168,7 @@ export default function VencimientoDetailPage() {
           error?: string;
         };
         if (!res.ok) {
-          setErrorProducto(json.error ?? 'Error al buscar productos en medicamentos.');
+          setErrorProducto(json.error ?? 'Error al buscar productos en el padrón.');
           return false;
         }
         const lista = json.data ?? [];
@@ -252,17 +263,30 @@ export default function VencimientoDetailPage() {
       return;
     }
 
-    const hayDuplicadoOtroControl = lotesValidos.some((l) => {
-      const fechaYmd = ymToLastDayYmd(l.fecha_vencimiento);
-      return fechaYmd ? Boolean(duplicadosPorFecha[fechaYmd]) : false;
-    });
-    if (
-      hayDuplicadoOtroControl &&
-      !window.confirm(
-        'Hay al menos una fecha que ya figura en otro control de vencimientos. ¿Cargar igual?'
-      )
-    ) {
-      return;
+    const duplicadosGuardar = lotesValidos
+      .map((l) => {
+        const fechaYmd = ymToLastDayYmd(l.fecha_vencimiento);
+        if (!fechaYmd) return null;
+        const cant = cantidadDuplicadaPorFecha[fechaYmd] ?? 0;
+        if (cant <= 0) return null;
+        return { fechaYmd, cant };
+      })
+      .filter((x): x is { fechaYmd: string; cant: number } => x != null);
+    if (duplicadosGuardar.length > 0) {
+      const detalle = duplicadosGuardar
+        .map((d) => `${formatDate(d.fechaYmd)}: ${d.cant} unid.`)
+        .join('; ');
+      if (
+        !(await notify.confirm({
+          title: 'Fechas duplicadas',
+          message: `Hay fechas que ya figuran en otro control de vencimientos (${detalle}). ¿Cargar igual?`,
+          confirmLabel: 'Cargar igual',
+          cancelLabel: 'Cancelar',
+          variant: 'warning',
+        }))
+      ) {
+        return;
+      }
     }
 
     setGuardando(true);
@@ -322,7 +346,13 @@ export default function VencimientoDetailPage() {
   }
 
   async function handleEliminarLinea(detalleId: string) {
-    if (!confirm('¿Eliminar este registro?')) return;
+    if (!(await notify.confirm({
+      title: 'Eliminar registro',
+      message: '¿Eliminar este registro?',
+      confirmLabel: 'Eliminar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    }))) return;
     await fetch(`/api/vencimientos/${id}/detalles?detalle_id=${detalleId}`, { method: 'DELETE' });
     await cargarControl();
   }
@@ -556,11 +586,20 @@ export default function VencimientoDetailPage() {
                       {' '}
                       · ID {productoEscaneado.producto_id_sistema}
                     </p>
-                    {Object.values(duplicadosPorFecha).some(Boolean) ? (
-                      <p className="mt-2 rounded-md border border-amber-400 bg-amber-100/90 px-2 py-1 text-xs font-semibold text-amber-950 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100">
-                        Producto duplicado, revisar
-                      </p>
-                    ) : null}
+                    {(() => {
+                      const lineas = Object.entries(cantidadDuplicadaPorFecha).filter(
+                        ([, c]) => c > 0
+                      );
+                      if (lineas.length === 0) return null;
+                      return (
+                        <p className="mt-2 rounded-md border border-amber-400 bg-amber-100/90 px-2 py-1 text-xs font-semibold text-amber-950 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100">
+                          Producto duplicado en otro control:{' '}
+                          {lineas
+                            .map(([fv, c]) => `${formatDate(fv)} (${c} unid.)`)
+                            .join(' · ')}
+                        </p>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -584,12 +623,17 @@ export default function VencimientoDetailPage() {
                         {lote.fecha_vencimiento &&
                         (() => {
                           const fechaYmd = ymToLastDayYmd(lote.fecha_vencimiento);
-                          return fechaYmd ? Boolean(duplicadosPorFecha[fechaYmd]) : false;
-                        })() ? (
-                          <p className="mt-1 text-[11px] font-medium text-amber-800 dark:text-amber-200">
-                            Producto duplicado, revisar
-                          </p>
-                        ) : null}
+                          if (!fechaYmd) return null;
+                          const aviso = textoAvisoDuplicadoOtroControl(
+                            fechaYmd,
+                            cantidadDuplicadaPorFecha
+                          );
+                          return aviso ? (
+                            <p className="mt-1 text-[11px] font-medium text-amber-800 dark:text-amber-200">
+                              {aviso}
+                            </p>
+                          ) : null;
+                        })()}
                       </div>
                       <div className="w-28">
                         <Input

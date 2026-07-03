@@ -8,7 +8,8 @@ export type TipoControlInventario =
   | 'diario'
   | 'ocasional_sucursal'
   | 'ocasional_auditoria'
-  | 'auditoria';
+  | 'auditoria'
+  | 'auditoria_integral';
 
 // ------------------------------------------------------------
 // Entidades de la base de datos
@@ -105,6 +106,9 @@ export interface ControlInventarioDetalle {
   stock_real_unidades?: number | null;
   /** Total contado en unidades (cajas*unidades_por_caja + unidades_sueltas) */
   stock_real: number;
+  /** Diferencia que marcó la sucursal al ajustar (solo auditoría, enriquecido por API). */
+  diferencia_sucursal_cajas?: number | null;
+  diferencia_sucursal_unidades?: number | null;
   /** Marcado manual como revisado en pantalla de recuento */
   verificado?: number | null;
   diferencia: number;
@@ -156,7 +160,8 @@ export interface DashboardStats {
   inventarios_mes: number;
   items_con_diferencia: number;
   controles_vencimientos_total: number;
-  productos_vencidos: number;
+  /** Líneas en ventana de devolución (misma regla que /vencimientos/para-devolver). */
+  productos_para_devolver: number;
   productos_por_vencer_30: number;
   productos_por_vencer_60: number;
   productos_por_vencer_90: number;
@@ -167,6 +172,15 @@ export interface DashboardStats {
     pendientes: number;
     total: number;
     porcentaje: number;
+    /** true cuando el trimestre de padrón (FARMA/BIENESTAR/PSICO) está al 100%. */
+    trimestre_padron_completo?: boolean;
+    por_macro?: Array<{
+      macro: 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS';
+      inventariados: number;
+      pendientes: number;
+      total: number;
+      porcentaje: number;
+    }>;
   }>;
   ultimos_inventarios: Pick<
     ControlInventario,

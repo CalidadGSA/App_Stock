@@ -170,3 +170,294 @@ button, a, input, select, textarea {
   }
 
 }
+
+/* Datatable: bloques solo pantalla vs solo impresión */
+.datatable-print-only {
+  display: none !important;
+}
+
+.datatable-print-header {
+  display: none !important;
+}
+
+.datatable-screen-only {
+  /* visible en pantalla según clases Tailwind (md:block, etc.) */
+}
+
+/* Toolbar + footer fijos; solo esta zona hace scroll (filas de la tabla). */
+.datatable-rows-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.datatable-rows-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: #f9fafb;
+}
+
+.datatable-rows-scroll thead th[class*='sticky'][class*='right'] {
+  z-index: 11;
+}
+
+.dark .datatable-rows-scroll thead th {
+  background-color: #0f172a;
+}
+
+/* Impresión: listado completo marcado con data-vencimientos-print-area */
+@media print {
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .datatable-print-only {
+    display: table !important;
+    visibility: visible !important;
+    width: 100% !important;
+  }
+
+  .datatable-print-header {
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  .datatable-screen-only {
+    display: none !important;
+  }
+
+  .datatable-rows-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+  }
+
+  @page {
+    margin: 10mm;
+    size: landscape;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  [data-vencimientos-print-area],
+  [data-vencimientos-print-area] * {
+    visibility: visible;
+  }
+
+  [data-vencimientos-print-area] {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #fff !important;
+  }
+
+  [data-vencimientos-print-area] * {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  [data-vencimientos-print-area] .sticky {
+    position: static !important;
+  }
+
+  [data-vencimientos-print-area] [data-print-hide] {
+    display: none !important;
+  }
+
+  [data-vencimientos-print-area] table {
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 7.5px;
+    line-height: 1.15;
+    border-collapse: collapse;
+  }
+
+  [data-vencimientos-print-area] thead {
+    display: table-header-group;
+  }
+
+  [data-vencimientos-print-area] tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  [data-vencimientos-print-area] th,
+  [data-vencimientos-print-area] td {
+    color: #111 !important;
+    border-color: #ccc !important;
+    padding: 2px 4px !important;
+    vertical-align: top;
+  }
+
+  [data-vencimientos-print-area] th {
+    font-size: 7px;
+    font-weight: 700;
+  }
+
+  [data-vencimientos-print-area] p {
+    margin: 0;
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  [data-vencimientos-print-area] span {
+    font-size: inherit;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] {
+    font-size: 6.5px;
+    line-height: 1.1;
+    table-layout: fixed;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th,
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td {
+    padding: 1px 2px !important;
+    vertical-align: middle !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(1),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(1) {
+    width: 9%;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(2),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(2) {
+    width: 22%;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(3),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(3) {
+    width: 14%;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(4),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(4) {
+    width: 14%;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(5),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(5),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(6),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(6) {
+    width: 9%;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(7),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(7),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] th:nth-child(8),
+  [data-vencimientos-print-area] [data-vencimientos-print-compact] td:nth-child(8) {
+    width: 5%;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact-dif] {
+    font-size: 6px;
+    line-height: 1.1;
+    table-layout: fixed;
+  }
+
+  [data-vencimientos-print-area] [data-vencimientos-print-compact-dif] th,
+  [data-vencimientos-print-area] [data-vencimientos-print-compact-dif] td {
+    padding: 1px 2px !important;
+    vertical-align: middle !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@keyframes manual-turn-next {
+  0% {
+    opacity: 0;
+    transform: translateX(16px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes manual-turn-prev {
+  0% {
+    opacity: 0;
+    transform: translateX(-16px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@layer utilities {
+  .animate-manual-turn-next {
+    animation: manual-turn-next 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .animate-manual-turn-prev {
+    animation: manual-turn-prev 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-thin-visible {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(148 163 184 / 0.65) transparent;
+  }
+  .scrollbar-thin-visible::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .scrollbar-thin-visible::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background-color: rgb(148 163 184 / 0.65);
+  }
+  .scrollbar-thin-visible::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@keyframes app-notification-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes app-notification-progress {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.app-notification-enter {
+  animation: app-notification-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app-notification-progress {
+  animation-name: app-notification-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}

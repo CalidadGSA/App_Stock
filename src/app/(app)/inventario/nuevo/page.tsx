@@ -1,19 +1,50 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { ClipboardList, ArrowLeft } from 'lucide-react';
+import { ClipboardList, ArrowLeft, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
+import { useMaintenanceStatus } from '@/components/MaintenanceGuard';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
+import {
+  CATEGORIA_MACRO_SIN_PADRON,
+  type CategoriaMacroInventarioDiario,
+} from '@/lib/inventario/categoria-macro';
+import type { DashboardStats } from '@/types';
 
 export default function NuevoInventarioPage() {
   const router = useRouter();
+  const notify = useAppNotify();
+  const { maintenance } = useMaintenanceStatus();
   const [descripcion, setDescripcion] = useState('');
-  const [categoriaMacro, setCategoriaMacro] = useState<'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS' | ''>('');
+  const [categoriaMacro, setCategoriaMacro] = useState<CategoriaMacroInventarioDiario | ''>('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
+  const [trimestrePadronCompleto, setTrimestrePadronCompleto] = useState(false);
+  const [cargandoProgreso, setCargandoProgreso] = useState(true);
+
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/dashboard');
+        const json = (await res.json()) as { data?: DashboardStats };
+        if (cancelado) return;
+        const fila = json.data?.inventario_base_por_sucursal?.[0];
+        setTrimestrePadronCompleto(fila?.trimestre_padron_completo === true);
+      } catch {
+        if (!cancelado) setTrimestrePadronCompleto(false);
+      } finally {
+        if (!cancelado) setCargandoProgreso(false);
+      }
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, []);
 
   async function crearInventario(confirmOverride = false) {
     return fetch('/api/inventario', {
@@ -47,9 +78,15 @@ export default function NuevoInventarioPage() {
       };
 
       if (!res.ok && json.requires_confirmation) {
-        const confirmar = window.confirm(
-          json.warning ?? 'Ya existe un inventario abierto de esta categoría. ¿Querés crearlo igual?'
-        );
+        const confirmar = await notify.confirm({
+          title: 'Inventario diario abierto',
+          message:
+            json.warning ??
+            'Ya existe un inventario abierto de esta categoría. ¿Querés crearlo igual?',
+          confirmLabel: 'Crear igual',
+          cancelLabel: 'Cancelar',
+          variant: 'warning',
+        });
 
         if (!confirmar) {
           setCreating(false);
@@ -117,7 +154,7 @@ export default function NuevoInventarioPage() {
               </label>
               <select
                 value={categoriaMacro}
-                onChange={(e) => setCategoriaMacro(e.target.value as typeof categoriaMacro)}
+                onChange={(e) => setCategoriaMacro(e.target.value as CategoriaMacroInventarioDiario | '')}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                   focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               >
@@ -125,11 +162,26 @@ export default function NuevoInventarioPage() {
                 <option value="FARMA">FARMA</option>
                 <option value="BIENESTAR">BIENESTAR</option>
                 <option value="PSICOTROPICOS">PSICOTROPICOS</option>
+                {trimestrePadronCompleto ? (
+                  <option value={CATEGORIA_MACRO_SIN_PADRON}>Sin padrón</option>
+                ) : null}
               </select>
               <p className="text-xs text-gray-500">
                 Si seleccionás una categoría macro, este inventario diario quedará asociado a ese grupo de productos.
               </p>
+              {!cargandoProgreso && !trimestrePadronCompleto ? (
+                <p className="text-xs text-amber-700">
+                  «Sin padrón» se habilita cuando la sucursal completa el 100% del progreso trimestral (FARMA, BIENESTAR y PSICOTROPICOS).
+                </p>
+              ) : null}
             </div>
+
+            {maintenance && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <span>No se pueden crear inventarios diarios hasta que se restablezca la base de datos.</span>
+              </div>
+            )}
 
             {error && (
               <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
@@ -137,7 +189,7 @@ export default function NuevoInventarioPage() {
               </div>
             )}
 
-            <Button type="submit" size="lg" loading={creating} className="mt-2">
+            <Button type="submit" size="lg" loading={creating} disabled={maintenance} className="mt-2">
               Crear inventario diario y comenzar escaneo
             </Button>
           </form>

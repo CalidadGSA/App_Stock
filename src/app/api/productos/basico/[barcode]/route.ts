@@ -1,9 +1,14 @@
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  fichaPadronAProductoLegacy,
+  getProductoPadronByBarcode,
+  getProductoPadronById,
+  padronProductosDisponible,
+} from '@/lib/padron-productos-lookup';
 import { createAdminClient } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
 
-// Versión básica de búsqueda de producto por código de barras:
-// NO consulta stock en MySQL, solo ficha desde medicamentos + laboratorio.
+// Versión básica: solo ficha desde padron_final (sin stock MySQL).
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ barcode: string }> }
@@ -11,144 +16,42 @@ export async function GET(
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
+  if (!padronProductosDisponible()) {
+    return NextResponse.json(
+      { error: 'Base padrón (abastecimiento) no configurada' },
+      { status: 503 }
+    );
+  }
+
   const { barcode } = await params;
 
-  const admin = await createAdminClient();
+  let ficha = await getProductoPadronByBarcode(barcode);
 
-  // Resolver primero el ID de producto desde productoscodebars (para evitar duplicados por codebar)
-  let idProductoFromBarcode: number | null = null;
-  const { data: mapRow, error: mapError } = await admin
-    .from('productoscodebars')
-    .select('idproducto')
-    .eq('codebar', barcode)
-    .order('idproducto', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (mapError) {
-    console.error('Error buscando mapping productoscodebars por código de barras (básico):', mapError);
-  }
-  if (mapRow && typeof mapRow.idproducto === 'number') {
-    idProductoFromBarcode = mapRow.idproducto;
-  }
-
-  // Buscar en medicamentos por ID (codplex) si lo conocemos; si no, caer a buscar por codebar pero limitando a 1 fila
-  let med: any = null;
-  if (idProductoFromBarcode != null) {
-    const { data, error } = await admin
-      .from('medicamentos')
-      .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo, visible')
-      .eq('codplex', idProductoFromBarcode)
-      .eq('activo', 'S')
-      .eq('visible', 1)
-      .neq('troquel', 0)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Error buscando medicamento por ID (codplex) [básico]:', error);
-      return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
-    }
-    med = data;
-  } else {
-    const { data, error } = await admin
-      .from('medicamentos')
-      .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo, visible')
+  if (!ficha) {
+    const admin = await createAdminClient();
+    const { data: mapRow } = await admin
+      .from('productoscodebars')
+      .select('idproducto')
       .eq('codebar', barcode)
-      .eq('activo', 'S')
-      .eq('visible', 1)
-      .neq('troquel', 0)
+      .order('idproducto', { ascending: true })
       .limit(1)
       .maybeSingle();
 
-    if (error) {
-      console.error('Error buscando medicamento por código de barras [básico]:', error);
-      return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
-    }
-    med = data;
-
-    if (!med) {
-      const { data: byAltCodebar, error: altErr } = await admin
-        .from('medicamentos')
-        .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo, visible')
-        .or(`codebar2.eq.${barcode},codebar3.eq.${barcode},codebar4.eq.${barcode}`)
-        .eq('activo', 'S')
-        .eq('visible', 1)
-        .neq('troquel', 0)
-        .limit(1)
-        .maybeSingle();
-      if (altErr) {
-        console.error('Error buscando medicamento por codebar alternativo [básico]:', altErr);
-        return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
-      }
-      med = byAltCodebar;
-    }
-
-    if (!med) {
-      const { data: byTroquel, error: troqErr } = await admin
-        .from('medicamentos')
-        .select('codplex, troquel, codebar, producto, presentaci, codlab, refrigeracion, activo, visible')
-        .eq('troquel', barcode)
-        .eq('activo', 'S')
-        .eq('visible', 1)
-        .neq('troquel', 0)
-        .limit(1)
-        .maybeSingle();
-      if (troqErr) {
-        console.error('Error buscando medicamento por troquel [básico]:', troqErr);
-        return NextResponse.json({ error: 'Error al buscar el producto' }, { status: 500 });
-      }
-      med = byTroquel;
+    if (mapRow && typeof mapRow.idproducto === 'number') {
+      ficha = await getProductoPadronById(mapRow.idproducto);
     }
   }
 
-  if (
-    !med ||
-    (med.activo as string | null)?.toUpperCase() !== 'S' ||
-    Number((med as { visible?: number | null }).visible ?? 0) !== 1
-  ) {
-    return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
-  }
-  const troquelNum = Number((med as { troquel?: number | string | null }).troquel);
-  if (!Number.isFinite(troquelNum) || troquelNum === 0) {
+  if (!ficha) {
     return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
   }
 
-  // Resolver nombre de laboratorio (si existe en la tabla laboratorios)
-  let laboratorioNombre: string | null = null;
-  if (med.codlab != null) {
-    const { data: lab, error: labError } = await admin
-      .from('laboratorios')
-      .select('laborato')
-      .eq('codlab', med.codlab)
-      .maybeSingle();
-
-    if (labError) {
-      console.error('Error buscando laboratorio para medicamento [básico]:', labError);
-    }
-    if (lab) {
-      laboratorioNombre = lab.laborato;
-    }
-  }
-
-  const producto = {
-    producto_id_sistema: String(med.codplex),
-    codigo_barras: med.codebar,
-    troquel:
-      med.troquel != null && String(med.troquel).trim() !== ''
-        ? Number(med.troquel) || med.troquel
-        : null,
-    codigos_secundarios: [] as string[],
-    descripcion: med.producto,
-    presentacion: med.presentaci ?? null,
-    laboratorio: laboratorioNombre ?? (med.codlab != null ? String(med.codlab) : null),
+  const producto = fichaPadronAProductoLegacy(ficha, {
     stock_sistema: 0,
-    stock_cajas: undefined,
-    stock_unidades: undefined,
-    unidades_por_caja: undefined,
-    fraccionable: undefined,
-    refrigerado: String(med.refrigeracion ?? '').toUpperCase() === 'S',
-  };
+    stock_cajas: 0,
+    stock_unidades: 0,
+    unidades_por_caja: 1,
+  });
 
   return NextResponse.json({ data: producto });
 }
-

@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Search } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageSpinner } from '@/components/ui/spinner';
+import AjustesDiferenciasListMobile from '@/components/ajustes/AjustesDiferenciasListMobile';
 
 interface SucursalOption {
   id: string;
@@ -29,6 +31,10 @@ interface DiferenciaItem {
   diffUnidades: number;
 }
 
+function claveDupDiferencia(d: Pick<DiferenciaItem, 'producto_id_sistema' | 'codigo_barras'>) {
+  return `${String(d.producto_id_sistema).trim()}::${String(d.codigo_barras ?? '').trim()}`;
+}
+
 export default function AjustesPage() {
   const router = useRouter();
   const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
@@ -36,16 +42,19 @@ export default function AjustesPage() {
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
   const [origenFiltro, setOrigenFiltro] = useState<'todos' | 'Sucursal' | 'Auditoria'>('todos');
+  const [soloRepetidos, setSoloRepetidos] = useState(false);
   const [loadingSucursales, setLoadingSucursales] = useState(true);
   const [loadingDiferencias, setLoadingDiferencias] = useState(false);
   const [diferencias, setDiferencias] = useState<DiferenciaItem[]>([]);
   const [exportando, setExportando] = useState(false);
   const [error, setError] = useState('');
+  const [busquedaBorrador, setBusquedaBorrador] = useState('');
+  const [busquedaAplicada, setBusquedaAplicada] = useState('');
 
   const clavesDuplicadas = useMemo(() => {
     const cuenta = new Map<string, number>();
     for (const d of diferencias) {
-      const k = `${String(d.producto_id_sistema).trim()}::${String(d.codigo_barras ?? '').trim()}`;
+      const k = claveDupDiferencia(d);
       cuenta.set(k, (cuenta.get(k) ?? 0) + 1);
     }
     const dup = new Set<string>();
@@ -54,6 +63,28 @@ export default function AjustesPage() {
     }
     return dup;
   }, [diferencias]);
+
+  const diferenciasFiltradasBusqueda = useMemo(() => {
+    const term = busquedaAplicada.trim().toLowerCase();
+    if (!term) return diferencias;
+    return diferencias.filter((d) => {
+      const texto = [
+        d.descripcion,
+        d.presentacion ?? '',
+        d.laboratorio ?? '',
+        d.codigo_barras,
+        d.producto_id_sistema,
+      ]
+        .join(' ')
+        .toLowerCase();
+      return texto.includes(term);
+    });
+  }, [diferencias, busquedaAplicada]);
+
+  const diferenciasVisibles = useMemo(() => {
+    if (!soloRepetidos) return diferenciasFiltradasBusqueda;
+    return diferenciasFiltradasBusqueda.filter((d) => clavesDuplicadas.has(claveDupDiferencia(d)));
+  }, [diferenciasFiltradasBusqueda, soloRepetidos, clavesDuplicadas]);
 
   useEffect(() => {
     async function cargarSucursales() {
@@ -79,10 +110,18 @@ export default function AjustesPage() {
     void cargarSucursales();
   }, []);
 
-  async function cargarDiferencias() {
+  async function cargarDiferencias(opts?: {
+    sucursalId?: string;
+    origenFiltro?: 'todos' | 'Sucursal' | 'Auditoria';
+  }) {
+    const sid = opts?.sucursalId ?? sucursalId;
+    const origen = opts?.origenFiltro ?? origenFiltro;
+
     setError('');
     setDiferencias([]);
-    if (!sucursalId || !desde || !hasta) {
+    setBusquedaBorrador('');
+    setBusquedaAplicada('');
+    if (!sid || !desde || !hasta) {
       setError('Seleccioná sucursal, fecha desde y fecha hasta.');
       return;
     }
@@ -93,12 +132,12 @@ export default function AjustesPage() {
     setLoadingDiferencias(true);
     try {
       const params = new URLSearchParams({
-        sucursal_id: sucursalId,
+        sucursal_id: sid,
         desde,
         hasta,
       });
-      if (origenFiltro !== 'todos') {
-        params.set('origen', origenFiltro);
+      if (origen !== 'todos') {
+        params.set('origen', origen);
       }
       const res = await fetch(`/api/inventario/diferencias?${params.toString()}`);
       const json = await res.json();
@@ -204,11 +243,12 @@ export default function AjustesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-gray-900">Ajustes</h1>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-lg font-bold text-gray-900 sm:text-xl dark:text-gray-100">Ajustes</h1>
         <Button
           variant="outline"
           size="sm"
+          className="w-full sm:w-auto"
           onClick={() => router.push('/dashboard')}
         >
           Volver al dashboard
@@ -244,22 +284,27 @@ export default function AjustesPage() {
                   ))}
                 </select>
               </div>
-              <div className="flex flex-wrap items-end gap-3">
-                <Input
-                  label="Desde"
-                  type="date"
-                  value={desde}
-                  onChange={(e) => setDesde(e.target.value)}
-                />
-                <Input
-                  label="Hasta"
-                  type="date"
-                  value={hasta}
-                  onChange={(e) => setHasta(e.target.value)}
-                />
+              <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-end">
+                <div className="w-full sm:w-auto">
+                  <Input
+                    label="Desde"
+                    type="date"
+                    value={desde}
+                    onChange={(e) => setDesde(e.target.value)}
+                  />
+                </div>
+                <div className="w-full sm:w-auto">
+                  <Input
+                    label="Hasta"
+                    type="date"
+                    value={hasta}
+                    onChange={(e) => setHasta(e.target.value)}
+                  />
+                </div>
                 <Button
                   size="sm"
                   variant="outline"
+                  className="w-full sm:w-auto"
                   onClick={() => {
                     const hoy = new Date();
                     const yyyy = hoy.getFullYear();
@@ -272,7 +317,7 @@ export default function AjustesPage() {
                 >
                   Hoy
                 </Button>
-                <div className="flex flex-col gap-1">
+                <div className="flex w-full flex-col gap-1 sm:w-auto">
                   <label className="text-sm font-medium text-gray-700">
                     Origen
                   </label>
@@ -281,7 +326,7 @@ export default function AjustesPage() {
                     onChange={(e) =>
                       setOrigenFiltro(e.target.value as 'todos' | 'Sucursal' | 'Auditoria')
                     }
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900
                       focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                   >
                     <option value="todos">Todos</option>
@@ -292,7 +337,8 @@ export default function AjustesPage() {
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={cargarDiferencias}
+                  className="w-full sm:w-auto"
+                  onClick={() => void cargarDiferencias()}
                   disabled={loadingDiferencias}
                 >
                   Ver diferencias
@@ -303,9 +349,10 @@ export default function AjustesPage() {
                   {error}
                 </p>
               )}
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Button
                   size="sm"
+                  className="w-full sm:w-auto"
                   onClick={handleExportar}
                   loading={exportando}
                   disabled={
@@ -321,6 +368,7 @@ export default function AjustesPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  className="w-full sm:w-auto"
                   onClick={() => router.push('/ajustes/historial')}
                 >
                   Ver historial de ajustes
@@ -332,10 +380,52 @@ export default function AjustesPage() {
       </Card>
 
       <Card>
-        <CardHeader>
-          <h2 className="font-semibold text-gray-900">
-            Diferencias pendientes de ajuste
-          </h2>
+        <CardHeader className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="font-semibold text-gray-900">
+              Diferencias pendientes de ajuste
+              {diferencias.length > 0 ? (
+                <span className="ml-2 text-sm font-normal text-gray-500">
+                  ({diferenciasVisibles.length}
+                  {soloRepetidos ? ' repetidos' : ''}
+                  {busquedaAplicada.trim() ? ' filtrados' : ''} de {diferencias.length})
+                </span>
+              ) : null}
+            </h2>
+            {diferencias.length > 0 ? (
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={soloRepetidos}
+                  onChange={(e) => setSoloRepetidos(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Solo repetidos
+              </label>
+            ) : null}
+          </div>
+          {diferencias.length > 0 ? (
+            <div className="relative w-full sm:max-w-md">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+                aria-hidden
+              />
+              <input
+                type="search"
+                value={busquedaBorrador}
+                onChange={(e) => setBusquedaBorrador(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    setBusquedaAplicada(busquedaBorrador.trim());
+                  }
+                }}
+                placeholder="Buscar producto, código, laboratorio… (Enter)"
+                className="w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-9 pr-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100"
+                aria-label="Buscar producto"
+              />
+            </div>
+          ) : null}
         </CardHeader>
         <CardContent className="p-0">
           {loadingDiferencias ? (
@@ -346,9 +436,25 @@ export default function AjustesPage() {
             <p className="px-5 py-4 text-sm text-gray-400">
               No hay diferencias pendientes para los filtros seleccionados.
             </p>
+          ) : diferenciasVisibles.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-gray-400">
+              {busquedaAplicada.trim() && soloRepetidos
+                ? 'No hay productos repetidos que coincidan con la búsqueda.'
+                : busquedaAplicada.trim()
+                  ? 'No hay productos que coincidan con la búsqueda.'
+                  : 'No hay productos repetidos en el periodo con los filtros seleccionados.'}
+            </p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <>
+            <div className="md:hidden">
+              <AjustesDiferenciasListMobile
+                items={diferenciasVisibles}
+                clavesDuplicadas={clavesDuplicadas}
+                onQuitar={(id) => void handleEliminarDiferencia(id)}
+              />
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="min-w-[720px] w-full text-sm">
                 <thead className="border-b border-gray-100 bg-gray-50">
                   <tr>
                     <th className="px-4 py-2 text-left font-medium text-gray-600">
@@ -375,9 +481,8 @@ export default function AjustesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {diferencias.map((d) => {
-                    const claveDup = `${String(d.producto_id_sistema).trim()}::${String(d.codigo_barras ?? '').trim()}`;
-                    const esDuplicadoPeriodo = clavesDuplicadas.has(claveDup);
+                  {diferenciasVisibles.map((d) => {
+                    const esDuplicadoPeriodo = clavesDuplicadas.has(claveDupDiferencia(d));
                     return (
                     <tr
                       key={d.id}
@@ -427,6 +532,7 @@ export default function AjustesPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

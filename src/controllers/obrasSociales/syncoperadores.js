@@ -211,13 +211,50 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
           break;
         }
 
-        const { error: upsertError } = await supabase
+        const operadorIds = batchToInsert.map((r) => r.idoperador);
+        const { data: existentes, error: fetchExistentesError } = await supabase
           .from('operadores')
-          // Usamos la PK (idoperador) como clave de conflicto
-          .upsert(batchToInsert, { onConflict: 'idoperador' });
+          .select('idoperador')
+          .in('idoperador', operadorIds);
 
-        if (upsertError) {
-          throw upsertError;
+        if (fetchExistentesError) {
+          throw fetchExistentesError;
+        }
+
+        const existingSet = new Set(
+          (existentes ?? []).map((e) => Number(e.idoperador))
+        );
+
+        const nuevos = [];
+        const actualizar = [];
+
+        for (const row of batchToInsert) {
+          if (existingSet.has(Number(row.idoperador))) {
+            actualizar.push(row);
+          } else {
+            nuevos.push(row);
+          }
+        }
+
+        if (nuevos.length) {
+          const { error: insertError } = await supabase.from('operadores').insert(nuevos);
+          if (insertError) {
+            throw insertError;
+          }
+        }
+
+        // Solo columnas legacy: rol / RBAC en Supabase no se tocan en updates.
+        if (actualizar.length) {
+          for (const row of actualizar) {
+            const { idoperador, operador, nombrecompleto, codigo, activo } = row;
+            const { error: updateError } = await supabase
+              .from('operadores')
+              .update({ operador, nombrecompleto, codigo, activo })
+              .eq('idoperador', idoperador);
+            if (updateError) {
+              throw updateError;
+            }
+          }
         }
 
         lastIdOperador = lastIdOperadorInBatch;

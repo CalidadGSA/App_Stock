@@ -3,6 +3,22 @@ import {
   hasValidSessionFormat,
   OPERADOR_COOKIE_NAME,
 } from '@/lib/auth/sessionFormat';
+import { AUTH_COOKIE_NAMES, CAMBIO_SUCURSAL_COOKIE } from '@/lib/auth/cookie-config';
+
+function clearAuthCookies(response: NextResponse) {
+  for (const name of AUTH_COOKIE_NAMES) {
+    response.cookies.delete(name);
+  }
+  return response;
+}
+
+function redirectToLogin(request: NextRequest, opts?: { expirado?: boolean }) {
+  const url = request.nextUrl.clone();
+  url.pathname = '/login';
+  url.searchParams.delete('expirado');
+  if (opts?.expirado) url.searchParams.set('expirado', '1');
+  return clearAuthCookies(NextResponse.redirect(url));
+}
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -16,29 +32,42 @@ export async function middleware(request: NextRequest) {
 
   const operadorCookie = request.cookies.get(OPERADOR_COOKIE_NAME)?.value;
   const hasSession = hasValidSessionFormat(operadorCookie);
+  const sucursalId = request.cookies.get('sucursal_id')?.value?.trim();
+  const cambioSucursalVoluntario =
+    request.cookies.get(CAMBIO_SUCURSAL_COOKIE)?.value === '1';
 
-  // Sin sesión operador → redirigir al login
+  // Cambio de sucursal (operador sigue logueado): solo si vino del botón "Cambiar sucursal"
+  if (pathname === '/sucursal') {
+    if (!hasSession) return redirectToLogin(request);
+    if (!sucursalId && !cambioSucursalVoluntario) {
+      return redirectToLogin(request, { expirado: true });
+    }
+    return NextResponse.next({ request });
+  }
+
   if (!hasSession && !isAuthRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/login';
-    return NextResponse.redirect(url);
+    return redirectToLogin(request);
   }
 
-  // Con sesión → no mostrar login; si ya tiene sucursal, ir al dashboard
   if (hasSession && isAuthRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = request.cookies.get('sucursal_id')?.value ? '/dashboard' : '/sucursal';
-    return NextResponse.redirect(url);
-  }
-
-  // Con sesión pero sin sucursal seleccionada → redirigir a selección
-  if (hasSession && pathname !== '/sucursal') {
-    const sucursalId = request.cookies.get('sucursal_id');
-    if (!sucursalId?.value) {
+    if (sucursalId) {
       const url = request.nextUrl.clone();
-      url.pathname = '/sucursal';
+      url.pathname = '/dashboard';
       return NextResponse.redirect(url);
     }
+    return NextResponse.next({ request });
+  }
+
+  // Operador “logueado” pero sin sucursal (cookie de sucursal vencida o borrada) → login completo
+  if (hasSession && !sucursalId) {
+    return redirectToLogin(request, { expirado: true });
+  }
+
+  // Salió del selector sin elegir otra: sigue con la sucursal anterior
+  if (hasSession && cambioSucursalVoluntario && pathname !== '/sucursal' && sucursalId) {
+    const res = NextResponse.next({ request });
+    res.cookies.delete(CAMBIO_SUCURSAL_COOKIE);
+    return res;
   }
 
   return NextResponse.next({ request });

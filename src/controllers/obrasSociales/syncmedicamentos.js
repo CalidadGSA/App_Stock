@@ -92,7 +92,7 @@ async function syncMedicamentosLegacyToSupabase({ mode, limit: limitParam } = {}
     }
 
     const [countRows] = await pool.query(
-      'SELECT COUNT(*) AS total FROM medicamentos'
+      "SELECT COUNT(*) AS total FROM medicamentos WHERE FechaModificacion >= '2025-01-01 00:00:00'"
     );
     const totalExterno = Number(countRows[0].total) || 0;
 
@@ -165,9 +165,11 @@ async function syncMedicamentosLegacyToSupabase({ mode, limit: limitParam } = {}
             IDPsicofarmaco AS idpsicofarmaco,
             visible        AS visible,
             Refrigeracion  AS refrigeracion,
-            Fraccionable   AS fraccionable
+            Fraccionable   AS fraccionable,
+            FechaModificacion AS fechamodificacion
           FROM medicamentos
           WHERE CodPlex > ?
+            AND FechaModificacion >= '2025-01-01 00:00:00'
           ORDER BY CodPlex
           LIMIT ?
         `,
@@ -213,6 +215,7 @@ async function syncMedicamentosLegacyToSupabase({ mode, limit: limitParam } = {}
             visible: r.visible,
             refrigeracion: r.refrigeracion,
             fraccionable: r.fraccionable,
+            actualizado: r.fechamodificacion ? new Date(r.fechamodificacion).toISOString() : new Date().toISOString(),
           });
 
           processedInBatch++;

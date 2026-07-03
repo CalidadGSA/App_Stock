@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDate, formatDateTime } from '@/lib/utils';
+import DevolucionDetalleListMobile from '@/components/vencimientos/DevolucionDetalleListMobile';
 
 type Cabecera = {
   id: string;
@@ -82,13 +83,14 @@ export default function DevolucionDetallePage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-gray-900">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-lg font-bold leading-tight text-gray-900 sm:text-xl dark:text-gray-100">
           Detalle de devolución
         </h1>
         <Button
           variant="outline"
           size="sm"
+          className="w-full shrink-0 sm:w-auto"
           onClick={() => router.push('/vencimientos/devoluciones')}
         >
           Volver
@@ -119,26 +121,26 @@ export default function DevolucionDetallePage() {
         <>
           <Card>
             <CardHeader>
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
-                  <p className="text-sm font-medium text-gray-800">
+                  <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
                     Fecha de devolución
                   </p>
-                  <p className="text-sm text-gray-700">
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
                     {formatDateTime(cabecera.fecha)}
                   </p>
                 </div>
-                <div className="flex flex-col gap-1 items-end">
+                <div className="flex flex-col gap-1 sm:items-end">
                   {cabecera.sucursales?.nombrefantasia && (
                     <Badge
                       variant="outline"
-                      className="text-[11px] px-2 py-0.5 border-gray-300 text-gray-700"
+                      className="w-fit text-[11px] border-gray-300 px-2 py-0.5 text-gray-700 dark:border-gray-600 dark:text-gray-300"
                     >
                       {cabecera.sucursales.nombrefantasia}
                     </Badge>
                   )}
                   {cabecera.operadores?.nombrecompleto && (
-                    <p className="text-[11px] text-gray-500">
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
                       Operador: {cabecera.operadores.nombrecompleto}
                     </p>
                   )}
@@ -149,22 +151,27 @@ export default function DevolucionDetallePage() {
 
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="font-semibold text-gray-900">
-                  Productos devueltos
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="font-semibold text-gray-900 dark:text-gray-100">
+                  Productos devueltos ({detalles.length})
                 </h2>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
                   Total unidades: {totalCantidad.toFixed(2)}
                 </p>
               </div>
             </CardHeader>
-            <CardContent className="overflow-x-auto">
+            <CardContent className="p-0">
               {detalles.length === 0 ? (
-                <p className="text-sm text-gray-400">
+                <p className="px-4 py-4 text-sm text-gray-400">
                   No hay productos asociados a esta devolución.
                 </p>
               ) : (
-                <table className="min-w-full text-xs">
+                <>
+                <div className="md:hidden">
+                  <DevolucionDetalleListMobile items={detalles} />
+                </div>
+                <div className="hidden overflow-x-auto px-6 pb-6 md:block">
+                <table className="min-w-[720px] w-full text-xs">
                   <thead>
                     <tr className="border-b bg-gray-50 text-[11px] text-gray-600">
                       <th className="px-3 py-2 text-left font-medium">Producto</th>
@@ -215,6 +222,8 @@ export default function DevolucionDetallePage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
+                </>
               )}
             </CardContent>
           </Card>

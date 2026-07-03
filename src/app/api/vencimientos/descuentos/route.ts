@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
-import { getPadronOpcionesPerfumeria, getPadronPerfumeriaMap } from '@/lib/padron-final-db';
+import { requirePermission } from '@/lib/auth/rbac';
+import { serializarCsvDescuentos } from '@/lib/csv-descuentos';
+import { getPadronOpcionesPerfumeria } from '@/lib/padron-final-db';
+import {
+  esSucursalVisibleEnLogin,
+  filtroSucursalesExcluidasLogin,
+} from '@/lib/sucursales/login-sucursales';
+import { listarProductosConDescuentoAplicado } from '@/lib/vencimientos-por-vencer-list';
 import { cookies } from 'next/headers';
 
 type CategoriaFinalPayload = {
@@ -27,12 +32,6 @@ const DIAS_MIN_FIELDS = ['dias_min', 'diasmin', 'diasMin', 'fecha_min'] as const
 const DIAS_MAX_FIELDS = ['dias_max', 'diasmax', 'diasMax', 'fecha_max'] as const;
 const SUBRUBRO_TODOS = '-';
 
-function parseFechaISOaUTC(fecha: string): number {
-  const [y, m, d] = String(fecha).split('-').map((n) => parseInt(n, 10));
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return NaN;
-  return Date.UTC(y, m - 1, d);
-}
-
 async function resolverColumnasReglas(
   admin: Awaited<ReturnType<typeof createAdminClient>>
 ): Promise<ReglaColumnas | null> {
@@ -49,9 +48,8 @@ async function resolverColumnasReglas(
 }
 
 async function requireAdmin() {
-  const operador = await getOperadorSession();
-  if (!operador) return { error: NextResponse.json({ error: 'No autenticado' }, { status: 401 }) };
-  if (!isAdminLikeRole(operador.rol)) return { error: NextResponse.json({ error: 'Sin permisos' }, { status: 403 }) };
+  const guard = await requirePermission('vencimientos.descuentos');
+  if (!guard.ok) return { error: guard.response };
   return { ok: true as const };
 }
 
@@ -107,65 +105,23 @@ export async function GET(request: NextRequest) {
     if (!Number.isFinite(sucursalNum) || sucursalNum <= 0) {
       return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
     }
-
-    let padronMap;
-    try {
-      padronMap = await getPadronPerfumeriaMap();
-    } catch (e) {
-      return NextResponse.json(
-        { error: `Error consultando base de abastecimiento: ${(e as Error).message}` },
-        { status: 500 }
-      );
+    if (!esSucursalVisibleEnLogin(sucursalNum)) {
+      return NextResponse.json({ error: 'Sucursal no disponible' }, { status: 400 });
     }
-
-    const categoriasFinalesRows = (categoriasFinales ?? []) as Array<{
-      id: number;
-      subrubro_nombre: string;
-      categoria: string;
-      categoria_final: string;
-    }>;
-    const catFinalByKey = new Map<string, { id: number; nombre: string }>();
-    const catFinalByCategoria = new Map<string, { id: number; nombre: string }>();
-    for (const c of categoriasFinalesRows) {
-      const subrubroNorm = String(c.subrubro_nombre ?? '').trim();
-      const categoriaNorm = String(c.categoria ?? '').trim();
-      const key = `${subrubroNorm}|${categoriaNorm}`;
-      if (!catFinalByKey.has(key)) {
-        catFinalByKey.set(key, { id: Number(c.id), nombre: String(c.categoria_final) });
-      }
-      if (subrubroNorm === SUBRUBRO_TODOS && !catFinalByCategoria.has(categoriaNorm)) {
-        catFinalByCategoria.set(categoriaNorm, { id: Number(c.id), nombre: String(c.categoria_final) });
-      }
-    }
-
-    const reglas = descuentosRows.map((r) => ({
-      id: Number(r.id),
-      categoriaFinalId: Number(r.id_categoriafinal),
-      descuento: Number(r.descuento),
-      diasMin: Number(r[reglaCols.diasMinField]),
-      diasMax: Number(r[reglaCols.diasMaxField]),
-    }));
 
     const days = Math.min(Math.max(parseInt(request.nextUrl.searchParams.get('days') ?? '365', 10) || 365, 1), 365);
     const daysMinRaw = parseInt(request.nextUrl.searchParams.get('daysMin') ?? '0', 10);
     const daysMin = Number.isNaN(daysMinRaw) ? 0 : Math.max(0, Math.min(daysMinRaw, days));
-    const hoy = new Date();
-    const hoyStr = hoy.toISOString().split('T')[0];
-    const hoyMid = parseFechaISOaUTC(hoyStr);
-    const hasta = new Date(hoy.getTime() + days * 86400000).toISOString().split('T')[0];
 
-    const { data: vencRows, error: vencErr } = await admin
-      .from('controles_vencimientos_detalle')
-      .select(
-        'codigo_barras, producto_id_sistema, fecha_vencimiento, cantidad, vendido, devuelto, controles_vencimientos!inner(sucursal_id)'
-      )
-      .eq('controles_vencimientos.sucursal_id', sucursalNum)
-      .gte('fecha_vencimiento', hoyStr)
-      .lte('fecha_vencimiento', hasta)
-      .eq('vendido', 0)
-      .eq('devuelto', 0)
-      .eq('eliminado', 0);
-    if (vencErr) return NextResponse.json({ error: vencErr.message }, { status: 500 });
+    const listado = await listarProductosConDescuentoAplicado({
+      admin,
+      sucursalId: sucursalNum,
+      days,
+      daysMin,
+    });
+    if (!listado.ok) {
+      return NextResponse.json({ error: listado.error }, { status: listado.status });
+    }
 
     const { data: sucursalRow } = await admin
       .from('sucursales')
@@ -175,8 +131,11 @@ export async function GET(request: NextRequest) {
     const { data: sucursalesRows } = await admin
       .from('sucursales')
       .select('sucursal, nombrefantasia')
-      .order('sucursal', { ascending: true });
+      .eq('activa', true)
+      .not('sucursal', 'in', filtroSucursalesExcluidasLogin())
+      .order('nombrefantasia');
 
+    const hoy = new Date();
     const mesNombre = hoy.toLocaleString('es-ES', { month: 'long' });
     const anio = hoy.getFullYear();
     const sucursalNombre = String(
@@ -186,64 +145,10 @@ export async function GET(request: NextRequest) {
       name.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
     const filename = `${sanitize(sucursalNombre)}_${sanitize(mesNombre)}_${anio}.csv`;
 
-    const aplicados: Array<{
-      codigo_barras: string;
-      categoria_final: string;
-      descuento: number;
-      cantidad: number;
-      dias_hasta: number;
-    }> = [];
-
-    for (const r of (vencRows ?? []) as Array<{
-      codigo_barras?: string | null;
-      producto_id_sistema?: string | null;
-      fecha_vencimiento?: string | null;
-      cantidad?: number | null;
-    }>) {
-      const codebar = String(r.codigo_barras ?? '').trim();
-      const codplex = String(r.producto_id_sistema ?? '').trim();
-      const padronRef =
-        (codebar ? padronMap.byCodebar.get(codebar) : undefined) ??
-        (codplex ? padronMap.byCodplex.get(codplex) : undefined);
-      if (!padronRef) continue;
-
-      const catFinal =
-        catFinalByKey.get(`${padronRef.subrubro}|${padronRef.categoria}`) ??
-        catFinalByCategoria.get(String(padronRef.categoria).trim());
-      if (!catFinal) continue;
-
-      const fechaV = new Date(String(r.fecha_vencimiento ?? ''));
-      const fechaVUtc = parseFechaISOaUTC(String(r.fecha_vencimiento ?? ''));
-      const diasHasta = Number.isFinite(fechaVUtc)
-        ? Math.floor((fechaVUtc - hoyMid) / 86400000)
-        : Math.floor((fechaV.getTime() - hoy.getTime()) / 86400000);
-      if (diasHasta < daysMin) continue;
-
-      const candidatas = reglas
-        .filter((x) => x.categoriaFinalId === catFinal.id && diasHasta >= x.diasMin && diasHasta <= x.diasMax)
-        .sort((a, b) => {
-          const rA = a.diasMax - a.diasMin;
-          const rB = b.diasMax - b.diasMin;
-          if (rA !== rB) return rA - rB;
-          return b.descuento - a.descuento;
-        });
-      if (candidatas.length === 0) continue;
-      const regla = candidatas[0];
-      const descuentoNeg = -Math.abs(Number(regla.descuento ?? 0));
-
-      aplicados.push({
-        codigo_barras: codebar,
-        categoria_final: catFinal.nombre,
-        descuento: descuentoNeg,
-        cantidad: Number(r.cantidad ?? 0),
-        dias_hasta: diasHasta,
-      });
-    }
+    const aplicados = listado.productos;
 
     if (csvReal) {
-      const csvBody = aplicados
-        .map((x) => [x.codigo_barras, String(Math.round(x.descuento)), String(Math.round(x.cantidad))].join(','))
-        .join('\n');
+      const csvBody = serializarCsvDescuentos(aplicados);
       return new Response(csvBody, {
         status: 200,
         headers: {

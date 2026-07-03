@@ -5,6 +5,12 @@
   "scripts": {
     "dev": "next dev --webpack",
     "dev:api": "node src/main.js",
+    "sync:now": "node -e \"require('./src/load-env'); require('./src/jobs/obrasSocialesSync.job').runLegacySyncBatch().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})\"",
+    "sync:operadores-medicamentos": "node -e \"require('./src/load-env'); require('./src/jobs/obrasSocialesSync.job').runOperadoresMedicamentosSyncBatch().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})\"",
+    "cron:legacy": "node src/jobs/obrasSocialesSync.runner.js",
+    "inventario:cierre": "node --import tsx scripts/run-inventario-cierre-once.cjs",
+    "cron:diagnose": "node scripts/diagnose-legacy-cron.cjs",
+    "devolver:masivo": "node --import tsx scripts/devolver-para-devolver-todas-sucursales.cjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -20,18 +26,21 @@
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.577.0",
-    "mssql": "^12.2.1",
+    "mssql": "^7.2.0",
     "mysql2": "^3.19.0",
-    "next": "16.1.6",
+    "next": "^16.2.4",
     "next-auth": "^5.0.0-beta.30",
     "node-cron": "^4.2.1",
     "pg": "^8.20.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "tailwind-merge": "^3.5.0"
+    "recharts": "^3.8.1",
+    "tailwind-merge": "^3.5.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -43,6 +52,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }

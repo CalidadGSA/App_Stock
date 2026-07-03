@@ -1,7 +1,10 @@
+import { EXPORT_MAX_ROWS } from '@/lib/api/pagination';
 import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
+import { esLineaSinLiquidar } from '@/lib/vencimientos/por-vencer-saldo';
 import { getPadronPorProductos, getPadronPerfumeriaMap } from '@/lib/padron-final-db';
 import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
 import { createAdminClient } from '@/lib/supabase/server';
+import { pasaFiltroMesAnioYmd } from '@/lib/vencimientos-mes-anio-filtro';
 
 type AdminClient = Awaited<ReturnType<typeof createAdminClient>>;
 
@@ -53,6 +56,14 @@ function parseFechaISOaUTC(fecha: string): number {
 
 export type VistaPorVencerList = 'por_vencer' | 'vendidos' | 'vencidos' | 'vendido_parcial';
 
+export type SortKeyPorVencerList =
+  | 'producto'
+  | 'categoria'
+  | 'carga'
+  | 'vencimiento'
+  | 'restante'
+  | 'vendido';
+
 export type GetPorVencerListArgs = {
   admin: AdminClient;
   consolidado: boolean;
@@ -62,6 +73,7 @@ export type GetPorVencerListArgs = {
   daysMin: number;
   catMacroFiltro: string;
   categoriaFiltro: string;
+  laboratorioFiltro?: string;
   vista: VistaPorVencerList;
   /** Solo vista sucursal: consulta MySQL Onze (pesada). Nunca en consolidado. */
   includeVentaPosteriorMysql: boolean;
@@ -70,12 +82,36 @@ export type GetPorVencerListArgs = {
    * Consolidado y APIs que dependen del filtro server-side siguen con true (default).
    */
   aplicarFiltrosPadronEnServidor?: boolean;
+  page?: number;
+  pageSize?: number;
+  unpaginated?: boolean;
+  busqueda?: string;
+  mesVenc?: number;
+  anioVenc?: number;
+  soloVentaPosterior?: boolean;
+  sortBy?: SortKeyPorVencerList;
+  sortDir?: 'asc' | 'desc';
+  /** Paginar por filas agrupadas (producto + vencimiento). Solo vista sucursal. */
+  agruparFilas?: boolean;
+  /** Enriquecer todo el lote y devolver solo líneas con descuento (export/listado descuentos). */
+  modoListaDescuentos?: boolean;
 };
+
+export type VentaPosteriorCheckStatus =
+  | 'off'
+  | 'full'
+  | 'skipped_slow_db'
+  | 'skipped_unavailable';
 
 export type PorVencerListPayload = {
   data: unknown[];
+  total: number;
+  total_lineas: number;
+  page: number;
+  pageSize: number;
   cat_macros: string[];
   categorias: string[];
+  laboratorios: string[];
   sucursales?: Array<{ sucursal: number; nombrefantasia: string }>;
   consolidado: boolean;
   days: number;
@@ -83,6 +119,15 @@ export type PorVencerListPayload = {
   vista: VistaPorVencerList;
   desde: string;
   hasta: string;
+  venta_posterior_check?: VentaPosteriorCheckStatus;
+  venta_posterior_mysql_latency_ms?: number | null;
+  totales?: {
+    lineas: number;
+    cajasRestantes: number;
+    cajasVendidasHist: number;
+    cajasMovimientoTotal: number;
+    lineasLiquidados: number;
+  };
 };
 
 export type GetPorVencerListResult =
@@ -99,9 +144,21 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     daysMin,
     catMacroFiltro,
     categoriaFiltro,
+    laboratorioFiltro = '',
     vista,
     includeVentaPosteriorMysql,
     aplicarFiltrosPadronEnServidor = true,
+    page = 1,
+    pageSize = 20,
+    unpaginated = false,
+    busqueda = '',
+    mesVenc,
+    anioVenc,
+    soloVentaPosterior = false,
+    sortBy = 'vencimiento',
+    sortDir = 'asc',
+    agruparFilas = false,
+    modoListaDescuentos = false,
   } = args;
 
   if (!consolidado && !sucursalCookie) {
@@ -121,38 +178,55 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
   const selectConsolidado =
     'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, accion_observacion, controles_vencimientos!inner(sucursal_id, sucursales(nombrefantasia))';
 
-  let detalleQuery = admin
-    .from('controles_vencimientos_detalle')
-    .select(consolidado ? selectConsolidado : selectNormal)
-    .eq('eliminado', 0)
-    .eq('devuelto', 0)
-    .order('fecha_vencimiento', { ascending: vista !== 'vencidos' });
-
-  if (vista === 'vencidos') {
-    detalleQuery = detalleQuery.gte('fecha_vencimiento', desdePasado).lt('fecha_vencimiento', hoyStr);
-  } else {
-    detalleQuery = detalleQuery.gte('fecha_vencimiento', hoyStr).lte('fecha_vencimiento', hasta);
-  }
-
-  if (consolidado) {
-    if (Number.isFinite(sucursalFiltroNum) && sucursalFiltroNum > 0) {
-      detalleQuery = detalleQuery.eq('controles_vencimientos.sucursal_id', sucursalFiltroNum);
+  const buildDetalleQuery = () => {
+    let q = admin
+      .from('controles_vencimientos_detalle')
+      .select(consolidado ? selectConsolidado : selectNormal)
+      .eq('eliminado', 0);
+    // Vencidos: no filtrar por devuelto (muchas líneas quedan devuelto=1 con saldo aún cargado).
+    if (vista !== 'vencidos') {
+      q = q.eq('devuelto', 0);
     }
-  } else {
-    detalleQuery = detalleQuery.eq('controles_vencimientos.sucursal_id', parseInt(sucursalCookie!, 10));
-  }
+    q = q.order('fecha_vencimiento', { ascending: vista !== 'vencidos' });
 
-  const { data: detalles, error } = await detalleQuery;
-  if (error) {
-    return { ok: false, error: error.message, status: 500 };
-  }
+    if (vista === 'vencidos') {
+      q = q.gte('fecha_vencimiento', desdePasado).lt('fecha_vencimiento', hoyStr);
+    } else {
+      q = q.gte('fecha_vencimiento', hoyStr).lte('fecha_vencimiento', hasta);
+    }
 
-  const rows = (detalles ?? []) as any[];
+    if (consolidado) {
+      if (Number.isFinite(sucursalFiltroNum) && sucursalFiltroNum > 0) {
+        q = q.eq('controles_vencimientos.sucursal_id', sucursalFiltroNum);
+      }
+    } else {
+      q = q.eq('controles_vencimientos.sucursal_id', parseInt(sucursalCookie!, 10));
+    }
+    return q;
+  };
+
+  // Supabase puede devolver un maximo de ~1000 filas por consulta.
+  // Leemos en paginas para evitar truncar consolidado y exportaciones.
+  const rows: any[] = [];
+  const chunkSize = 1000;
+  let from = 0;
+  while (true) {
+    const to = from + chunkSize - 1;
+    const { data: batch, error } = await buildDetalleQuery().range(from, to);
+    if (error) {
+      return { ok: false, error: error.message, status: 500 };
+    }
+    const parsed = (batch ?? []) as any[];
+    rows.push(...parsed);
+    if (parsed.length < chunkSize) break;
+    from += chunkSize;
+  }
   const rowsDentroRango = rows.filter((r) => {
     const fechaV = parseFechaISOaUTC(String(r.fecha_vencimiento));
     if (!Number.isFinite(fechaV)) return false;
     const dias = Math.floor((fechaV - hoyMid) / 86400000);
     if (vista === 'vencidos') {
+      if (!esLineaSinLiquidar(r.cantidad, r.vendido)) return false;
       return dias < 0 && dias >= -days;
     }
     if (vista === 'vendidos') {
@@ -210,20 +284,13 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
             Number(i.cantidad_vendida_acumulada ?? 0) >= 1 &&
             Number(i.vendido ?? 0) === 0
         )
-      : items;
+      : vista === 'por_vencer' || vista === 'vencidos'
+        ? items.filter((i) => esLineaSinLiquidar(i.cantidad, i.vendido))
+        : items;
 
   let ventaPosteriorMap = new Map<string, boolean>();
-  if (includeVentaPosteriorMysql) {
-    const { getVentaPosteriorFlagsForDetalles } = await import('@/lib/legacy-db/mysql-stock');
-    ventaPosteriorMap = await getVentaPosteriorFlagsForDetalles(
-      itemsForPipeline.map((i) => ({
-        detalleId: i.id,
-        sucursalId: Number(i.sucursal_id),
-        productoId: Number(i.producto_id_sistema),
-        fechaRegistroIso: String(i.fecha_registro ?? ''),
-      }))
-    );
-  }
+  let ventaPosteriorCheck: VentaPosteriorCheckStatus = 'off';
+  let ventaPosteriorMysqlLatencyMs: number | null = null;
 
   let padronMap = new Map<string, { cat_macro: string | null; categoria: string | null; subrubro: string | null }>();
   let padronPerfumeria: Awaited<ReturnType<typeof getPadronPerfumeriaMap>> | null = null;
@@ -236,6 +303,155 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
       error: `Error consultando base de abastecimiento: ${(e as Error).message}`,
       status: 500,
     };
+  }
+
+  type ItemConPadron = ItemRow & { cat_macro: string | null; categoria: string | null };
+
+  let candidatos: ItemConPadron[] = itemsForPipeline.map((i) => {
+    const p = padronMap.get(String(i.producto_id_sistema));
+    return {
+      ...i,
+      cat_macro: p?.cat_macro ?? null,
+      categoria: p?.categoria ?? null,
+    };
+  });
+
+  const termBusqueda = busqueda.trim().toLowerCase();
+  if (termBusqueda) {
+    candidatos = candidatos.filter((i) => {
+      const texto = [
+        i.descripcion,
+        i.presentacion ?? '',
+        i.laboratorio ?? '',
+        i.codigo_barras,
+        i.producto_id_sistema,
+        i.sucursal_nombre ?? '',
+        String(i.sucursal_id ?? ''),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return texto.includes(termBusqueda);
+    });
+  }
+
+  if (mesVenc || anioVenc) {
+    candidatos = candidatos.filter((i) =>
+      pasaFiltroMesAnioYmd(i.fecha_vencimiento, mesVenc, anioVenc)
+    );
+  }
+
+  const laboratorioFiltroTrim = laboratorioFiltro.trim();
+  if (laboratorioFiltroTrim) {
+    candidatos = candidatos.filter(
+      (i) => String(i.laboratorio ?? '').trim() === laboratorioFiltroTrim
+    );
+  }
+
+  if (aplicarFiltrosPadronEnServidor) {
+    candidatos = candidatos.filter((i) => {
+      if (catMacroFiltro && String(i.cat_macro ?? '') !== catMacroFiltro) return false;
+      if (categoriaFiltro && String(i.categoria ?? '') !== categoriaFiltro) return false;
+      return true;
+    });
+  }
+
+  const catMacros = Array.from(
+    new Set(
+      itemsForPipeline
+        .map((i) => String(padronMap.get(String(i.producto_id_sistema))?.cat_macro ?? '').trim())
+        .filter((v) => v.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const categorias = Array.from(
+    new Set(
+      itemsForPipeline
+        .map((i) => String(padronMap.get(String(i.producto_id_sistema))?.categoria ?? '').trim())
+        .filter((v) => v.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const laboratorios = Array.from(
+    new Set(
+      itemsForPipeline
+        .map((i) => String(i.laboratorio ?? '').trim())
+        .filter((v) => v.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+
+  if (soloVentaPosterior && includeVentaPosteriorMysql) {
+    const resolved = await (
+      await import('@/lib/vencimientos-venta-posterior')
+    ).resolverVentaPosteriorFlags(
+      candidatos.map((i) => ({
+        detalleId: i.id,
+        sucursalId: Number(i.sucursal_id),
+        productoId: Number(i.producto_id_sistema),
+        fechaRegistroIso: String(i.fecha_registro ?? ''),
+      })),
+      true
+    );
+    ventaPosteriorMap = resolved.map;
+    ventaPosteriorCheck = resolved.status;
+    ventaPosteriorMysqlLatencyMs = resolved.mysqlLatencyMs;
+    candidatos = candidatos.filter((i) => ventaPosteriorMap.get(i.id) === true);
+  }
+
+  const paginado = modoListaDescuentos
+    ? {
+        data: candidatos,
+        total: candidatos.length,
+        total_lineas: candidatos.length,
+        page: 1,
+        pageSize: candidatos.length,
+      }
+    : paginarListadoPorVencer(candidatos, {
+        page,
+        pageSize,
+        unpaginated,
+        agruparFilas,
+        sortBy,
+        sortDir,
+      });
+
+  let totales: PorVencerListPayload['totales'];
+  if (consolidado) {
+    let cajasRestantes = 0;
+    let cajasVendidasHist = 0;
+    let lineasLiquidados = 0;
+    for (const i of candidatos) {
+      const r = Number(i.cantidad) || 0;
+      const v = Number(i.cantidad_vendida_acumulada) || 0;
+      cajasRestantes += r;
+      cajasVendidasHist += v;
+      if (r <= 0) lineasLiquidados += 1;
+    }
+    totales = {
+      lineas: candidatos.length,
+      cajasRestantes,
+      cajasVendidasHist,
+      cajasMovimientoTotal: cajasRestantes + cajasVendidasHist,
+      lineasLiquidados,
+    };
+  }
+
+  let paginaItems = paginado.data;
+
+  if (includeVentaPosteriorMysql && !soloVentaPosterior) {
+    const resolved = await (
+      await import('@/lib/vencimientos-venta-posterior')
+    ).resolverVentaPosteriorFlags(
+      paginaItems.map((i) => ({
+        detalleId: i.id,
+        sucursalId: Number(i.sucursal_id),
+        productoId: Number(i.producto_id_sistema),
+        fechaRegistroIso: String(i.fecha_registro ?? ''),
+      })),
+      true
+    );
+    ventaPosteriorMap = resolved.map;
+    ventaPosteriorCheck = resolved.status;
+    ventaPosteriorMysqlLatencyMs = resolved.mysqlLatencyMs;
   }
 
   const reglaCols = await resolverColumnasReglas(admin);
@@ -279,17 +495,16 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
       }))
     : [];
 
-  const enriquecidosTodos = itemsForPipeline.map((i) => {
-    const p = padronMap.get(String(i.producto_id_sistema));
+  const enriquecidos = paginaItems.map((i) => {
     const padronRef =
       (i.codigo_barras ? padronPerfumeria?.byCodebar.get(String(i.codigo_barras).trim()) : undefined) ??
       (i.producto_id_sistema ? padronPerfumeria?.byCodplex.get(String(i.producto_id_sistema).trim()) : undefined);
     const fechaV = parseFechaISOaUTC(String(i.fecha_vencimiento));
     const diasHasta = Number.isFinite(fechaV) ? Math.floor((fechaV - hoyMid) / 86400000) : 0;
 
-    const categoria = p?.categoria ?? null;
+    const categoria = i.categoria;
     const categoriaParaRegla = String(padronRef?.categoria ?? categoria ?? '').trim() || null;
-    const subrubroParaRegla = String(padronRef?.subrubro ?? p?.subrubro ?? '').trim() || null;
+    const subrubroParaRegla = String(padronRef?.subrubro ?? padronMap.get(String(i.producto_id_sistema))?.subrubro ?? '').trim() || null;
     const catFinalId =
       (categoriaParaRegla && subrubroParaRegla
         ? catFinalByKey.get(`${subrubroParaRegla}|${categoriaParaRegla}`)
@@ -304,40 +519,18 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
         return b.descuento - a.descuento;
       });
     const descuentoAplicado = candidatas.length > 0 ? Number(candidatas[0].descuento) : null;
+    const categoriaFinalDescuento =
+      catFinalId != null
+        ? categoriasFinalesRows.find((c) => Number(c.id) === catFinalId)?.categoria_final ?? null
+        : null;
 
     return {
       ...i,
-      cat_macro: p?.cat_macro ?? null,
-      categoria,
       descuento_aplicado: descuentoAplicado,
+      categoria_final_descuento: categoriaFinalDescuento,
       venta_posterior_a_carga: ventaPosteriorMap.get(i.id) === true,
     };
   });
-
-  const catMacros = Array.from(
-    new Set(
-      enriquecidosTodos
-        .map((i) => String((i as { cat_macro?: string | null }).cat_macro ?? '').trim())
-        .filter((v) => v.length > 0)
-    )
-  ).sort((a, b) => a.localeCompare(b));
-
-  const categorias = Array.from(
-    new Set(
-      enriquecidosTodos
-        .map((i) => String((i as { categoria?: string | null }).categoria ?? '').trim())
-        .filter((v) => v.length > 0)
-    )
-  ).sort((a, b) => a.localeCompare(b));
-
-  const enriquecidos = aplicarFiltrosPadronEnServidor
-    ? enriquecidosTodos.filter((i) => {
-        const row = i as { cat_macro?: string | null; categoria?: string | null };
-        if (catMacroFiltro && String(row.cat_macro ?? '') !== catMacroFiltro) return false;
-        if (categoriaFiltro && String(row.categoria ?? '') !== categoriaFiltro) return false;
-        return true;
-      })
-    : enriquecidosTodos;
 
   let sucursales: Array<{ sucursal: number; nombrefantasia: string }> | undefined;
   if (consolidado) {
@@ -351,12 +544,23 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     }));
   }
 
+  const dataFinal = modoListaDescuentos
+    ? enriquecidos.filter(
+        (i) => i.descuento_aplicado != null && Number.isFinite(Number(i.descuento_aplicado)) && Number(i.descuento_aplicado) > 0
+      )
+    : enriquecidos;
+
   return {
     ok: true,
     payload: {
-      data: enriquecidos,
+      data: dataFinal,
+      total: modoListaDescuentos ? dataFinal.length : paginado.total,
+      total_lineas: modoListaDescuentos ? dataFinal.length : paginado.total_lineas,
+      page: paginado.page,
+      pageSize: paginado.pageSize,
       cat_macros: catMacros,
       categorias,
+      laboratorios,
       sucursales,
       consolidado,
       days,
@@ -364,6 +568,9 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
       vista,
       desde: hoyStr,
       hasta,
+      venta_posterior_check: ventaPosteriorCheck,
+      venta_posterior_mysql_latency_ms: ventaPosteriorMysqlLatencyMs,
+      totales,
     },
   };
 }
@@ -375,4 +582,185 @@ export function parseVistaPorVencerList(raw: string | null | undefined): VistaPo
   if (vistaRaw === 'vencidos') return 'vencidos';
   if (vistaRaw === 'vendido_parcial' || vistaRaw === 'vendidos_parcial') return 'vendido_parcial';
   return 'por_vencer';
+}
+
+export function parseSortKeyPorVencerList(raw: string | null | undefined): SortKeyPorVencerList {
+  const k = String(raw ?? '').trim();
+  if (
+    k === 'producto' ||
+    k === 'categoria' ||
+    k === 'carga' ||
+    k === 'vencimiento' ||
+    k === 'restante' ||
+    k === 'vendido'
+  ) {
+    return k;
+  }
+  return 'vencimiento';
+}
+
+export type ProductoConDescuentoAplicado = {
+  codigo_barras: string;
+  categoria_final: string;
+  descuento: number;
+  cantidad: number;
+  dias_hasta: number;
+};
+
+/** Misma base que «Por vencer» (sin paginar), solo líneas con regla de descuento aplicable. */
+export async function listarProductosConDescuentoAplicado(args: {
+  admin: AdminClient;
+  sucursalId: number;
+  days: number;
+  daysMin: number;
+}): Promise<
+  | { ok: true; productos: ProductoConDescuentoAplicado[] }
+  | { ok: false; error: string; status: number }
+> {
+  const result = await getPorVencerListPayload({
+    admin: args.admin,
+    consolidado: false,
+    sucursalCookie: String(args.sucursalId),
+    sucursalFiltroNum: NaN,
+    days: args.days,
+    daysMin: args.daysMin,
+    catMacroFiltro: '',
+    categoriaFiltro: '',
+    vista: 'por_vencer',
+    includeVentaPosteriorMysql: false,
+    aplicarFiltrosPadronEnServidor: true,
+    modoListaDescuentos: true,
+    agruparFilas: false,
+  });
+
+  if (!result.ok) return result;
+
+  const hoyStr = fechaHoyArgentinaYmd();
+  const hoyMid = parseFechaISOaUTC(hoyStr);
+
+  const productos: ProductoConDescuentoAplicado[] = [];
+  for (const raw of result.payload.data as Array<{
+    codigo_barras?: string | null;
+    fecha_vencimiento?: string | null;
+    cantidad?: number | null;
+    descuento_aplicado?: number | null;
+    categoria_final_descuento?: string | null;
+  }>) {
+    const desc = raw.descuento_aplicado;
+    if (desc == null || !Number.isFinite(Number(desc)) || Number(desc) <= 0) continue;
+
+    const codebar = String(raw.codigo_barras ?? '').trim();
+    if (!codebar) continue;
+
+    const fechaV = parseFechaISOaUTC(String(raw.fecha_vencimiento ?? ''));
+    const diasHasta = Number.isFinite(fechaV) ? Math.floor((fechaV - hoyMid) / 86400000) : 0;
+
+    productos.push({
+      codigo_barras: codebar,
+      categoria_final: String(raw.categoria_final_descuento ?? '').trim(),
+      descuento: -Math.abs(Number(desc)),
+      cantidad: Number(raw.cantidad ?? 0),
+      dias_hasta: diasHasta,
+    });
+  }
+
+  return { ok: true, productos };
+}
+
+function valorSortPorVencer(
+  item: ItemRow & { categoria?: string | null; cantidad_vendida_acumulada?: number },
+  sortKey: SortKeyPorVencerList
+): string | number {
+  if (sortKey === 'producto') return String(item.descripcion ?? '').toLowerCase();
+  if (sortKey === 'categoria') return String(item.categoria ?? '').toLowerCase();
+  if (sortKey === 'carga') return String(item.fecha_registro ?? '');
+  if (sortKey === 'vencimiento') return String(item.fecha_vencimiento ?? '');
+  if (sortKey === 'restante') return Number(item.cantidad ?? 0);
+  return Number(item.cantidad_vendida_acumulada ?? 0);
+}
+
+function compararSortPorVencer(
+  va: string | number,
+  vb: string | number,
+  sortDir: 'asc' | 'desc'
+): number {
+  let cmp = 0;
+  if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb;
+  else cmp = String(va).localeCompare(String(vb), 'es', { sensitivity: 'base' });
+  return sortDir === 'asc' ? cmp : -cmp;
+}
+
+function agruparItemsPorVencer<T extends ItemRow>(items: T[]): T[][] {
+  const map = new Map<string, T[]>();
+  for (const i of items) {
+    const k = `${i.producto_id_sistema}\t${i.fecha_vencimiento}`;
+    const arr = map.get(k) ?? [];
+    arr.push(i);
+    map.set(k, arr);
+  }
+  return Array.from(map.values());
+}
+
+function paginarListadoPorVencer<T extends ItemRow & { categoria?: string | null }>(
+  items: T[],
+  opts: {
+    page: number;
+    pageSize: number;
+    unpaginated: boolean;
+    agruparFilas: boolean;
+    sortBy: SortKeyPorVencerList;
+    sortDir: 'asc' | 'desc';
+  }
+): { data: T[]; total: number; total_lineas: number; page: number; pageSize: number } {
+  const pageSafe = Math.max(1, opts.page);
+  const sizeSafe = opts.unpaginated
+    ? EXPORT_MAX_ROWS
+    : Math.min(500, Math.max(5, opts.pageSize));
+  const total_lineas = items.length;
+
+  if (opts.agruparFilas) {
+    const grupos = agruparItemsPorVencer(items);
+    const gruposOrdenados = [...grupos].sort((a, b) => {
+      const va =
+        opts.sortBy === 'restante'
+          ? a.reduce((s, x) => s + (Number(x.cantidad) || 0), 0)
+          : opts.sortBy === 'vendido'
+            ? a.reduce((s, x) => s + (Number(x.cantidad_vendida_acumulada) || 0), 0)
+            : valorSortPorVencer(a[0]!, opts.sortBy);
+      const vb =
+        opts.sortBy === 'restante'
+          ? b.reduce((s, x) => s + (Number(x.cantidad) || 0), 0)
+          : opts.sortBy === 'vendido'
+            ? b.reduce((s, x) => s + (Number(x.cantidad_vendida_acumulada) || 0), 0)
+            : valorSortPorVencer(b[0]!, opts.sortBy);
+      return compararSortPorVencer(va, vb, opts.sortDir);
+    });
+    const total = gruposOrdenados.length;
+    const offset = opts.unpaginated ? 0 : (pageSafe - 1) * sizeSafe;
+    const pageGroups = gruposOrdenados.slice(
+      offset,
+      offset + (opts.unpaginated ? Math.min(gruposOrdenados.length, sizeSafe) : sizeSafe)
+    );
+    return {
+      data: pageGroups.flat(),
+      total,
+      total_lineas,
+      page: opts.unpaginated ? 1 : pageSafe,
+      pageSize: sizeSafe,
+    };
+  }
+
+  const ordenados = [...items].sort((a, b) =>
+    compararSortPorVencer(valorSortPorVencer(a, opts.sortBy), valorSortPorVencer(b, opts.sortBy), opts.sortDir)
+  );
+  const total = ordenados.length;
+  const offset = opts.unpaginated ? 0 : (pageSafe - 1) * sizeSafe;
+  const limit = opts.unpaginated ? Math.min(ordenados.length, sizeSafe) : sizeSafe;
+  return {
+    data: ordenados.slice(offset, offset + limit),
+    total,
+    total_lineas: total,
+    page: opts.unpaginated ? 1 : pageSafe,
+    pageSize: sizeSafe,
+  };
 }

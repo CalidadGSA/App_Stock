@@ -4,15 +4,15 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  ClipboardList, AlertTriangle, CalendarClock, TrendingDown,
-  ChevronRight, CheckCircle2, Clock
+  ClipboardList, AlertTriangle, CalendarClock, TrendingDown, Undo2,
+  ChevronRight, ChevronDown, CheckCircle2, Clock
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
 import { etiquetaTipoControlInventario, inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
 import { formatDateTime } from '@/lib/utils';
+import { useMaintenanceStatus } from '@/components/MaintenanceGuard';
 import type { DashboardStats } from '@/types';
 
 function KpiCard({
@@ -50,11 +50,36 @@ function KpiCard({
   );
 }
 
+const MACRO_COLORES: Record<'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS', string> = {
+  FARMA: 'bg-blue-600',
+  BIENESTAR: 'bg-emerald-600',
+  PSICOTROPICOS: 'bg-violet-600',
+};
+
+function BarraProgreso({
+  porcentaje,
+  colorClass = 'bg-blue-600',
+}: {
+  porcentaje: number;
+  colorClass?: string;
+}) {
+  return (
+    <div className="h-2 w-full rounded bg-gray-100">
+      <div
+        className={`h-2 rounded ${colorClass}`}
+        style={{ width: `${Math.max(0, Math.min(100, porcentaje))}%` }}
+      />
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
+  const { maintenance } = useMaintenanceStatus();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [progresoExpandido, setProgresoExpandido] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     fetch('/api/dashboard')
@@ -79,14 +104,23 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* KPIs — cuadros que luego podremos definir/ajustar */}
+      {maintenance && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/50">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div>
+            <p className="mt-0.5 text-sm text-amber-700 dark:text-amber-300">
+              La base de datos onze_center está desactualizada. Los inventarios diarios y ocasionales están deshabilitados.
+            </p>
+          </div>
+        </div>
+      )}
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">Resumen</h2>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
             icon={ClipboardList}
             label="Inventarios"
-            value={stats?.inventarios_total ?? 0}
+            value={stats?.inventarios_mes ?? 0}
             sublabel="este mes"
             color="bg-blue-100 text-blue-600"
             onClick={() => {
@@ -146,13 +180,13 @@ export default function DashboardPage() {
             }}
           />
           <KpiCard
-            icon={AlertTriangle}
-            label="Productos vencidos"
-            value={stats?.productos_vencidos ?? 0}
-            sublabel="Requieren atención"
-            color="bg-red-100 text-red-600"
+            icon={Undo2}
+            label="Productos para devolver"
+            value={stats?.productos_para_devolver ?? 0}
+            sublabel="Ventana de devolución"
+            color="bg-violet-100 text-violet-600"
             onClick={() => {
-              router.push('/vencimientos/vencidos');
+              router.push('/vencimientos/para-devolver');
             }}
           />
         </div>
@@ -164,9 +198,6 @@ export default function DashboardPage() {
             <h3 className="font-semibold text-gray-900">
               Progreso del trimestre actual
             </h3>
-            <p className="mt-1 text-xs text-gray-500">
-              Productos recontados respecto de la base asignada para esta sucursal.
-            </p>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -174,41 +205,72 @@ export default function DashboardPage() {
             <p className="px-5 py-4 text-sm text-gray-400">Sin datos de base_productos para el trimestre actual.</p>
           ) : (
             <ul className="divide-y divide-gray-100">
-              {(stats?.inventario_base_por_sucursal ?? []).map((r) => (
+              {(stats?.inventario_base_por_sucursal ?? []).map((r) => {
+                const expandido = !!progresoExpandido[r.sucursal_id];
+                const macros = r.por_macro ?? [];
+                const tieneMacros = macros.some((m) => m.total > 0);
+
+                return (
                 <li key={r.sucursal_id} className="px-5 py-3">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium text-gray-800">{r.sucursal_nombre}</p>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {tieneMacros ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setProgresoExpandido((prev) => ({
+                              ...prev,
+                              [r.sucursal_id]: !prev[r.sucursal_id],
+                            }))
+                          }
+                          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50"
+                          aria-expanded={expandido}
+                          aria-label={expandido ? 'Ocultar detalle por macro' : 'Ver detalle por macro'}
+                        >
+                          <ChevronDown
+                            className={`h-4 w-4 transition-transform ${expandido ? 'rotate-180' : ''}`}
+                          />
+                        </button>
+                      ) : (
+                        <span className="inline-block h-7 w-7 shrink-0" aria-hidden />
+                      )}
+                      <p className="truncate text-sm font-medium text-gray-800">{r.sucursal_nombre}</p>
+                    </div>
                     <Badge variant="outline">{r.inventariados}/{r.total}</Badge>
                   </div>
-                  <div className="mt-2 h-2 w-full rounded bg-gray-100">
-                    <div
-                      className="h-2 rounded bg-blue-600"
-                      style={{ width: `${Math.max(0, Math.min(100, r.porcentaje))}%` }}
-                    />
+                  <div className="mt-2">
+                    <BarraProgreso porcentaje={r.porcentaje} />
                   </div>
                   <p className="mt-1 text-xs text-gray-500">
                     {r.porcentaje}% inventariado · pendientes: {r.pendientes}
                   </p>
+                  {expandido && tieneMacros ? (
+                    <ul className="mt-3 space-y-2 border-l-2 border-gray-200 pl-3">
+                      {macros.map((m) => (
+                        <li key={m.macro}>
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="font-medium text-gray-700">{m.macro}</span>
+                            <span className="text-gray-500">
+                              {m.inventariados}/{m.total} · {m.porcentaje}%
+                            </span>
+                          </div>
+                          <div className="mt-1">
+                            <BarraProgreso
+                              porcentaje={m.porcentaje}
+                              colorClass={MACRO_COLORES[m.macro]}
+                            />
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </li>
-              ))}
+              );
+              })}
             </ul>
           )}
         </CardContent>
       </Card>
-
-      {/* Ajustes (solo admin) */}
-      {(stats?.rol === 'admin' || stats?.rol === 'superadmin') && (
-        <div className="flex justify-end">
-          <Button
-            size="lg"
-            variant="secondary"
-            className="border border-gray-300 text-gray-800 px-6 shadow-sm"
-            onClick={() => (window.location.href = '/ajustes')}
-          >
-            Ajustes
-          </Button>
-        </div>
-      )}
 
       {/* Últimas actividades */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

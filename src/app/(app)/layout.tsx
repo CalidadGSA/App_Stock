@@ -1,12 +1,17 @@
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
-import Navbar from '@/components/Navbar';
+import AppShell from '@/components/AppShell';
 import MaintenanceGuard from '@/components/MaintenanceGuard';
 import { getOperadorSession } from '@/lib/auth/session';
+import { getOperadorRbacContext, permissionsToArray } from '@/lib/auth/rbac';
+import type { RolOperador } from '@/lib/auth/roles';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const operador = await getOperadorSession();
   if (!operador) redirect('/login');
+
+  const rbacCtx = await getOperadorRbacContext();
+  const permissions = rbacCtx ? permissionsToArray(rbacCtx) : [];
 
   let sucursalNombre = '';
   let sucursalCodigo = '';
@@ -18,17 +23,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // Ignorar si cookies fallan
   }
 
+  const rol = (rbacCtx?.operador.rol ?? operador.rol ?? 'operador_sucursal') as RolOperador;
+
   return (
-    <div className="flex min-h-screen flex-col">
-      <MaintenanceGuard />
-      <Navbar
+    <MaintenanceGuard>
+      <AppShell
+        rol={rol}
+        permissions={permissions}
         nombreUsuario={operador.nombrecompleto}
         nombreSucursal={sucursalNombre}
         codigoSucursal={sucursalCodigo}
-      />
-      <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+      >
         {children}
-      </main>
-    </div>
+      </AppShell>
+    </MaintenanceGuard>
   );
 }

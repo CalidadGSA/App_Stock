@@ -5,7 +5,8 @@ import { cookies } from 'next/headers';
 
 /**
  * GET ?control_id=&producto_id=&fechas=YYYY-MM-DD,YYYY-MM-DD
- * Indica si ya existe línea (mismo producto + fecha venc.) en otro control de la misma sucursal.
+ * Indica si ya existe línea (mismo producto + fecha venc.) en otro control de la misma sucursal
+ * y la cantidad total cargada por fecha.
  */
 export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
@@ -28,7 +29,12 @@ export async function GET(request: NextRequest) {
     .map((f) => f.trim())
     .filter(Boolean);
   if (fechas.length === 0) {
-    return NextResponse.json({ data: { duplicados_por_fecha: {} as Record<string, boolean> } });
+    return NextResponse.json({
+      data: {
+        duplicados_por_fecha: {} as Record<string, boolean>,
+        cantidad_duplicada_por_fecha: {} as Record<string, number>,
+      },
+    });
   }
 
   const admin = await createAdminClient();
@@ -45,7 +51,7 @@ export async function GET(request: NextRequest) {
 
   const { data: hits, error } = await admin
     .from('controles_vencimientos_detalle')
-    .select('fecha_vencimiento, controles_vencimientos!inner(sucursal_id, id)')
+    .select('fecha_vencimiento, cantidad, controles_vencimientos!inner(sucursal_id, id)')
     .eq('producto_id_sistema', productoId)
     .in('fecha_vencimiento', fechas)
     .neq('control_id', controlId)
@@ -54,15 +60,22 @@ export async function GET(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  const cantidad_duplicada_por_fecha: Record<string, number> = {};
   const duplicados_por_fecha: Record<string, boolean> = {};
   for (const f of fechas) {
+    cantidad_duplicada_por_fecha[f] = 0;
     duplicados_por_fecha[f] = false;
   }
+
   for (const row of hits ?? []) {
-    const r = row as { fecha_vencimiento?: string };
+    const r = row as { fecha_vencimiento?: string; cantidad?: number | null };
     const fv = String(r.fecha_vencimiento ?? '');
-    if (fv in duplicados_por_fecha) duplicados_por_fecha[fv] = true;
+    if (!(fv in cantidad_duplicada_por_fecha)) continue;
+    const q = Number(r.cantidad ?? 0);
+    if (!Number.isFinite(q) || q <= 0) continue;
+    cantidad_duplicada_por_fecha[fv] += Math.round(q);
+    duplicados_por_fecha[fv] = true;
   }
 
-  return NextResponse.json({ data: { duplicados_por_fecha } });
+  return NextResponse.json({ data: { duplicados_por_fecha, cantidad_duplicada_por_fecha } });
 }

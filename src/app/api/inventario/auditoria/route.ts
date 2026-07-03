@@ -1,12 +1,148 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import { requirePermission } from '@/lib/auth/rbac';
+import {
+  type CategoriaMacro,
+  esCategoriaMacro,
+  normalizarCategoriaMacro,
+} from '@/lib/inventario/categoria-macro';
 import {
   inferirTipoControlInventario,
   nombreTipoControlInventario,
+  type TipoControlInventario,
 } from '@/lib/inventario/tipo-control';
+import { esProductoControlado } from '@/lib/medicamentos/clasificacion-controlados';
+import { getPadronPorProductos } from '@/lib/padron-final-db';
+import { macroDesdePadron, padronParaProducto } from '@/lib/vencimientos-drogueria-lab';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+
+const DETALLE_SELECT_AUDITORIA =
+  'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sistema, stock_sist_cajas, stock_sist_unidades, diferencia, estado, auditado, ajustado, con_diferencias, fecha_registro';
+
+const LIMITE_AUDITORIA_PSICO = 30;
+const LIMITE_AUDITORIA_OTRAS = 50;
+const CHUNK_DETALLES = 1000;
+const CHUNK_CODPLEX = 400;
+
+function clavesProductoId(id: string | number | null | undefined): string[] {
+  const s = String(id ?? '').trim();
+  if (!s) return [];
+  const keys = new Set<string>([s]);
+  const n = Number(s);
+  if (Number.isFinite(n)) keys.add(String(n));
+  return Array.from(keys);
+}
+
+function idProductoCanonico(id: string | number | null | undefined): string {
+  const keys = clavesProductoId(id);
+  if (keys.length === 0) return '';
+  const n = Number(keys[0]);
+  return Number.isFinite(n) ? String(n) : keys[0];
+}
+
+function esPsicotropicoProducto(productoId: string, psicotropicosIds: Set<string>): boolean {
+  return clavesProductoId(productoId).some((k) => psicotropicosIds.has(k));
+}
+
+/** Psicotrópico por medicamento; si no, padrón; si no, FARMA. */
+function macroProductoAuditoria(
+  productoId: string,
+  padron: Awaited<ReturnType<typeof getPadronPorProductos>>,
+  psicotropicosIds: Set<string>
+): CategoriaMacro {
+  if (esPsicotropicoProducto(productoId, psicotropicosIds)) return 'PSICOTROPICOS';
+  const desdePadron = macroDesdePadron(padronParaProducto(padron, productoId)?.cat_macro);
+  if (desdePadron) return desdePadron;
+  return 'FARMA';
+}
+
+function normalizarEstadoDetalle(estado: string | null | undefined): string {
+  return String(estado ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function detalleElegibleParaAuditoria(detalle: DetalleConDiferencia): boolean {
+  const estado = normalizarEstadoDetalle(detalle.estado);
+  if (Number(detalle.auditado ?? 0) === 1) return false;
+  if (estado === 'ajustado_auditoria') return false;
+  if (estado === 'sin diferencias') return false;
+
+  const ajustadoSucursal =
+    Number(detalle.ajustado ?? 0) === 1 || estado === 'ajustado_sucursal';
+  if (!ajustadoSucursal) return false;
+
+  return (
+    Number(detalle.con_diferencias ?? 0) === 1 ||
+    estado === 'con diferencia' ||
+    estado === 'ajustado_sucursal'
+  );
+}
+
+async function cargarPsicotropicosIds(
+  admin: Awaited<ReturnType<typeof createAdminClient>>,
+  codplexIds: string[]
+): Promise<Set<string>> {
+  const psicotropicosIds = new Set<string>();
+  const unicos = Array.from(new Set(codplexIds.map((id) => idProductoCanonico(id)).filter(Boolean)));
+  for (let i = 0; i < unicos.length; i += CHUNK_CODPLEX) {
+    const lote = unicos.slice(i, i + CHUNK_CODPLEX);
+    const { data: meds, error: medsError } = await admin
+      .from('medicamentos')
+      .select('codplex, idpsicofarmaco')
+      .in('codplex', lote);
+
+    if (medsError) throw medsError;
+
+    for (const m of meds ?? []) {
+      const codplex = (m as { codplex?: string | number | null }).codplex;
+      const idpsicofarmaco = (m as { idpsicofarmaco?: string | null }).idpsicofarmaco;
+      if (codplex == null || !esProductoControlado(idpsicofarmaco)) continue;
+      for (const k of clavesProductoId(codplex)) psicotropicosIds.add(k);
+    }
+  }
+  return psicotropicosIds;
+}
+
+async function cargarDetallesCerradosParaAuditoria(
+  admin: Awaited<ReturnType<typeof createAdminClient>>,
+  idsCerrados: string[]
+): Promise<DetalleConDiferencia[]> {
+  const acumulado: DetalleConDiferencia[] = [];
+  let offset = 0;
+  while (true) {
+    const { data, error } = await admin
+      .from('controles_inventario_detalle')
+      .select(DETALLE_SELECT_AUDITORIA)
+      .in('control_id', idsCerrados)
+      .order('fecha_registro', { ascending: true })
+      .range(offset, offset + CHUNK_DETALLES - 1);
+
+    if (error) throw error;
+    const batch = (data ?? []) as DetalleConDiferencia[];
+    acumulado.push(...batch);
+    if (batch.length < CHUNK_DETALLES) break;
+    offset += CHUNK_DETALLES;
+  }
+  return acumulado;
+}
+
+/** Controles cerrados de sucursal (no auditoría ni integral) con diferencias ya ajustadas. */
+function esControlOrigenParaAuditar(control: {
+  tipo?: string | null;
+  origen?: string | null;
+}): boolean {
+  const tipo = inferirTipoControlInventario(control);
+  const excluidos: TipoControlInventario[] = [
+    'auditoria',
+    'auditoria_integral',
+    'ocasional_auditoria',
+  ];
+  return !excluidos.includes(tipo);
+}
 
 type DetalleConDiferencia = {
   id: string;
@@ -22,6 +158,7 @@ type DetalleConDiferencia = {
   diferencia?: number | null;
   estado?: string | null;
   auditado?: number | null;
+  ajustado?: number | null;
   con_diferencias?: number | null;
   fecha_registro?: string | null;
 };
@@ -30,9 +167,8 @@ type DetalleConDiferencia = {
 export async function POST(request: Request) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (!isAdminLikeRole(operador.rol)) {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
+  const guard = await requirePermission('inventario.auditoria');
+  if (!guard.ok) return guard.response;
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
@@ -51,30 +187,41 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: abiertosError.message }, { status: 500 });
   }
 
-  const controlAbiertoMismoTipo = (controlesAbiertos ?? []).find(
-    (control) => inferirTipoControlInventario(control) === tipoObjetivo
-  );
+  let body: { descripcion?: string; categoria_macro?: string } = {};
+  try {
+    body = (await request.json()) as { descripcion?: string; categoria_macro?: string };
+  } catch {
+    return NextResponse.json({ error: 'Cuerpo JSON inválido' }, { status: 400 });
+  }
 
-  if (controlAbiertoMismoTipo) {
+  const categoriaMacroRaw =
+    typeof body.categoria_macro === 'string' ? body.categoria_macro.trim().toUpperCase() : '';
+  if (!esCategoriaMacro(categoriaMacroRaw)) {
+    return NextResponse.json(
+      { error: 'Seleccioná una categoría macro (FARMA, BIENESTAR o PSICOTROPICOS)' },
+      { status: 400 }
+    );
+  }
+  const categoriaMacro: CategoriaMacro = categoriaMacroRaw;
+
+  const controlAbiertoMismaCategoria = (controlesAbiertos ?? []).find((control) => {
+    if (inferirTipoControlInventario(control) !== tipoObjetivo) return false;
+    return normalizarCategoriaMacro(control.categoria_macro) === categoriaMacro;
+  });
+
+  if (controlAbiertoMismaCategoria) {
     return NextResponse.json(
       {
-        error: `Ya hay una ${nombreTipoControlInventario(tipoObjetivo)} abierta.`,
+        error: `Ya hay una ${nombreTipoControlInventario(tipoObjetivo)} abierta para ${categoriaMacro}.`,
       },
       { status: 409 }
     );
   }
 
-  let body: { descripcion?: string } = {};
-  try {
-    body = (await request.json()) as { descripcion?: string };
-  } catch {
-    // Ignoramos errores de parseo; descripción será opcional
-  }
-
   const descripcion =
     body.descripcion && body.descripcion.trim().length > 0
       ? body.descripcion.trim()
-      : 'Auditoría de inventario';
+      : `Auditoría de inventario — ${categoriaMacro}`;
 
   // Crear el control de auditoría
   const { data: control, error: createError } = await admin
@@ -84,6 +231,7 @@ export async function POST(request: Request) {
       usuario_id: operador.idoperador,
       origen: 'Auditoria',
       tipo: 'auditoria',
+      categoria_macro: categoriaMacro,
       descripcion,
     })
     .select()
@@ -101,7 +249,7 @@ export async function POST(request: Request) {
   // Traer productos con diferencias en controles cerrados de esta sucursal
   const { data: controlesCerrados, error: cerradosError } = await admin
     .from('controles_inventario')
-    .select('id, tipo, categoria_macro')
+    .select('id, tipo')
     .eq('sucursal_id', parseInt(sucursalId, 10))
     .eq('estado', 'cerrado');
 
@@ -109,44 +257,28 @@ export async function POST(request: Request) {
 
   if (!cerradosError && controlesCerrados && controlesCerrados.length > 0) {
     const idsCerrados = controlesCerrados
-      .filter((c) => c.tipo !== 'auditoria')
+      .filter((c) => esControlOrigenParaAuditar(c))
       .map((c) => c.id);
 
     if (idsCerrados.length > 0) {
-      const { data: detallesConDif, error: difError } = await admin
-        .from('controles_inventario_detalle')
-        .select(
-          'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sistema, stock_sist_cajas, stock_sist_unidades, diferencia, estado, auditado, con_diferencias, fecha_registro'
-        )
-        .in('control_id', idsCerrados)
-        .order('fecha_registro', { ascending: false });
-
-      if (difError) {
+      let detallesConDif: DetalleConDiferencia[];
+      try {
+        detallesConDif = await cargarDetallesCerradosParaAuditoria(admin, idsCerrados);
+      } catch (difError) {
+        const msg = difError instanceof Error ? difError.message : 'Error al buscar diferencias';
         return NextResponse.json(
-          { error: `Error al buscar diferencias para auditoría: ${difError.message}` },
+          { error: `Error al buscar diferencias para auditoría: ${msg}` },
           { status: 500 }
         );
       }
 
-      if (detallesConDif && detallesConDif.length > 0) {
-        // Deduplicar por producto conservando la última vez que fue inventariado con diferencia.
+      if (detallesConDif.length > 0) {
+        // Deduplicar por producto conservando la diferencia más antigua (orden asc).
         const porProducto = new Map<string, DetalleConDiferencia>();
-        for (const detalle of detallesConDif as DetalleConDiferencia[]) {
-          const estadoNormalizado = String(detalle.estado ?? '')
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .trim()
-            .toLowerCase();
-          const fueAuditado = Number(detalle.auditado ?? 0) === 1;
-          const ajustadoAuditoria = estadoNormalizado === 'ajustado_auditoria';
-          const sinDiferencias = estadoNormalizado === 'sin diferencias';
-          const tieneDiferencia =
-            Number(detalle.con_diferencias ?? 0) === 1 ||
-            estadoNormalizado === 'con diferencia';
+        for (const detalle of detallesConDif) {
+          if (!detalleElegibleParaAuditoria(detalle)) continue;
 
-          if (fueAuditado || ajustadoAuditoria || sinDiferencias || !tieneDiferencia) continue;
-
-          const productoId = detalle.producto_id_sistema;
+          const productoId = idProductoCanonico(detalle.producto_id_sistema);
           if (!productoId || porProducto.has(productoId)) continue;
           porProducto.set(productoId, detalle);
         }
@@ -156,43 +288,53 @@ export async function POST(request: Request) {
           .map((d) => d.producto_id_sistema)
           .filter((id): id is string => !!id);
 
-        const psicotropicosIds = new Set<string>();
+        let padronPorProducto: Awaited<ReturnType<typeof getPadronPorProductos>> = new Map();
+        try {
+          padronPorProducto = await getPadronPorProductos(codplexIds);
+        } catch (padronError) {
+          console.warn(
+            '[auditoria] No se pudo consultar padron_final; se usa fallback psicotrópico/FARMA:',
+            padronError
+          );
+        }
+
+        let psicotropicosIds = new Set<string>();
         const subrubroPorCodplex = new Map<string, number | null>();
         if (codplexIds.length > 0) {
-          const { data: meds, error: medsError } = await admin
-            .from('medicamentos')
-            .select('codplex, idpsicofarmaco, idsubrubro')
-            .in('codplex', codplexIds)
-            .eq('activo', 'S')
-            .eq('visible', 1)
-            .neq('troquel', 0);
-
-          if (medsError) {
+          try {
+            psicotropicosIds = await cargarPsicotropicosIds(admin, codplexIds);
+          } catch (medsError) {
+            const msg = medsError instanceof Error ? medsError.message : 'Error en medicamentos';
             return NextResponse.json(
-              { error: `Error al clasificar psicotrópicos: ${medsError.message}` },
+              { error: `Error al clasificar psicotrópicos: ${msg}` },
               { status: 500 }
             );
           }
 
-          for (const m of meds ?? []) {
-            const codplex = String((m as { codplex?: string | number | null }).codplex ?? '');
-            const idpsicofarmaco = (m as { idpsicofarmaco?: string | null }).idpsicofarmaco;
-            const idsubrubroRaw = (m as { idsubrubro?: number | null }).idsubrubro;
-            if (codplex && idpsicofarmaco) {
-              psicotropicosIds.add(codplex);
+          const unicosMeds = Array.from(
+            new Set(codplexIds.map((id) => idProductoCanonico(id)).filter(Boolean))
+          );
+          for (let i = 0; i < unicosMeds.length; i += CHUNK_CODPLEX) {
+            const lote = unicosMeds.slice(i, i + CHUNK_CODPLEX);
+            const { data: medsSub, error: subError } = await admin
+              .from('medicamentos')
+              .select('codplex, idsubrubro')
+              .in('codplex', lote);
+            if (subError) {
+              return NextResponse.json(
+                { error: `Error al consultar subrubros de productos: ${subError.message}` },
+                { status: 500 }
+              );
             }
-            if (codplex) {
-              subrubroPorCodplex.set(codplex, idsubrubroRaw ?? null);
+            for (const m of medsSub ?? []) {
+              const codplex = (m as { codplex?: string | number | null }).codplex;
+              const idsubrubroRaw = (m as { idsubrubro?: number | null }).idsubrubro;
+              if (codplex == null) continue;
+              for (const k of clavesProductoId(codplex)) {
+                subrubroPorCodplex.set(k, idsubrubroRaw ?? null);
+              }
             }
           }
-        }
-
-        const macroPorControl = new Map<string, string | null>();
-        for (const c of controlesCerrados) {
-          macroPorControl.set(
-            String(c.id),
-            String((c as { categoria_macro?: string | null }).categoria_macro ?? '').toUpperCase() || null
-          );
         }
 
         const categoriaPorSubrubro = new Map<number, string>();
@@ -269,23 +411,17 @@ export async function POST(request: Request) {
             .trim()
             .toUpperCase();
 
-        const normalizarMacro = (valor: string | null | undefined): 'PSICOTROPICOS' | 'FARMA' | 'BIENESTAR' | null => {
-          const t = getTexto(valor);
-          if (t === 'PSICOTROPICOS' || t === 'PSICOTROPICO') return 'PSICOTROPICOS';
-          if (t === 'FARMA') return 'FARMA';
-          if (t === 'BIENESTAR') return 'BIENESTAR';
-          return null;
-        };
-
         const enriquecidos = productosUnicos.map((d) => {
-          const productoId = String(d.producto_id_sistema ?? '');
-          const macroBase = normalizarMacro(macroPorControl.get(String(d.control_id)) ?? null);
-          const macro =
-            macroBase ??
-            (psicotropicosIds.has(productoId) ? 'PSICOTROPICOS' : 'FARMA');
-          const idSubrubro = subrubroPorCodplex.get(productoId) ?? null;
+          const productoId = idProductoCanonico(d.producto_id_sistema);
+          const macro = macroProductoAuditoria(productoId, padronPorProducto, psicotropicosIds);
+          const padron = padronParaProducto(padronPorProducto, productoId);
+          const idSubrubro =
+            clavesProductoId(productoId)
+              .map((k) => subrubroPorCodplex.get(k))
+              .find((v) => v != null) ?? null;
           const categoriaBienestar =
-            idSubrubro != null ? categoriaPorSubrubro.get(idSubrubro) ?? '' : '';
+            String(padron?.categoria ?? '').trim() ||
+            (idSubrubro != null ? categoriaPorSubrubro.get(idSubrubro) ?? '' : '');
           return {
             detalle: d,
             macro,
@@ -319,17 +455,18 @@ export async function POST(request: Request) {
           return a.descripcion.localeCompare(b.descripcion, 'es');
         });
 
-        const psicotropicos = enriquecidos
-          .filter((x) => x.macro === 'PSICOTROPICOS')
-          .map((x) => x.detalle);
-        const noPsicotropicos = enriquecidos
-          .filter((x) => x.macro !== 'PSICOTROPICOS')
-          .map((x) => x.detalle);
+        const enriquecidosCategoria = enriquecidos.filter((x) => x.macro === categoriaMacro);
 
-        const seleccionados = [
-          ...psicotropicos.slice(0, 15),
-          ...noPsicotropicos.slice(0, 35),
-        ];
+        const limite =
+          categoriaMacro === 'PSICOTROPICOS' ? LIMITE_AUDITORIA_PSICO : LIMITE_AUDITORIA_OTRAS;
+        const seleccionados = enriquecidosCategoria
+          .sort((a, b) =>
+            String(a.detalle.fecha_registro ?? '').localeCompare(
+              String(b.detalle.fecha_registro ?? '')
+            )
+          )
+          .slice(0, limite)
+          .map((x) => x.detalle);
 
         // Para auditoría no precargamos stock en el listado.
         // El stock se obtiene en tiempo real cuando se abre la card del producto.
@@ -384,7 +521,9 @@ export async function POST(request: Request) {
   if (totalInsertados === 0) {
     await admin.from('controles_inventario').delete().eq('id', controlId);
     return NextResponse.json(
-      { error: 'No hay productos con diferencias pendientes para auditar en esta sucursal' },
+      {
+        error: `No hay productos con diferencias ya ajustadas en sucursal para auditar en ${categoriaMacro}`,
+      },
       { status: 400 }
     );
   }

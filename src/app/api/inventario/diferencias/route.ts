@@ -1,15 +1,14 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import { requirePermission } from '@/lib/auth/rbac';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/inventario/diferencias - lista diferencias no ajustadas para una sucursal y rango de fechas (solo admin) */
 export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (!isAdminLikeRole(operador.rol)) {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
+  const guard = await requirePermission('admin.ajustes');
+  if (!guard.ok) return guard.response;
 
   const { searchParams } = new URL(request.url);
   const sucursalIdParam = searchParams.get('sucursal_id');
@@ -38,9 +37,10 @@ export async function GET(request: NextRequest) {
   let query = admin
     .from('controles_inventario_detalle')
     .select(
-      'id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, origen)'
+      'id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, origen, estado)'
     )
     .eq('controles_inventario.sucursal_id', sucursalId)
+    .eq('controles_inventario.estado', 'cerrado')
     .gte('controles_inventario.fecha_inicio', desdeIso)
     .lte('controles_inventario.fecha_inicio', hastaIso)
     .eq('con_diferencias', 1)
@@ -63,9 +63,8 @@ export async function GET(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (!isAdminLikeRole(operador.rol)) {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
+  const guard = await requirePermission('admin.ajustes');
+  if (!guard.ok) return guard.response;
 
   const { searchParams } = new URL(request.url);
   const detalleId = searchParams.get('id');

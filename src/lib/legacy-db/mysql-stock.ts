@@ -117,8 +117,8 @@ export type StockLegacyRaceResult =
 
 /**
  * Convierte la respuesta legacy en campos de stock para la API.
- * Si `allowMissingStock` es true (p. ej. inventario ocasional), no hay 503 por fila ausente,
- * timeout o MySQL caído: se asume 0 para poder cargar la ficha y contar físico.
+ * Con `allowMissingStock`, solo asume 0 si la consulta respondió OK y no hay fila en `stock`.
+ * Timeout, MySQL caído o errores transitorios nunca devuelven 0 (evita confundir con stock real).
  */
 export function legacyStockRaceToSistemaFields(
   stockResult: StockLegacyRaceResult,
@@ -145,20 +145,20 @@ export function legacyStockRaceToSistemaFields(
       stock_sistema: cajas * unidadesProd + unidadesSueltas,
     };
   }
-  if (
-    allowMissingStock &&
-    (stockResult.status === 'timeout' ||
-      (stockResult.status === 'ok' && !stockResult.row) ||
-      stockResult.status === 'unavailable')
-  ) {
-    return {
-      ok: true,
-      stock_cajas: 0,
-      stock_unidades: 0,
-      unidades_por_caja: 1,
-      stock_sistema: 0,
-    };
+
+  if (stockResult.status === 'ok' && !stockResult.row) {
+    if (allowMissingStock) {
+      return {
+        ok: true,
+        stock_cajas: 0,
+        stock_unidades: 0,
+        unidades_por_caja: 1,
+        stock_sistema: 0,
+      };
+    }
+    return { ok: false };
   }
+
   return { ok: false };
 }
 
@@ -173,7 +173,8 @@ export interface VentaPosteriorInput {
  * Marca si existe al menos una venta (factcabecera/factlineas) posterior a la carga de la línea.
  */
 export async function getVentaPosteriorFlagsForDetalles(
-  detalles: VentaPosteriorInput[]
+  detalles: VentaPosteriorInput[],
+  options?: { overallTimeoutMs?: number }
 ): Promise<Map<string, boolean>> {
   const out = new Map<string, boolean>();
   if (detalles.length === 0) return out;
@@ -186,18 +187,22 @@ export async function getVentaPosteriorFlagsForDetalles(
   );
   if (limpios.length === 0) return out;
 
-  const minRegistro = limpios
-    .map((d) => String(d.fechaRegistroIso))
-    .sort((a, b) => a.localeCompare(b))[0];
-  const idsSuc = Array.from(new Set(limpios.map((d) => d.sucursalId)));
-  const idsProd = Array.from(new Set(limpios.map((d) => d.productoId)));
-
   for (const d of limpios) out.set(d.detalleId, false);
 
-  const pool = await getPool();
-  if (!pool || !minRegistro) return out;
+  const overallTimeoutMs =
+    options?.overallTimeoutMs ??
+    readEnvMs('ONZE_VENTA_POSTERIOR_TIMEOUT_MS', DEFAULT_VENTA_POSTERIOR_QUERY_MS);
 
-  try {
+  async function ejecutarConsulta(): Promise<Map<string, boolean>> {
+    const minRegistro = limpios
+      .map((d) => String(d.fechaRegistroIso))
+      .sort((a, b) => a.localeCompare(b))[0];
+    const idsSuc = Array.from(new Set(limpios.map((d) => d.sucursalId)));
+    const idsProd = Array.from(new Set(limpios.map((d) => d.productoId)));
+
+    const pool = await getPool();
+    if (!pool || !minRegistro) return out;
+
     const [rows] = await pool.query(
       `SELECT
          fc.Sucursal AS sucursal,
@@ -230,8 +235,21 @@ export async function getVentaPosteriorFlagsForDetalles(
       out.set(d.detalleId, Number.isFinite(tUlt) && Number.isFinite(tReg) && tUlt > tReg);
     }
     return out;
+  }
+
+  try {
+    const resultado = await Promise.race([
+      ejecutarConsulta(),
+      new Promise<Map<string, boolean>>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`timeout venta posterior ${overallTimeoutMs}ms`)),
+          overallTimeoutMs
+        );
+      }),
+    ]);
+    return resultado;
   } catch (err) {
-    console.error('Error leyendo ventas posteriores desde MySQL legacy:', err);
+    console.error('Error o timeout en ventas posteriores MySQL legacy:', err);
     return out;
   }
 }
@@ -239,6 +257,46 @@ export async function getVentaPosteriorFlagsForDetalles(
 export type StockmovimientosHealthResult =
   | { ok: true; latencyMs: number }
   | { ok: false; latencyMs: number; error: string };
+
+const DEFAULT_HEALTH_TIMEOUT_MS = 2500;
+const DEFAULT_SLOW_THRESHOLD_MS = 2000;
+const DEFAULT_VENTA_POSTERIOR_QUERY_MS = 45_000;
+
+function readEnvMs(name: string, fallback: number): number {
+  const n = parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+export type OnzeDbReadinessReason = 'slow' | 'timeout' | 'unconfigured' | 'error';
+
+export type OnzeDbReadiness =
+  | { ready: true; latencyMs: number }
+  | { ready: false; latencyMs: number; reason: OnzeDbReadinessReason; detail?: string };
+
+/**
+ * Ping liviano antes de consultas pesadas (p. ej. ventas posteriores en por-vencer).
+ */
+export async function checkOnzeDbReadyForHeavyRead(): Promise<OnzeDbReadiness> {
+  const timeoutMs = readEnvMs('ONZE_DB_HEALTH_TIMEOUT_MS', DEFAULT_HEALTH_TIMEOUT_MS);
+  const slowMs = readEnvMs('ONZE_DB_SLOW_THRESHOLD_MS', DEFAULT_SLOW_THRESHOLD_MS);
+  const health = await queryStockmovimientosHealthCheck(timeoutMs);
+
+  if (!health.ok) {
+    const err = health.error.toLowerCase();
+    const reason: OnzeDbReadinessReason = err.includes('timeout')
+      ? 'timeout'
+      : err.includes('no configurado')
+        ? 'unconfigured'
+        : 'error';
+    return { ready: false, latencyMs: health.latencyMs, reason, detail: health.error };
+  }
+
+  if (health.latencyMs > slowMs) {
+    return { ready: false, latencyMs: health.latencyMs, reason: 'slow' };
+  }
+
+  return { ready: true, latencyMs: health.latencyMs };
+}
 
 /**
  * Consulta liviana para comprobar latencia/disponibilidad de Onze (misma DB que stock).

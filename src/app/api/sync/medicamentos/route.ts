@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
+import { requirePermission } from '@/lib/auth/rbac';
 import { syncMedicamentosFromLegacy } from '@/lib/legacy-db/syncLegacy';
 
 export async function POST() {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (operador.rol !== 'admin') return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
+  const guard = await requirePermission('admin.sync');
+  if (!guard.ok) return guard.response;
 
   try {
     const result = await syncMedicamentosFromLegacy();

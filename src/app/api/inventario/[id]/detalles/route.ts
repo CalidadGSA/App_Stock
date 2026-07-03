@@ -1,11 +1,21 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import { canSeeAllInventarioTipos, getOperadorRbacContext } from '@/lib/auth/rbac';
+import {
+  MAX_STOCK_REAL_CAJAS,
+  MAX_STOCK_REAL_UNIDADES,
+  mensajeMaxStockRealCajas,
+  mensajeMaxStockRealUnidades,
+} from '@/lib/inventario/stock-limits';
+import { validarAccesoControlPorSucursal } from '@/lib/inventario/acceso-control-sucursal';
 import {
   esTipoAuditoria,
   esTipoControlVisibleParaOperadorSucursal,
+  esTipoInventarioEditableCerrado,
   inferirTipoControlInventario,
 } from '@/lib/inventario/tipo-control';
+import { esProductoFraccionable } from '@/lib/inventario/fraccionable';
+import { getProductoPadronById } from '@/lib/padron-productos-lookup';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -41,7 +51,9 @@ export async function POST(
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const esAdmin = isAdminLikeRole(operador.rol);
+  const rbac = await getOperadorRbacContext();
+  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const esAdmin = canSeeAllInventarioTipos(rbac);
 
   const admin = await createAdminClient();
 
@@ -53,9 +65,20 @@ export async function POST(
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
-  if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   const tipoControl = inferirTipoControlInventario(control);
-  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
+  if (
+    !validarAccesoControlPorSucursal({
+      controlSucursalId: control.sucursal_id,
+      cookieSucursalId: sucursalId,
+      esAdmin,
+      tipoControl,
+    })
+  ) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
 
   const body = await request.json() as DetalleBody;
 
@@ -76,6 +99,13 @@ export async function POST(
     typeof body.stock_sist_unidades === 'number' && !Number.isNaN(body.stock_sist_unidades)
       ? body.stock_sist_unidades
       : null;
+
+  if (cajas != null && cajas > MAX_STOCK_REAL_CAJAS) {
+    return NextResponse.json({ error: mensajeMaxStockRealCajas() }, { status: 400 });
+  }
+  if (unidadesSueltas != null && unidadesSueltas > MAX_STOCK_REAL_UNIDADES) {
+    return NextResponse.json({ error: mensajeMaxStockRealUnidades() }, { status: 400 });
+  }
 
   const deltaC =
     cajas != null && sistCajas != null ? cajas - sistCajas : 0;
@@ -142,7 +172,9 @@ export async function PATCH(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const esAdmin = isAdminLikeRole(operador.rol);
+  const rbac = await getOperadorRbacContext();
+  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const esAdmin = canSeeAllInventarioTipos(rbac);
 
   const admin = await createAdminClient();
 
@@ -153,9 +185,20 @@ export async function PATCH(
     .single();
 
   if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
-  if (String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   const tipoControl = inferirTipoControlInventario(control);
-  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
+  if (
+    !validarAccesoControlPorSucursal({
+      controlSucursalId: control.sucursal_id,
+      cookieSucursalId: sucursalId,
+      esAdmin,
+      tipoControl,
+    })
+  ) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
 
   const body = await request.json() as {
     detalle_id: string;
@@ -179,6 +222,14 @@ export async function PATCH(
     typeof body.stock_real_unidades === 'number' && !Number.isNaN(body.stock_real_unidades)
       ? body.stock_real_unidades
       : null;
+
+  if (cajas != null && cajas > MAX_STOCK_REAL_CAJAS) {
+    return NextResponse.json({ error: mensajeMaxStockRealCajas() }, { status: 400 });
+  }
+  if (unidadesSueltas != null && unidadesSueltas > MAX_STOCK_REAL_UNIDADES) {
+    return NextResponse.json({ error: mensajeMaxStockRealUnidades() }, { status: 400 });
+  }
+
   // Obtener stock de sistema actual de la fila para recalcular diferencias
   const { data: detalleActual } = await admin
     .from('controles_inventario_detalle')
@@ -197,13 +248,9 @@ export async function PATCH(
 
   // Regla:
   // - En progreso: siempre editable.
-  // - Cerrado: editable para diarios y ocasionales, solo mientras NO esté ajustado.
+  // - Cerrado: editable según tipo de control, solo mientras NO esté ajustado.
   if (control.estado !== 'en_progreso') {
-    const editableCerrado =
-      tipoControl === 'diario' ||
-      tipoControl === 'ocasional_sucursal' ||
-      tipoControl === 'ocasional_auditoria';
-    if (!editableCerrado) {
+    if (!esTipoInventarioEditableCerrado(tipoControl)) {
       return NextResponse.json(
         { error: 'Este tipo de control cerrado no permite edición de ítems.' },
         { status: 400 }
@@ -238,13 +285,9 @@ export async function PATCH(
   const codPlex = parseInt(String(detRow.producto_id_sistema ?? ''), 10);
   let esFraccionable = true;
   if (Number.isFinite(codPlex)) {
-    const { data: med } = await admin
-      .from('medicamentos')
-      .select('fraccionable')
-      .eq('codplex', codPlex)
-      .maybeSingle();
-    if (med && (med as { fraccionable?: number | null }).fraccionable != null) {
-      esFraccionable = Number((med as { fraccionable?: number | null }).fraccionable) === 1;
+    const ficha = await getProductoPadronById(codPlex);
+    if (ficha?.fraccionable != null) {
+      esFraccionable = esProductoFraccionable(ficha.fraccionable);
     }
   }
 
@@ -282,6 +325,7 @@ export async function PATCH(
     stock_sist_unidades: sistUnidades,
     stock_sistema: detRow.stock_sistema,
   });
+  const stockSistemaRecalculado = sistCajas * upc + sistUnidades;
   const stockRealRecalculado = cajasNum * upc + uSueltasNum;
 
   const deltaC = cajas != null ? cajas - sistCajas : 0;
@@ -320,6 +364,7 @@ export async function PATCH(
   const { data, error } = await admin
     .from('controles_inventario_detalle')
     .update({
+      stock_sistema: stockSistemaRecalculado,
       stock_sist_cajas: sistCajas,
       stock_sist_unidades: sistUnidades,
       stock_real_cajas: cajas,
@@ -353,7 +398,9 @@ export async function DELETE(
   const { id: controlId } = await params;
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const esAdmin = isAdminLikeRole(operador.rol);
+  const rbac = await getOperadorRbacContext();
+  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const esAdmin = canSeeAllInventarioTipos(rbac);
 
   const detalleId = new URL(request.url).searchParams.get('detalle_id');
   if (!detalleId) return NextResponse.json({ error: 'detalle_id requerido' }, { status: 400 });
@@ -365,9 +412,21 @@ export async function DELETE(
     .eq('id', controlId)
     .single();
 
-  if (!control || String(control.sucursal_id) !== sucursalId) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  if (!control) return NextResponse.json({ error: 'Control no encontrado' }, { status: 404 });
   const tipoControl = inferirTipoControlInventario(control);
-  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  if (!esAdmin && !esTipoControlVisibleParaOperadorSucursal(tipoControl)) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
+  if (
+    !validarAccesoControlPorSucursal({
+      controlSucursalId: control.sucursal_id,
+      cookieSucursalId: sucursalId,
+      esAdmin,
+      tipoControl,
+    })
+  ) {
+    return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+  }
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'Control cerrado' }, { status: 400 });
 
   const { error } = await admin.from('controles_inventario_detalle').delete().eq('id', detalleId);

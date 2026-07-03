@@ -4,12 +4,12 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Building2, ChevronRight, Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import type { Sucursal } from '@/types';
 
 export default function SucursalPage() {
   const router = useRouter();
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [omitirContraseña, setOmitirContraseña] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Sucursal | null>(null);
   const [password, setPassword] = useState('');
@@ -19,27 +19,29 @@ export default function SucursalPage() {
 
   useEffect(() => {
     fetch('/api/sucursales')
-      .then(r => r.json())
-      .then(({ data }) => { setSucursales(data ?? []); setLoading(false); })
+      .then((r) => r.json())
+      .then((json: { data?: Sucursal[]; omitir_contraseña_sucursal?: boolean }) => {
+        setSucursales(json.data ?? []);
+        setOmitirContraseña(Boolean(json.omitir_contraseña_sucursal));
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, []);
 
-  async function handleValidar(e: React.FormEvent) {
-    e.preventDefault();
-    if (!selected) return;
+  async function aplicarSucursal(suc: Sucursal, pwd?: string) {
     setError('');
     setValidating(true);
 
     try {
-      const res = await fetch(`/api/sucursales/${selected.id}/validar`, {
+      const res = await fetch(`/api/sucursales/${suc.id}/validar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password: pwd ?? '' }),
       });
-      const json = await res.json() as { error?: string };
+      const json = (await res.json()) as { error?: string };
 
       if (!res.ok) {
-        setError(json.error ?? 'Contraseña incorrecta');
+        setError(json.error ?? 'No se pudo acceder a la sucursal');
         return;
       }
 
@@ -52,9 +54,25 @@ export default function SucursalPage() {
     }
   }
 
+  async function handleValidar(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
+    await aplicarSucursal(selected, password);
+  }
+
+  function handleElegirSucursal(suc: Sucursal) {
+    setError('');
+    if (omitirContraseña) {
+      void aplicarSucursal(suc);
+      return;
+    }
+    setSelected(suc);
+    setPassword('');
+  }
+
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-950 dark:to-slate-900">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-950 dark:to-slate-900">
         <div className="text-center">
           <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
           <p className="mt-3 text-sm text-gray-600">Cargando sucursales...</p>
@@ -64,71 +82,86 @@ export default function SucursalPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-950 dark:to-slate-900 px-4 py-8">
-      <div className="w-full max-w-md">
-        {/* Header */}
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-950 dark:to-slate-900">
+      <div className="mx-auto w-full max-w-md px-4 py-6 sm:py-8">
         <div className="mb-6 text-center">
           <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 shadow-lg">
             <Building2 className="h-7 w-7 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            {selected ? 'Contraseña de sucursal' : 'Seleccionar sucursal'}
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            {selected && !omitirContraseña ? 'Contraseña de sucursal' : 'Seleccionar sucursal'}
           </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            {selected
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            {selected && !omitirContraseña
               ? `Ingresá la contraseña para acceder a ${selected.nombre}`
-              : 'Elegí la sucursal en la que vas a trabajar hoy'
-            }
+              : omitirContraseña
+                ? 'Elegí la sucursal con la que querés trabajar'
+                : 'Elegí la sucursal en la que vas a trabajar hoy'}
           </p>
         </div>
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-          {/* Lista de sucursales */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          {error && !selected && (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+              {error}
+            </div>
+          )}
+
           {!selected && (
-            <div className="flex flex-col gap-2">
-              {sucursales.length === 0 ? (
+            <div className="flex max-h-[min(58dvh,calc(100dvh-13rem))] flex-col gap-2 overflow-y-auto overscroll-contain pr-0.5">
+              {validating ? (
+                <p className="py-6 text-center text-sm text-gray-500">Accediendo a la sucursal…</p>
+              ) : sucursales.length === 0 ? (
                 <p className="py-6 text-center text-sm text-gray-500">
                   No tenés sucursales asignadas. Contactá a tu administrador.
                 </p>
               ) : (
-                sucursales.map(suc => (
+                sucursales.map((suc) => (
                   <button
                     key={suc.id}
-                    onClick={() => { setSelected(suc); setError(''); setPassword(''); }}
+                    type="button"
+                    disabled={validating}
+                    onClick={() => handleElegirSucursal(suc)}
                     className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50
-                      px-4 py-3.5 text-left transition-colors hover:border-blue-300 hover:bg-blue-50 active:bg-blue-100"
+                      px-4 py-3.5 text-left transition-colors hover:border-blue-300 hover:bg-blue-50 active:bg-blue-100
+                      disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-blue-600 dark:hover:bg-blue-950"
                   >
                     <div>
-                      <p className="font-medium text-gray-900">{suc.nombre}</p>
-                      <p className="text-xs text-gray-500">{suc.codigo_interno}{suc.ubicacion ? ` · ${suc.ubicacion}` : ''}</p>
+                      <p className="font-medium text-gray-900 dark:text-gray-100">{suc.nombre}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {suc.codigo_interno}
+                        {suc.ubicacion ? ` · ${suc.ubicacion}` : ''}
+                      </p>
                     </div>
-                    <ChevronRight className="h-5 w-5 text-gray-400 shrink-0" />
+                    <ChevronRight className="h-5 w-5 shrink-0 text-gray-400" />
                   </button>
                 ))
               )}
             </div>
           )}
 
-          {/* Formulario de contraseña de sucursal */}
-          {selected && (
+          {selected && !omitirContraseña && (
             <form onSubmit={handleValidar} className="flex flex-col gap-4">
-              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-                <p className="font-semibold text-blue-900">{selected.nombre}</p>
-                <p className="text-xs text-blue-600">{selected.codigo_interno}</p>
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-900 dark:bg-blue-950">
+                <p className="font-semibold text-blue-900 dark:text-blue-100">{selected.nombre}</p>
+                <p className="text-xs text-blue-600 dark:text-blue-400">{selected.codigo_interno}</p>
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">Contraseña de sucursal</label>
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Contraseña de sucursal
+                </label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={password}
-                    onChange={e => setPassword(e.target.value)}
+                    onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     required
                     autoFocus
                     className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 pr-10 text-gray-900
-                      placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20
+                      dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100"
                   />
                   <button
                     type="button"
@@ -141,7 +174,7 @@ export default function SucursalPage() {
               </div>
 
               {error && (
-                <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
                   {error}
                 </div>
               )}
@@ -151,7 +184,11 @@ export default function SucursalPage() {
                   type="button"
                   variant="outline"
                   size="lg"
-                  onClick={() => { setSelected(null); setError(''); setPassword(''); }}
+                  onClick={() => {
+                    setSelected(null);
+                    setError('');
+                    setPassword('');
+                  }}
                   className="flex items-center gap-1"
                 >
                   <ArrowLeft className="h-4 w-4" />

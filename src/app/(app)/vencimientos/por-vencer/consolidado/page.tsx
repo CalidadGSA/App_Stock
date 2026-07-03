@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   formatDate,
   formatDateTime,
@@ -14,7 +16,32 @@ import {
   estiloFilaProgresoVenta,
 } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import { clientHasPermission } from '@/lib/auth/permissions-client';
+import {
+  MESES_CALENDARIO,
+  opcionesAnioVencimiento,
+  pasaFiltroMesAnioYmd,
+  validarAnioVencFiltro,
+  validarMesVencFiltro,
+} from '@/lib/vencimientos-mes-anio-filtro';
+import { VencimientosTablaContenedor } from '@/components/vencimientos/VencimientosTablaContenedor';
+import ConsolidadoListMobile from '@/components/vencimientos/ConsolidadoListMobile';
+import {
+  FiltroVencimientoMesAnio,
+  VENCIMIENTOS_FILTROS_GRID_CLASS,
+} from '@/components/vencimientos/FiltroVencimientoMesAnio';
+import {
+  DATATABLE_CARD_BODY_CLASS,
+  DATATABLE_CARD_CLASS,
+  DATATABLE_STICKY_THEAD,
+  DATATABLE_PAGE_ROOT,
+} from '@/components/list/datatable-classes';
+import { DatatableListSection } from '@/components/list/DatatableListSection';
+import {
+  usePaginacionServidor,
+  useTotalPaginas,
+} from '@/components/list/datatable-pagination';
+import { tamPaginaToPageSizeParam } from '@/lib/api/pagination';
 
 interface ConsolidadoItem {
   id: string;
@@ -41,13 +68,21 @@ export default function PorVencerConsolidadoPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [items, setItems] = useState<ConsolidadoItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalesApi, setTotalesApi] = useState({
+    lineas: 0,
+    cajasRestantes: 0,
+    cajasVendidasHist: 0,
+    cajasMovimientoTotal: 0,
+    lineasLiquidados: 0,
+  });
   const [sucursales, setSucursales] = useState<Array<{ sucursal: number; nombrefantasia: string }>>([]);
   const [catMacros, setCatMacros] = useState<string[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [autorizado, setAutorizado] = useState<boolean | null>(null);
-  const [busquedaTexto, setBusquedaTexto] = useState('');
+  const [busquedaAplicada, setBusquedaAplicada] = useState('');
   const [rangeKey, setRangeKey] = useState<
     'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
   >('all');
@@ -60,6 +95,33 @@ export default function PorVencerConsolidadoPage() {
     vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial'
       ? vistaUrl
       : 'por_vencer';
+  const mesVencFiltro = parseInt(searchParams.get('mes_venc') ?? '', 10);
+  const anioVencFiltro = parseInt(searchParams.get('anio_venc') ?? '', 10);
+  const anioVencValido = validarAnioVencFiltro(
+    Number.isFinite(anioVencFiltro) ? anioVencFiltro : undefined
+  );
+  const mesVencValido = validarMesVencFiltro(
+    Number.isFinite(mesVencFiltro) ? mesVencFiltro : undefined,
+    anioVencValido ?? null
+  );
+
+  const {
+    paginaActual,
+    setPaginaActual,
+    tamPagina,
+    onTamPaginaChange,
+  } = usePaginacionServidor([
+    searchParams.toString(),
+    busquedaAplicada,
+    sucursalFiltro,
+    catMacroFiltro,
+    categoriaFiltro,
+    vistaSelect,
+    mesVencValido,
+    anioVencValido,
+  ]);
+  const mesesVencOpts = MESES_CALENDARIO;
+  const aniosVencOpts = useMemo(() => opcionesAnioVencimiento(3, 5), []);
 
   const desdeHastaLabel = useMemo(() => {
     switch (rangeKey) {
@@ -81,44 +143,132 @@ export default function PorVencerConsolidadoPage() {
     }
   }, [rangeKey]);
 
-  const itemsFiltrados = useMemo(() => {
-    const q = busquedaTexto.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((i) => {
-      const texto = [
-        i.descripcion,
-        i.presentacion ?? '',
-        i.laboratorio ?? '',
-        i.codigo_barras,
-        i.producto_id_sistema,
-        i.sucursal_nombre ?? '',
-        String(i.sucursal_id),
-      ]
-        .join(' ')
-        .toLowerCase();
-      return texto.includes(q);
-    });
-  }, [items, busquedaTexto]);
+  const totalPaginas = useTotalPaginas(total, tamPagina);
 
-  const totalesConsolidado = useMemo(() => {
-    let cajasRestantes = 0;
-    let cajasVendidasHist = 0;
-    let lineasLiquidados = 0;
-    for (const i of itemsFiltrados) {
-      const r = Number(i.cantidad) || 0;
-      const v = Number(i.cantidad_vendida_acumulada) || 0;
-      cajasRestantes += r;
-      cajasVendidasHist += v;
-      if (r <= 0) lineasLiquidados += 1;
+  const totalesConsolidado = totalesApi;
+
+  function nombreArchivoBase() {
+    const fecha = new Date();
+    const y = fecha.getFullYear();
+    const m = String(fecha.getMonth() + 1).padStart(2, '0');
+    const d = String(fecha.getDate()).padStart(2, '0');
+    return `consolidado_por_vencer_${y}${m}${d}`;
+  }
+
+  function valorCsv(value: unknown) {
+    if (value == null) return '';
+    const s = String(value);
+    if (/[",;\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  async function fetchTodosFiltrados(): Promise<ConsolidadoItem[]> {
+    const daysParam = parseInt(searchParams.get('days') ?? '365', 10) || 365;
+    const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
+    const params = new URLSearchParams();
+    params.set('days', String(daysParam));
+    params.set('daysMin', String(daysMinParam));
+    if (sucursalFiltro) params.set('sucursal', sucursalFiltro);
+    if (catMacroFiltro) params.set('cat_macro', catMacroFiltro);
+    if (categoriaFiltro) params.set('categoria', categoriaFiltro);
+    if (vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial') {
+      params.set('vista', vistaUrl);
     }
-    return {
-      lineas: itemsFiltrados.length,
-      cajasRestantes,
-      cajasVendidasHist,
-      cajasMovimientoTotal: cajasRestantes + cajasVendidasHist,
-      lineasLiquidados,
-    };
-  }, [itemsFiltrados]);
+    if (mesVencValido) params.set('mes_venc', String(mesVencValido));
+    if (anioVencValido) params.set('anio_venc', String(anioVencValido));
+    if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
+    params.set('page', '1');
+    params.set('pageSize', 'all');
+    const res = await fetch(`/api/vencimientos/por-vencer/consolidado?${params.toString()}`);
+    const json = (await res.json()) as { data?: ConsolidadoItem[] };
+    return res.ok ? (json.data ?? []) : items;
+  }
+
+  async function exportarExcelFiltrado() {
+    if (total === 0) return;
+    const exportItems = await fetchTodosFiltrados();
+    const headers = [
+      'Sucursal',
+      'Producto',
+      'Presentacion',
+      'Laboratorio',
+      'Codigo barras',
+      'Cat. padron',
+      'Categoria',
+      'Carga',
+      'Vencimiento',
+      'Dias',
+      'Restante',
+      'Vendido',
+      'Descuento',
+    ];
+    const rows = exportItems.map((r) => {
+      const dias = diasHastaVencimiento(r.fecha_vencimiento);
+      return [
+        r.sucursal_nombre || `Sucursal ${r.sucursal_id}`,
+        r.descripcion,
+        r.presentacion ?? '',
+        r.laboratorio ?? '',
+        r.codigo_barras,
+        r.cat_macro ?? '',
+        r.categoria ?? '',
+        formatDateTime(r.fecha_registro),
+        formatDate(r.fecha_vencimiento),
+        dias,
+        Number(r.cantidad ?? 0).toFixed(0),
+        Number(r.cantidad_vendida_acumulada ?? 0).toFixed(0),
+        typeof r.descuento_aplicado === 'number' ? `-${Math.abs(r.descuento_aplicado)}%` : '',
+      ];
+    });
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => valorCsv(cell)).join(';'))
+      .join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], {
+      type: 'text/csv;charset=utf-8;',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${nombreArchivoBase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportarPdfFiltrado() {
+    if (total === 0) return;
+    const exportItems = await fetchTodosFiltrados();
+    const doc = new jsPDF({ orientation: 'landscape' });
+    doc.setFontSize(11);
+    doc.text('Consolidado por vencer (lineas filtradas)', 14, 12);
+    autoTable(doc, {
+      startY: 16,
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: [37, 99, 235] },
+      head: [[
+        'Sucursal',
+        'Producto',
+        'Presentacion',
+        'Cod. barras',
+        'Venc.',
+        'Rest.',
+        'Vendido',
+        'Desc.',
+      ]],
+      body: exportItems.map((r) => [
+        r.sucursal_nombre || `Sucursal ${r.sucursal_id}`,
+        r.descripcion,
+        r.presentacion ?? '',
+        r.codigo_barras,
+        formatDate(r.fecha_vencimiento),
+        Number(r.cantidad ?? 0).toFixed(0),
+        Number(r.cantidad_vendida_acumulada ?? 0).toFixed(0),
+        typeof r.descuento_aplicado === 'number' ? `-${Math.abs(r.descuento_aplicado)}%` : '—',
+      ]),
+    });
+    doc.save(`${nombreArchivoBase()}.pdf`);
+  }
 
   function buildParams(overrides: Record<string, string>) {
     const p = new URLSearchParams(searchParams.toString());
@@ -154,21 +304,31 @@ export default function PorVencerConsolidadoPage() {
       if (vistaUrl === 'vendidos' || vistaUrl === 'vencidos' || vistaUrl === 'vendido_parcial') {
         params.set('vista', vistaUrl);
       }
+      if (mesVencValido) params.set('mes_venc', String(mesVencValido));
+      if (anioVencValido) params.set('anio_venc', String(anioVencValido));
+      if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
+      params.set('page', String(paginaActual));
+      params.set('pageSize', tamPaginaToPageSizeParam(tamPagina === 'all' ? 'all' : tamPagina));
 
       const res = await fetch(`/api/vencimientos/por-vencer/consolidado?${params.toString()}`);
       const json = await res.json() as {
         data?: ConsolidadoItem[];
+        total?: number;
         cat_macros?: string[];
         categorias?: string[];
         sucursales?: Array<{ sucursal: number; nombrefantasia: string }>;
+        totales?: typeof totalesApi;
         error?: string;
       };
       if (!res.ok) {
         setError(json.error ?? 'Error al cargar consolidado');
         setItems([]);
+        setTotal(0);
         return;
       }
       setItems(json.data ?? []);
+      setTotal(json.total ?? 0);
+      if (json.totales) setTotalesApi(json.totales);
       setCatMacros(json.cat_macros ?? []);
       setCategorias(json.categorias ?? []);
       setSucursales(json.sucursales ?? []);
@@ -185,7 +345,9 @@ export default function PorVencerConsolidadoPage() {
       try {
         const res = await fetch('/api/dashboard');
         const json = await res.json();
-        if (!isAdminLikeRole(json?.data?.rol)) {
+        const perms = json?.data?.permissions as string[] | undefined;
+        const rol = json?.data?.rol as string | undefined;
+        if (!clientHasPermission(perms, rol, 'vencimientos.consolidado')) {
           router.replace('/vencimientos/por-vencer?days=365&daysMin=0');
           return;
         }
@@ -211,7 +373,7 @@ export default function PorVencerConsolidadoPage() {
     }
     void cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, autorizado]);
+  }, [searchParams, autorizado, paginaActual, tamPagina, busquedaAplicada]);
 
   if (autorizado !== true) {
     return (
@@ -222,7 +384,7 @@ export default function PorVencerConsolidadoPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className={DATATABLE_PAGE_ROOT}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Link
@@ -247,22 +409,23 @@ export default function PorVencerConsolidadoPage() {
         </Link>
       </div>
 
-      <Card>
+      <Card className="shrink-0 print:hidden">
         <CardHeader>
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-3">
             <div>
               <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Filtros</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 Listado multi-sucursal: no consulta ventas posteriores a la carga (solo la pantalla por sucursal lo hace).
                 {vistaSelect === 'por_vencer' &&
-                  ' Todas las sucursales · Incluye liquidados · Totales según filtros y búsqueda.'}
+                  ' Todas las sucursales · Excluye liquidados · Totales según filtros y búsqueda.'}
                 {vistaSelect === 'vendidos' && 'Solo liquidados en el rango de vencimientos · Todas las sucursales.'}
                 {vistaSelect === 'vendido_parcial' &&
                   'Restante en control, al menos 1 unidad vendida registrada y sin liquidar (vendido=0) · Todas las sucursales.'}
-                {vistaSelect === 'vencidos' && 'Solo vencidos en los últimos N días (periodo) · Todas las sucursales.'}
+                {vistaSelect === 'vencidos' &&
+                  'Vencidos sin liquidar (fecha < hoy, restante > 0) en el periodo · Todas las sucursales.'}
               </p>
             </div>
-            <div className="flex flex-wrap items-end gap-3">
+            <div className={VENCIMIENTOS_FILTROS_GRID_CLASS}>
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Vista</label>
                 <select
@@ -274,7 +437,7 @@ export default function PorVencerConsolidadoPage() {
                     else p.set('vista', next);
                     router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
                   }}
-                  className="min-w-[160px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  className="w-full min-w-0 sm:min-w-[160px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="por_vencer">Por vencer</option>
                   <option value="vendido_parcial">Solo vendido parcial</option>
@@ -321,7 +484,7 @@ export default function PorVencerConsolidadoPage() {
                     setRangeKey(nextKey);
                     router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
                   }}
-                  className="min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  className="w-full min-w-0 sm:min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="all">Todos</option>
                   <option value="30_all">Todos hasta 30 días</option>
@@ -343,7 +506,7 @@ export default function PorVencerConsolidadoPage() {
                     });
                     router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
                   }}
-                  className="min-w-[200px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  className="w-full min-w-0 sm:min-w-[200px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="">Todas</option>
                   {sucursales.map((s) => (
@@ -366,7 +529,7 @@ export default function PorVencerConsolidadoPage() {
                     });
                     router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
                   }}
-                  className="min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  className="w-full min-w-0 sm:min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="">Todas</option>
                   {catMacros.map((m) => (
@@ -384,7 +547,7 @@ export default function PorVencerConsolidadoPage() {
                     const p = buildParams({ categoria: e.target.value });
                     router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
                   }}
-                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+                  className="w-full min-w-0 sm:min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
                 >
                   <option value="">Todas</option>
                   {categorias.map((c) => (
@@ -394,29 +557,55 @@ export default function PorVencerConsolidadoPage() {
                   ))}
                 </select>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Buscar</label>
-                <input
-                  type="text"
-                  value={busquedaTexto}
-                  onChange={(e) => setBusquedaTexto(e.target.value)}
-                  placeholder="Producto, código, sucursal..."
-                  className="min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:placeholder:text-gray-400 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                />
+              <FiltroVencimientoMesAnio
+                mesVencValido={mesVencValido}
+                anioVencValido={anioVencValido}
+                mesesVencOpts={mesesVencOpts}
+                aniosVencOpts={aniosVencOpts}
+                onMesChange={(v) => {
+                  const p = buildParams({});
+                  if (v) p.set('mes_venc', v);
+                  else p.delete('mes_venc');
+                  router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
+                }}
+                onAnioChange={(v) => {
+                  router.push(
+                    `/vencimientos/por-vencer/consolidado?${buildParams({ anio_venc: v }).toString()}`
+                  );
+                }}
+                selectClassName="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
+              />
+              <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-3 xl:col-span-2 2xl:col-span-3">
+                <Button size="sm" variant="secondary" onClick={cargar} disabled={loading}>
+                  Actualizar
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={exportarExcelFiltrado}
+                  disabled={loading || total === 0}
+                >
+                  Exportar CSV
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={exportarPdfFiltrado}
+                  disabled={loading || total === 0}
+                >
+                  Exportar PDF
+                </Button>
               </div>
-              <Button size="sm" variant="secondary" onClick={cargar} disabled={loading}>
-                Actualizar
-              </Button>
             </div>
           </div>
         </CardHeader>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className={DATATABLE_CARD_CLASS}>
+        <CardHeader className="shrink-0 py-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
-            {!loading && !error && itemsFiltrados.length > 0 ? (
+            {!loading && !error && total > 0 ? (
               <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-gray-700 dark:text-gray-300">
                 <span>
                   <span className="font-medium text-gray-900 dark:text-gray-100">
@@ -445,29 +634,35 @@ export default function PorVencerConsolidadoPage() {
               </div>
             ) : null}
           </div>
-          {!loading && !error && itemsFiltrados.length > 0 ? (
-            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            </p>
-          ) : null}
         </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="py-6">
-              <PageSpinner />
-            </div>
-          ) : error ? (
-            <p className="px-5 py-4 text-sm text-red-600">{error}</p>
-          ) : itemsFiltrados.length === 0 ? (
-            <p className="px-5 py-4 text-sm text-gray-400 dark:text-gray-500">
-              {vistaSelect === 'vendidos' && 'No hay liquidados en ese rango.'}
-              {vistaSelect === 'vendido_parcial' && 'No hay líneas con venta parcial sin liquidar en ese rango.'}
-              {vistaSelect === 'vencidos' && 'No hay vencidos en ese rango.'}
-              {vistaSelect === 'por_vencer' && 'No hay registros con esos filtros.'}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="border-b border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-slate-900/60">
+        <CardContent className={DATATABLE_CARD_BODY_CLASS}>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          <DatatableListSection
+            busquedaTexto={busquedaAplicada}
+            onBusquedaChange={(v) => setBusquedaAplicada(v.trim())}
+            tamPagina={tamPagina}
+            onTamPaginaChange={onTamPaginaChange}
+            paginaActual={paginaActual}
+            onPaginaChange={setPaginaActual}
+            totalFilas={total}
+            searchPlaceholder="Buscar producto, código, sucursal…"
+            footerDetalle={`${total} línea${total !== 1 ? 's' : ''}`}
+            loading={loading}
+            error={error || null}
+            empty={!loading && !error && total === 0}
+            emptyMessage={
+              <>
+                {vistaSelect === 'vendidos' && 'No hay liquidados en ese rango.'}
+                {vistaSelect === 'vendido_parcial' &&
+                  'No hay líneas con venta parcial sin liquidar en ese rango.'}
+                {vistaSelect === 'vencidos' && 'No hay vencidos sin liquidar en ese rango.'}
+                {vistaSelect === 'por_vencer' && 'No hay registros con esos filtros.'}
+              </>
+            }
+            mobile={<ConsolidadoListMobile items={items} />}
+            table={
+              <table className="w-full min-w-[1000px] text-sm">
+                <thead className={DATATABLE_STICKY_THEAD}>
                   <tr>
                     <th className="px-4 py-2 text-left font-medium text-gray-600 dark:text-gray-300">
                       Sucursal
@@ -499,7 +694,7 @@ export default function PorVencerConsolidadoPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {itemsFiltrados.map((r) => {
+                  {items.map((r) => {
                     const dias = diasHastaVencimiento(r.fecha_vencimiento);
                     const color = colorVencimiento(dias);
                     const vendHist = Number(r.cantidad_vendida_acumulada) || 0;
@@ -571,8 +766,9 @@ export default function PorVencerConsolidadoPage() {
                   })}
                 </tbody>
               </table>
-            </div>
-          )}
+            }
+          />
+          </div>
         </CardContent>
       </Card>
     </div>

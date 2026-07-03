@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Check, CheckCircle2, Snowflake, Trash2, TrendingUp, TrendingDown, Minus, Camera, CameraOff } from 'lucide-react';
+import { ArrowLeft, Check, CheckCircle2, Search, Snowflake, Trash2, TrendingUp, TrendingDown, Minus, Camera, CameraOff } from 'lucide-react';
 import BarcodeScanner from '@/components/BarcodeScanner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,8 +11,36 @@ import { Card, CardContent, CardHeader, CardFooter } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/utils';
-import { inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
+import {
+  MAX_STOCK_REAL_CAJAS,
+  MAX_STOCK_REAL_UNIDADES,
+  mensajeMaxStockRealCajas,
+  mensajeMaxStockRealUnidades,
+} from '@/lib/inventario/stock-limits';
+import {
+  esCantidadStockValida,
+  mensajeCantidadStockInvalida,
+} from '@/lib/inventario/stock-cantidad';
+import {
+  bloquearCampoUnidadesInventario,
+} from '@/lib/inventario/fraccionable';
+import {
+  detalleEstaInventariado,
+  esInventarioListaPrecargada,
+  ordenarDetallesListaPrecargada,
+  esTipoInventarioEscaneoLibre,
+  inferirTipoControlInventario,
+  type TipoControlInventario,
+} from '@/lib/inventario/tipo-control';
+import { useMaintenanceStatus } from '@/components/MaintenanceGuard';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 import type { ControlInventario, ControlInventarioDetalle, ProductoLegacy } from '@/types';
+
+const TIPOS_BLOQUEADOS_MANTENIMIENTO: TipoControlInventario[] = [
+  'diario',
+  'ocasional_sucursal',
+];
+const MAINTENANCE_REDIRECT_SECONDS = 5;
 
 interface ControlConDetalles extends ControlInventario {
   controles_inventario_detalle: ControlInventarioDetalle[];
@@ -41,7 +69,7 @@ function detalleCoincideConBarcode(detalle: ControlInventarioDetalle, barcode: s
   return normalizeBarcode(detalle.codigo_barras) === normalizeBarcode(barcode);
 }
 
-/** Inventario ocasional / auditoría: la API puede devolver ficha con stock 0 si no hay fila en MySQL legacy. */
+/** Inventario ocasional / lista precargada: 0 solo si no hay fila en MySQL (no por timeout/error). */
 function qsAllowMissingStock(control: ControlConDetalles | null): string {
   if (!control) return '';
   const t = inferirTipoControlInventario({
@@ -50,18 +78,51 @@ function qsAllowMissingStock(control: ControlConDetalles | null): string {
     categoria_macro: control.categoria_macro ?? null,
     descripcion: control.descripcion ?? null,
   });
-  return t === 'ocasional_sucursal' || t === 'ocasional_auditoria'
-    ? '?allow_missing_stock=1'
-    : '';
+  if (
+    esTipoInventarioEscaneoLibre(t) ||
+    esInventarioListaPrecargada(t, control.categoria_macro, control.descripcion)
+  ) {
+    return '?allow_missing_stock=1';
+  }
+  return '';
 }
+
+function detalleTieneStockSistemaGuardado(detalle: ControlInventarioDetalle): boolean {
+  return detalle.stock_sist_cajas != null || detalle.stock_sist_unidades != null;
+}
+
+function productoLegacyDesdeDetalle(detalle: ControlInventarioDetalle): ProductoLegacy | null {
+  if (!detalleTieneStockSistemaGuardado(detalle)) return null;
+  const cajas = detalle.stock_sist_cajas ?? 0;
+  const unidades = detalle.stock_sist_unidades ?? 0;
+  return {
+    producto_id_sistema: detalle.producto_id_sistema,
+    codigo_barras: detalle.codigo_barras,
+    descripcion: detalle.descripcion,
+    presentacion: detalle.presentacion,
+    laboratorio: detalle.laboratorio,
+    stock_sistema: detalle.stock_sistema ?? cajas + unidades,
+    stock_cajas: detalle.stock_sist_cajas ?? undefined,
+    stock_unidades: detalle.stock_sist_unidades ?? undefined,
+    unidades_por_caja: 1,
+    fraccionable: 1,
+  };
+}
+
+const MSG_STOCK_SISTEMA_NO_DISPONIBLE =
+  'No se pudo consultar el stock del sistema. Volvé a intentar en unos segundos para evitar contar con datos incorrectos.';
 
 export default function InventarioDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { maintenance } = useMaintenanceStatus();
+  const notify = useAppNotify();
 
   const [control, setControl] = useState<ControlConDetalles | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [maintenanceCountdown, setMaintenanceCountdown] = useState(0);
+  const maintenanceRedirectedRef = useRef(false);
 
   // Estado del producto escaneado
   const [productoEscaneado, setProductoEscaneado] = useState<ProductoLegacy | null>(null);
@@ -71,6 +132,7 @@ export default function InventarioDetailPage() {
   const [stockRealUnidades, setStockRealUnidades] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [detalleSeleccionadoId, setDetalleSeleccionadoId] = useState<string | null>(null);
+  const [abriendoDetalleId, setAbriendoDetalleId] = useState<string | null>(null);
   const [filtroCodigo, setFiltroCodigo] = useState<string>('');
   const [filtroNombre, setFiltroNombre] = useState<string>('');
   const [resultadosBusqueda, setResultadosBusqueda] = useState<
@@ -153,12 +215,14 @@ export default function InventarioDetailPage() {
   useEffect(() => {
     if (!productoEscaneado) return;
     const timer = window.setTimeout(() => {
-      cardProductoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (esDispositivoTactil) {
+        cardProductoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
       inputCajasRef.current?.focus();
       inputCajasRef.current?.select();
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [productoEscaneado]);
+  }, [productoEscaneado, esDispositivoTactil]);
 
   function handleChangeStockRealCajas(value: string) {
     if (value === '') {
@@ -493,6 +557,35 @@ export default function InventarioDetailPage() {
   useEffect(() => { cargarControl(); }, [cargarControl]);
 
   useEffect(() => {
+    if (!maintenance || !control || maintenanceRedirectedRef.current) {
+      setMaintenanceCountdown(0);
+      return;
+    }
+    const tipo = inferirTipoControlInventario({
+      origen: control.origen,
+      tipo: control.tipo ?? null,
+      categoria_macro: control.categoria_macro ?? null,
+      descripcion: control.descripcion ?? null,
+    });
+    if (!TIPOS_BLOQUEADOS_MANTENIMIENTO.includes(tipo)) return;
+
+    setMaintenanceCountdown(MAINTENANCE_REDIRECT_SECONDS);
+    const timer = window.setInterval(() => {
+      setMaintenanceCountdown((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(timer);
+          maintenanceRedirectedRef.current = true;
+          router.push('/dashboard');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => { window.clearInterval(timer); };
+  }, [maintenance, control, router]);
+
+  useEffect(() => {
     return () => {
       stopCardCamera();
     };
@@ -700,24 +793,41 @@ export default function InventarioDetailPage() {
         }
 
         if (!canApply()) return false;
+
+        const fallback = productoLegacyDesdeDetalle(detalle);
+        if (fallback) {
+          aplicarProducto(fallback);
+          setErrorProducto(
+            json.error ??
+              'No se pudo actualizar el stock en tiempo real. Se muestra el último dato guardado en este inventario; verificá antes de confirmar.'
+          );
+          return true;
+        }
+
         setProductoEscaneado(null);
         setStockRealCajas('');
         setStockRealUnidades('');
-        setErrorProducto(
-          json.error ??
-            'No se pudo consultar el stock del sistema. Volvé a intentar para evitar contar con datos incorrectos.'
-        );
+        setErrorProducto(json.error ?? MSG_STOCK_SISTEMA_NO_DISPONIBLE);
         return false;
       } catch {
         if (signal?.aborted) return false;
         if (!canApply()) return false;
         if (attempt < MAX_TRY - 1) continue;
+        if (!canApply()) return false;
+
+        const fallback = productoLegacyDesdeDetalle(detalle);
+        if (fallback) {
+          aplicarProducto(fallback);
+          setErrorProducto(
+            'No se pudo actualizar el stock en tiempo real. Se muestra el último dato guardado en este inventario; verificá antes de confirmar.'
+          );
+          return true;
+        }
+
         setProductoEscaneado(null);
         setStockRealCajas('');
         setStockRealUnidades('');
-        setErrorProducto(
-          'No se pudo consultar el stock del sistema. Volvé a intentar para evitar contar con datos incorrectos.'
-        );
+        setErrorProducto(MSG_STOCK_SISTEMA_NO_DISPONIBLE);
         return false;
       }
     }
@@ -831,13 +941,13 @@ export default function InventarioDetailPage() {
         };
         if (!res.ok) {
           if (isStale()) return false;
-          setErrorProducto(json.error ?? 'Error al buscar productos en medicamentos.');
+          setErrorProducto(json.error ?? 'Error al buscar productos en el padrón.');
         } else {
           if (isStale()) return false;
           const lista = json.data ?? [];
           setResultadosBusqueda(lista);
           if (lista.length === 0) {
-            setErrorProducto('No se encontraron productos en medicamentos para esa búsqueda.');
+            setErrorProducto('No se encontraron productos en el padrón para esa búsqueda.');
             return false;
           }
           return true;
@@ -845,7 +955,7 @@ export default function InventarioDetailPage() {
       } catch {
         if (signal.aborted) return false;
         if (isStale()) return false;
-        setErrorProducto('Error al buscar productos en medicamentos.');
+        setErrorProducto('Error al buscar productos en el padrón.');
         return false;
       } finally {
         if (isStale()) return false;
@@ -933,6 +1043,34 @@ export default function InventarioDetailPage() {
           // Si es el primer intento y hay error de servidor/red, reintentar una vez.
           if (intento === 1 && (res.status >= 500 || res.status === 408)) {
             return fetchProducto(2);
+          }
+          const esGuiado =
+            control?.categoria_macro != null &&
+            inferirTipoControlInventario(control) === 'diario';
+          if (res.status === 404 && !esGuiado && query.length >= 2) {
+            try {
+              const buscarRes = await fetch(
+                `/api/productos/buscar?${new URLSearchParams({ q: query }).toString()}`,
+                { signal }
+              );
+              if (isStale()) return false;
+              const buscarJson = (await buscarRes.json()) as {
+                data?: {
+                  producto_id_sistema: string;
+                  codigo_barras: string | null;
+                  descripcion: string;
+                  presentacion: string | null;
+                  laboratorio: string | null;
+                }[];
+              };
+              const lista = buscarJson.data ?? [];
+              if (buscarRes.ok && lista.length > 0) {
+                setResultadosBusqueda(lista);
+                return true;
+              }
+            } catch {
+              if (signal.aborted) return false;
+            }
           }
           setErrorProducto(json.error ?? 'Producto no encontrado');
           return false;
@@ -1044,6 +1182,23 @@ export default function InventarioDetailPage() {
 
   async function handleGuardarLinea() {
     if (!productoEscaneado) return;
+    const productoGuardado = productoEscaneado;
+    const detalleIdGuardado = detalleSeleccionadoId;
+    const tipoInventario = control
+      ? inferirTipoControlInventario({
+          origen: control.origen,
+          tipo: control.tipo ?? null,
+          categoria_macro: control.categoria_macro ?? null,
+          descripcion: control.descripcion ?? null,
+        })
+      : null;
+    const esListaPrecargadaGuardar =
+      tipoInventario != null &&
+      esInventarioListaPrecargada(
+        tipoInventario,
+        control?.categoria_macro,
+        control?.descripcion
+      );
     // Cancelar cualquier lookup pendiente para que no reabra cards viejas.
     scanAbortRef.current?.abort();
     scanRequestIdRef.current += 1;
@@ -1054,50 +1209,52 @@ export default function InventarioDetailPage() {
           `/api/productos/id/${encodeURIComponent(productoEscaneado.producto_id_sistema)}`
         );
         const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
-        if (res.ok && json.data) {
-          const nuevo = json.data;
-          const cajasPrevias = productoEscaneado.stock_cajas ?? 0;
-          const unidadesPrevias = productoEscaneado.stock_unidades ?? 0;
-          const cajasNuevas = nuevo.stock_cajas ?? 0;
-          const unidadesNuevas = nuevo.stock_unidades ?? 0;
+        if (!res.ok || !json.data) {
+          setErrorProducto(json.error ?? MSG_STOCK_SISTEMA_NO_DISPONIBLE);
+          return;
+        }
+        const nuevo = json.data;
+        const cajasPrevias = productoEscaneado.stock_cajas ?? 0;
+        const unidadesPrevias = productoEscaneado.stock_unidades ?? 0;
+        const cajasNuevas = nuevo.stock_cajas ?? 0;
+        const unidadesNuevas = nuevo.stock_unidades ?? 0;
 
-          if (cajasPrevias !== cajasNuevas || unidadesPrevias !== unidadesNuevas) {
-            // Refrescar stock del sistema en la card y en el listado para evitar confusión.
-            setProductoEscaneado((prev) => {
+        if (cajasPrevias !== cajasNuevas || unidadesPrevias !== unidadesNuevas) {
+          setProductoEscaneado((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              stock_sistema: nuevo.stock_sistema,
+              stock_cajas: nuevo.stock_cajas,
+              stock_unidades: nuevo.stock_unidades,
+              unidades_por_caja: nuevo.unidades_por_caja,
+            };
+          });
+          if (detalleSeleccionadoId) {
+            setControl((prev) => {
               if (!prev) return prev;
               return {
                 ...prev,
-                stock_sistema: nuevo.stock_sistema,
-                stock_cajas: nuevo.stock_cajas,
-                stock_unidades: nuevo.stock_unidades,
-                unidades_por_caja: nuevo.unidades_por_caja,
+                controles_inventario_detalle: prev.controles_inventario_detalle.map((d) => {
+                  if (d.id !== detalleSeleccionadoId) return d;
+                  return {
+                    ...d,
+                    stock_sistema: nuevo.stock_sistema,
+                    stock_sist_cajas: nuevo.stock_cajas ?? null,
+                    stock_sist_unidades: nuevo.stock_unidades ?? null,
+                  };
+                }),
               };
             });
-            if (detalleSeleccionadoId) {
-              setControl((prev) => {
-                if (!prev) return prev;
-                return {
-                  ...prev,
-                  controles_inventario_detalle: prev.controles_inventario_detalle.map((d) => {
-                    if (d.id !== detalleSeleccionadoId) return d;
-                    return {
-                      ...d,
-                      stock_sistema: nuevo.stock_sistema,
-                      stock_sist_cajas: nuevo.stock_cajas ?? null,
-                      stock_sist_unidades: nuevo.stock_unidades ?? null,
-                    };
-                  }),
-                };
-              });
-            }
-            setErrorProducto(
-              'El stock del sistema cambió mientras se hacía el conteo. Se actualizó en pantalla; revisá nuevamente antes de confirmar.'
-            );
-            return;
           }
+          setErrorProducto(
+            'El stock del sistema cambió mientras se hacía el conteo. Se actualizó en pantalla; revisá nuevamente antes de confirmar.'
+          );
+          return;
         }
       } catch {
-        // Si falla la validación, permitimos continuar; solo evitamos fallar silenciosamente
+        setErrorProducto(MSG_STOCK_SISTEMA_NO_DISPONIBLE);
+        return;
       }
     }
 
@@ -1109,25 +1266,26 @@ export default function InventarioDetailPage() {
     const unidadesNum =
       unidadesStrRaw === '' ? 0 : parseFloat(unidadesStrRaw);
 
-    if (isNaN(cajasNum) || cajasNum < 0) {
-      setErrorProducto('Ingresá una cantidad válida de cajas (>= 0)');
+    if (!esCantidadStockValida(cajasNum)) {
+      setErrorProducto(mensajeCantidadStockInvalida());
       return;
     }
-    if (cajasNum > 6000) {
-      setErrorProducto('El stock físico en cajas no puede ser mayor a 6000.');
+    if (cajasNum > MAX_STOCK_REAL_CAJAS) {
+      setErrorProducto(mensajeMaxStockRealCajas());
       return;
     }
-    if (isNaN(unidadesNum) || unidadesNum < 0) {
-      setErrorProducto('Ingresá una cantidad válida de unidades (>= 0)');
+    if (!esCantidadStockValida(unidadesNum)) {
+      setErrorProducto(mensajeCantidadStockInvalida());
       return;
     }
-    if (unidadesNum > 110) {
-      setErrorProducto('El stock físico en unidades no puede ser mayor a 110.');
+    if (unidadesNum > MAX_STOCK_REAL_UNIDADES) {
+      setErrorProducto(mensajeMaxStockRealUnidades());
       return;
     }
-    const noFraccionableSinUnidades =
-      productoEscaneado.fraccionable !== 1 &&
-      (productoEscaneado.stock_unidades ?? 0) === 0;
+    const noFraccionableSinUnidades = bloquearCampoUnidadesInventario(
+      productoEscaneado.fraccionable,
+      productoEscaneado.stock_unidades
+    );
     if (noFraccionableSinUnidades && unidadesNum !== 0) {
       setErrorProducto(
         'Este producto no es fraccionable y el stock de unidades es 0; no se pueden cargar unidades sueltas.'
@@ -1146,13 +1304,21 @@ export default function InventarioDetailPage() {
     try {
       let res: Response;
 
+      let detalleIdParaGuardar = detalleIdGuardado;
+      if (!detalleIdParaGuardar && esListaPrecargadaGuardar) {
+        detalleIdParaGuardar =
+          (control?.controles_inventario_detalle ?? []).find(
+            (d) => d.producto_id_sistema === productoGuardado.producto_id_sistema
+          )?.id ?? null;
+      }
+
       // Si ya existe un detalle para este producto en el control, actualizamos la línea existente (PATCH)
-      if (detalleSeleccionadoId) {
+      if (detalleIdParaGuardar) {
         res = await fetch(`/api/inventario/${id}/detalles`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            detalle_id: detalleSeleccionadoId,
+            detalle_id: detalleIdParaGuardar,
             stock_sist_cajas: productoEscaneado.stock_cajas ?? null,
             stock_sist_unidades: productoEscaneado.stock_unidades ?? null,
             stock_real_cajas: cajasNum,
@@ -1191,10 +1357,10 @@ export default function InventarioDetailPage() {
       // no quede visible solo el panel de resultados.
       setResultadosBusqueda([]);
       stopCardCamera();
-      if (productoEscaneado.codigo_barras) {
-        recentlyConfirmedBarcodesRef.current.set(productoEscaneado.codigo_barras, Date.now());
-        lastConfirmedBarcodeRef.current = { value: productoEscaneado.codigo_barras, at: Date.now() };
-        mustScanDifferentBarcodeRef.current = productoEscaneado.codigo_barras;
+      if (productoGuardado.codigo_barras) {
+        recentlyConfirmedBarcodesRef.current.set(productoGuardado.codigo_barras, Date.now());
+        lastConfirmedBarcodeRef.current = { value: productoGuardado.codigo_barras, at: Date.now() };
+        mustScanDifferentBarcodeRef.current = productoGuardado.codigo_barras;
       } else {
         lastConfirmedBarcodeRef.current = null;
         mustScanDifferentBarcodeRef.current = null;
@@ -1203,21 +1369,20 @@ export default function InventarioDetailPage() {
       setFiltroCodigo('');
       setFiltroNombre('');
 
-      // Si actualizamos un detalle existente en un inventario diario, lo reflejamos en memoria
-      // para no romper el orden original de la lista.
-      if (control?.categoria_macro && detalleSeleccionadoId) {
-        setControl(prev => {
+      if (esListaPrecargadaGuardar && detalleIdParaGuardar) {
+        // Lista precargada: actualizar en memoria para reordenar pendientes arriba / contados abajo.
+        setControl((prev) => {
           if (!prev) return prev;
           const detallesPrev = prev.controles_inventario_detalle ?? [];
-          const nuevosDetalles = detallesPrev.map(d => {
-            if (d.id !== detalleSeleccionadoId) return d;
-            const nuevoStockSistema = productoEscaneado.stock_sistema;
+          const nuevosDetalles = detallesPrev.map((d) => {
+            if (d.id !== detalleIdParaGuardar) return d;
+            const nuevoStockSistema = productoGuardado.stock_sistema;
             const nuevaDiferencia = totalUnidades - nuevoStockSistema;
             return {
               ...d,
               stock_sistema: nuevoStockSistema,
-              stock_sist_cajas: productoEscaneado.stock_cajas ?? null,
-              stock_sist_unidades: productoEscaneado.stock_unidades ?? null,
+              stock_sist_cajas: productoGuardado.stock_cajas ?? null,
+              stock_sist_unidades: productoGuardado.stock_unidades ?? null,
               stock_real_cajas: cajasNum,
               stock_real_unidades: unidadesFinal,
               stock_real: totalUnidades,
@@ -1226,11 +1391,10 @@ export default function InventarioDetailPage() {
           });
           return {
             ...prev,
-            controles_inventario_detalle: nuevosDetalles,
+            controles_inventario_detalle: ordenarDetallesListaPrecargada(nuevosDetalles),
           };
         });
       } else {
-        // Para otros inventarios, recargamos desde el backend.
         await cargarControl();
       }
     } catch {
@@ -1254,14 +1418,23 @@ export default function InventarioDetailPage() {
     const unidadesNum =
       unidadesStrRaw === '' ? 0 : parseFloat(unidadesStrRaw);
 
-    if (isNaN(cajasNum) || cajasNum < 0 || isNaN(unidadesNum) || unidadesNum < 0) {
-      setErrorProducto('Ingresá cantidades válidas antes de marcar como verificado.');
+    if (!esCantidadStockValida(cajasNum) || !esCantidadStockValida(unidadesNum)) {
+      setErrorProducto(mensajeCantidadStockInvalida());
+      return;
+    }
+    if (cajasNum > MAX_STOCK_REAL_CAJAS) {
+      setErrorProducto(mensajeMaxStockRealCajas());
+      return;
+    }
+    if (unidadesNum > MAX_STOCK_REAL_UNIDADES) {
+      setErrorProducto(mensajeMaxStockRealUnidades());
       return;
     }
 
-    const noFraccionableSinUnidades =
-      productoEscaneado.fraccionable !== 1 &&
-      (productoEscaneado.stock_unidades ?? 0) === 0;
+    const noFraccionableSinUnidades = bloquearCampoUnidadesInventario(
+      productoEscaneado.fraccionable,
+      productoEscaneado.stock_unidades
+    );
     if (noFraccionableSinUnidades && unidadesNum !== 0) {
       setErrorProducto(
         'Este producto no es fraccionable y el stock de unidades es 0; no se pueden cargar unidades sueltas.'
@@ -1296,10 +1469,18 @@ export default function InventarioDetailPage() {
         return;
       }
 
-      setControl(prev => {
+      setControl((prev) => {
         if (!prev) return prev;
+        const tipoInv = inferirTipoControlInventario({
+          origen: prev.origen,
+          tipo: prev.tipo ?? null,
+          categoria_macro: prev.categoria_macro ?? null,
+          descripcion: prev.descripcion ?? null,
+        });
+        const esLista =
+          esInventarioListaPrecargada(tipoInv, prev.categoria_macro, prev.descripcion);
         const detallesPrev = prev.controles_inventario_detalle ?? [];
-        const nuevosDetalles = detallesPrev.map(d => {
+        const nuevosDetalles = detallesPrev.map((d) => {
           if (d.id !== detalleSeleccionadoId) return d;
           const nuevoStockSistema = productoEscaneado.stock_sistema;
           const nuevaDiferencia = totalUnidades - nuevoStockSistema;
@@ -1317,7 +1498,9 @@ export default function InventarioDetailPage() {
         });
         return {
           ...prev,
-          controles_inventario_detalle: nuevosDetalles,
+          controles_inventario_detalle: esLista
+            ? ordenarDetallesListaPrecargada(nuevosDetalles)
+            : nuevosDetalles,
         };
       });
     } catch {
@@ -1328,9 +1511,29 @@ export default function InventarioDetailPage() {
   }
 
   async function handleEliminarLinea(detalleId: string) {
-    if (!confirm('¿Eliminar esta línea?')) return;
+    if (!(await notify.confirm({
+      title: 'Eliminar línea',
+      message: '¿Eliminar esta línea?',
+      confirmLabel: 'Eliminar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    }))) return;
     await fetch(`/api/inventario/${id}/detalles?detalle_id=${detalleId}`, { method: 'DELETE' });
     await cargarControl();
+  }
+
+  function cerrarFichaProducto() {
+    scanAbortRef.current?.abort();
+    scanRequestIdRef.current += 1;
+    setProductoEscaneado(null);
+    setStockRealCajas('');
+    setStockRealUnidades('');
+    stopCardCamera();
+    setCardCameraError('');
+    setErrorProducto('');
+    setDetalleSeleccionadoId(null);
+    setFiltroCodigo('');
+    setFiltroNombre('');
   }
 
   if (loading) return <PageSpinner />;
@@ -1357,17 +1560,17 @@ export default function InventarioDetailPage() {
     ((control as any).operadores?.nombreCompleto as string | undefined) ??
     '';
   const esControlGuiado = control.categoria_macro != null && tipoControl === 'diario';
-  const detalles = [...(control.controles_inventario_detalle ?? [])].sort((a, b) => {
-    if (esControlGuiado) {
-      const aInventariado = a.stock_real_cajas != null || a.stock_real_unidades != null;
-      const bInventariado = b.stock_real_cajas != null || b.stock_real_unidades != null;
-      // En inventario diario guiado: primero los pendientes por recontar.
-      if (aInventariado !== bInventariado) {
-        return aInventariado ? 1 : -1;
-      }
-    }
-    return new Date(a.fecha_registro).getTime() - new Date(b.fecha_registro).getTime();
-  });
+  const esListaPrecargada = esInventarioListaPrecargada(
+    tipoControl,
+    control.categoria_macro,
+    control.descripcion
+  );
+  const detalles = esListaPrecargada
+    ? ordenarDetallesListaPrecargada(control.controles_inventario_detalle ?? [])
+    : [...(control.controles_inventario_detalle ?? [])].sort(
+        (a, b) =>
+          new Date(a.fecha_registro).getTime() - new Date(b.fecha_registro).getTime()
+      );
   let detallesFiltrados = detalles;
   if (control.categoria_macro && filtroCodigo) {
     detallesFiltrados = detallesFiltrados.filter((d) => d.codigo_barras === filtroCodigo);
@@ -1384,9 +1587,7 @@ export default function InventarioDetailPage() {
   let totalSobrantes = 0;
   let totalFaltantes = 0;
   let totalSinDiferencia = 0;
-  const totalInventariados = detalles.filter(
-    (d) => d.stock_real_cajas != null || d.stock_real_unidades != null
-  ).length;
+  const totalInventariados = detalles.filter(detalleEstaInventariado).length;
   for (const d of detalles) {
     const sistC = d.stock_sist_cajas ?? 0;
     const sistU = d.stock_sist_unidades ?? 0;
@@ -1424,6 +1625,28 @@ export default function InventarioDetailPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      {maintenanceCountdown > 0 && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-xl border border-amber-300 bg-white p-6 shadow-2xl dark:border-amber-700 dark:bg-slate-900">
+            <h2 className="text-lg font-semibold text-amber-700 dark:text-amber-400">
+              Base de datos desactualizada
+            </h2>
+            <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">
+              La base de datos onze_center está desactualizada. Este control se interrumpirá para evitar inconsistencias.
+            </p>
+            <p className="mt-3 text-sm font-medium text-gray-900 dark:text-gray-100">
+              Redireccionando al dashboard en {maintenanceCountdown} segundo{maintenanceCountdown === 1 ? '' : 's'}…
+            </p>
+          </div>
+        </div>
+      )}
+      {enProgreso && productoEscaneado && !esDispositivoTactil && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/50"
+          onClick={cerrarFichaProducto}
+          aria-hidden
+        />
+      )}
       {/* Encabezado */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1555,10 +1778,10 @@ export default function InventarioDetailPage() {
               </div>
             )}
 
-            {buscandoProducto && (
+            {(buscandoProducto || abriendoDetalleId) && (
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-                Buscando producto...
+                Cargando producto...
               </div>
             )}
 
@@ -1570,11 +1793,38 @@ export default function InventarioDetailPage() {
 
             {/* Ficha del producto escaneado */}
             {productoEscaneado && (
-              <div ref={cardProductoRef} className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4">
+              <div
+                ref={cardProductoRef}
+                className={`rounded-xl border-2 border-blue-200 bg-blue-50 p-4 ${
+                  !esDispositivoTactil
+                    ? 'fixed left-1/2 top-16 z-[61] w-[min(calc(100%-2rem),32rem)] -translate-x-1/2 shadow-2xl max-h-[calc(100dvh-5rem)] overflow-y-auto'
+                    : ''
+                }`}
+              >
                 <div className="flex items-start justify-between gap-3 mb-4">
                   <div>
                     <div className="flex items-center gap-2">
                       <p className="font-semibold text-gray-900 text-lg">{productoEscaneado.descripcion}</p>
+                      <button
+                        type="button"
+                        title="Buscar imagen del producto"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-white text-blue-600 hover:bg-blue-50"
+                        onClick={() => {
+                          const partes = [
+                            productoEscaneado.codigo_barras,
+                            productoEscaneado.descripcion,
+                            productoEscaneado.presentacion,
+                          ].filter((p) => p != null && String(p).trim() !== '');
+                          const q = encodeURIComponent(partes.join(' '));
+                          window.open(
+                            `https://www.google.com/search?tbm=isch&q=${q}`,
+                            'img_lookup',
+                            'width=720,height=600,menubar=no,toolbar=no,location=yes,status=no,scrollbars=yes,resizable=yes',
+                          );
+                        }}
+                      >
+                        <Search className="h-4 w-4" />
+                      </button>
                       {productoEscaneado.refrigerado && (
                         <div className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-cyan-100 text-cyan-700 border border-cyan-200" title="Producto refrigerado">
                           <Snowflake className="h-3.5 w-3.5" />
@@ -1668,9 +1918,10 @@ export default function InventarioDetailPage() {
                       className="text-xl font-bold"
                     />
                     {(() => {
-                      const noPermitirUnidades =
-                        productoEscaneado.fraccionable !== 1 &&
-                        (productoEscaneado.stock_unidades ?? 0) === 0;
+                      const noPermitirUnidades = bloquearCampoUnidadesInventario(
+                        productoEscaneado.fraccionable,
+                        productoEscaneado.stock_unidades
+                      );
                       return (
                         <Input
                           ref={inputUnidadesRef}
@@ -1737,19 +1988,7 @@ export default function InventarioDetailPage() {
                   <Button
                     variant="outline"
                     size="md"
-                    onClick={() => {
-                      scanAbortRef.current?.abort();
-                      scanRequestIdRef.current += 1;
-                      setProductoEscaneado(null);
-                      setStockRealCajas('');
-                      setStockRealUnidades('');
-                      stopCardCamera();
-                      setCardCameraError('');
-                      setErrorProducto('');
-                      setDetalleSeleccionadoId(null);
-          setFiltroCodigo('');
-          setFiltroNombre('');
-                    }}
+                    onClick={cerrarFichaProducto}
                     className="flex-1"
                   >
                     Cancelar
@@ -1847,13 +2086,14 @@ export default function InventarioDetailPage() {
                     const difUnidades = realUnidades - sistUnidades;
                     const isSelected = detalleSeleccionadoId === det.id;
                     // Consideramos inventariado solo si se cargó explícitamente algún stock real.
-                    const yaInventariado =
-                      det.stock_real_cajas != null || det.stock_real_unidades != null;
+                    const yaInventariado = detalleEstaInventariado(det);
                     const conDiferencia = difCajas !== 0 || difUnidades !== 0;
                     return (
                       <tr
                         key={det.id}
                         className={`hover:bg-gray-50 cursor-pointer ${
+                          abriendoDetalleId === det.id ? 'opacity-60 pointer-events-none' : ''
+                        } ${
                           !yaInventariado
                             ? ''
                             : conDiferencia
@@ -1861,16 +2101,22 @@ export default function InventarioDetailPage() {
                               : 'bg-green-50 dark:bg-emerald-950/35'
                         } ${isSelected ? 'ring-2 ring-blue-300' : ''}`}
                         onClick={async () => {
+                          if (abriendoDetalleId || guardando) return;
                           setErrorProducto('');
-                          const cargado = await cargarProductoParaDetalle(det);
-                          if (cargado) {
-                            setDetalleSeleccionadoId(det.id);
-                            if (control.categoria_macro) {
-                              setFiltroCodigo(det.codigo_barras ?? '');
+                          setAbriendoDetalleId(det.id);
+                          try {
+                            const cargado = await cargarProductoParaDetalle(det);
+                            if (cargado) {
+                              setDetalleSeleccionadoId(det.id);
+                              if (control.categoria_macro) {
+                                setFiltroCodigo(det.codigo_barras ?? '');
+                              }
+                            } else {
+                              setDetalleSeleccionadoId(null);
+                              setFiltroCodigo('');
                             }
-                          } else {
-                            setDetalleSeleccionadoId(null);
-                            setFiltroCodigo('');
+                          } finally {
+                            setAbriendoDetalleId(null);
                           }
                         }}
                       >

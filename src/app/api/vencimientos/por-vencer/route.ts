@@ -2,7 +2,8 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getPorVencerListPayload, parseVistaPorVencerList } from '@/lib/vencimientos-por-vencer-list';
+import { getPorVencerListPayload, parseSortKeyPorVencerList, parseVistaPorVencerList } from '@/lib/vencimientos-por-vencer-list';
+import { parsePaginationParams } from '@/lib/api/pagination';
 
 /** GET /api/vencimientos/por-vencer — **solo sucursal actual** (cookie). Sin `consolidado`; para multi-sucursal usar `/api/vencimientos/por-vencer/consolidado`. */
 export async function GET(request: NextRequest) {
@@ -31,6 +32,9 @@ export async function GET(request: NextRequest) {
   const daysMin = Number.isNaN(daysMinRaw) ? 0 : Math.max(0, Math.min(daysMinRaw, days));
   const checkVentaPosterior = searchParams.get('check_venta_posterior') === '1';
   const vista = parseVistaPorVencerList(searchParams.get('vista'));
+  const pagination = parsePaginationParams(searchParams);
+  const mesVencRaw = parseInt(searchParams.get('mes_venc') ?? '', 10);
+  const anioVencRaw = parseInt(searchParams.get('anio_venc') ?? '', 10);
 
   const admin = await createAdminClient();
   const result = await getPorVencerListPayload({
@@ -40,11 +44,22 @@ export async function GET(request: NextRequest) {
     sucursalFiltroNum: NaN,
     days,
     daysMin,
-    catMacroFiltro: '',
-    categoriaFiltro: '',
+    catMacroFiltro: String(searchParams.get('cat_macro') ?? '').trim(),
+    categoriaFiltro: String(searchParams.get('categoria') ?? '').trim(),
+    laboratorioFiltro: String(searchParams.get('laboratorio') ?? '').trim(),
     vista,
     includeVentaPosteriorMysql: checkVentaPosterior,
-    aplicarFiltrosPadronEnServidor: false,
+    aplicarFiltrosPadronEnServidor: true,
+    page: pagination.page,
+    pageSize: pagination.pageSize,
+    unpaginated: pagination.unpaginated,
+    busqueda: String(searchParams.get('busqueda') ?? '').trim(),
+    mesVenc: Number.isFinite(mesVencRaw) && mesVencRaw > 0 ? mesVencRaw : undefined,
+    anioVenc: Number.isFinite(anioVencRaw) && anioVencRaw > 0 ? anioVencRaw : undefined,
+    soloVentaPosterior: searchParams.get('solo_venta_posterior') === '1',
+    sortBy: parseSortKeyPorVencerList(searchParams.get('sortBy')),
+    sortDir: searchParams.get('sortDir') === 'desc' ? 'desc' : 'asc',
+    agruparFilas: true,
   });
 
   if (!result.ok) {

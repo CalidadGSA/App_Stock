@@ -1,13 +1,22 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import {
+  canSeeAllInventarioTipos,
+  getOperadorRbacContext,
+  permissionsToArray,
+} from '@/lib/auth/rbac';
 import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
+import {
+  TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL,
+} from '@/lib/inventario/tipo-control';
+import { obtenerProgresoTrimestreSucursal, sumarCantidadDetalle, trimestrePadronCompleto } from '@/lib/inventario/trimestre-base';
+import { contarProductosParaDevolver } from '@/lib/vencimientos/devolver-para-devolver-masivo';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
 export async function GET() {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const rbac = await getOperadorRbacContext();
+  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = rbac.operador;
 
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
@@ -24,7 +33,7 @@ export async function GET() {
   const en90dias = ymdAddDays(hoyVen, 90);
   /** Para base_productos: misma lógica que POST /api/inventario (fechainicio/fechafin vs “hoy” local AR). */
   const hoyStrArgentina = hoyVen;
-  const esAdmin = isAdminLikeRole(operador.rol);
+  const esAdmin = canSeeAllInventarioTipos(rbac);
 
   let invTotalQuery = admin
     .from('controles_inventario')
@@ -32,16 +41,17 @@ export async function GET() {
     .eq('sucursal_id', sucursalId)
     // No contamos inventarios de auditoría en los KPIs.
     .neq('tipo', 'auditoria')
-    .neq('tipo', 'ocasional_auditoria');
+    .neq('tipo', 'ocasional_auditoria')
+    .neq('tipo', 'auditoria_integral');
 
   let invMesQuery = admin
     .from('controles_inventario')
     .select('id', { count: 'exact', head: true })
     .eq('sucursal_id', sucursalId)
     .gte('created_at', inicioMes)
-    // No contamos inventarios de auditoría en los KPIs.
-    .neq('tipo', 'auditoria')
-    .neq('tipo', 'ocasional_auditoria');
+    // KPI mensual de sucursal: siempre solo controles de sucursal (aunque quien vea sea admin).
+    .neq('origen', 'Auditoria')
+    .in('tipo', [...TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL]);
 
   /** Líneas de detalle marcadas con diferencia (BD), de controles de esta sucursal y ventana de fechas. */
   let invItemsConDiferenciaQuery = admin
@@ -51,7 +61,8 @@ export async function GET() {
     .eq('controles_inventario.sucursal_id', sucursalId)
     .gte('controles_inventario.fecha_inicio', inicio60dias)
     .neq('controles_inventario.tipo', 'auditoria')
-    .neq('controles_inventario.tipo', 'ocasional_auditoria');
+    .neq('controles_inventario.tipo', 'ocasional_auditoria')
+    .neq('controles_inventario.tipo', 'auditoria_integral');
 
   let ultimosInvQuery = admin
     .from('controles_inventario')
@@ -63,28 +74,21 @@ export async function GET() {
     .limit(5);
 
   if (!esAdmin) {
-    invTotalQuery = invTotalQuery.in('tipo', ['diario', 'ocasional_sucursal']);
-    invMesQuery = invMesQuery.in('tipo', ['diario', 'ocasional_sucursal']);
+    invTotalQuery = invTotalQuery.in('tipo', [...TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL]);
     invItemsConDiferenciaQuery = invItemsConDiferenciaQuery.in('controles_inventario.tipo', [
-      'diario',
-      'ocasional_sucursal',
+      ...TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL,
     ]);
-    ultimosInvQuery = ultimosInvQuery.in('tipo', ['diario', 'ocasional_sucursal']);
+    ultimosInvQuery = ultimosInvQuery.in('tipo', [...TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL]);
   }
 
-  const [invTotal, invMes, invItemsConDiferencia, vencTotal, vencidos, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc] =
+  const sucursalActualNum = parseInt(sucursalId, 10);
+
+  const [invTotal, invMes, invItemsConDiferencia, vencTotal, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc, productosParaDevolver] =
     await Promise.all([
       invTotalQuery,
       invMesQuery,
       invItemsConDiferenciaQuery,
       admin.from('controles_vencimientos').select('id', { count: 'exact', head: true }).eq('sucursal_id', sucursalId),
-      admin
-        .from('controles_vencimientos_detalle')
-        .select('id, controles_vencimientos!inner(sucursal_id)', { count: 'exact', head: true })
-        .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .lt('fecha_vencimiento', hoyVen)
-        .eq('devuelto', 0)
-        .eq('eliminado', 0),
       admin
         .from('controles_vencimientos_detalle')
         .select('cantidad, controles_vencimientos!inner(sucursal_id)')
@@ -117,19 +121,9 @@ export async function GET() {
         .eq('sucursal_id', sucursalId)
         .order('created_at', { ascending: false })
         .limit(5),
+      contarProductosParaDevolver(admin, sucursalActualNum, hoyVen),
     ]);
 
-  const sumarCantidad = (rows: Array<{ cantidad?: number | null }> | null | undefined): number =>
-    Math.max(
-      0,
-      Math.round(
-        (rows ?? []).reduce((acc: number, r) => {
-          return acc + Number(r.cantidad ?? 0);
-        }, 0)
-      )
-    );
-
-  const sucursalActualNum = parseInt(sucursalId, 10);
   const idsSucursales = [sucursalActualNum];
 
   const sucursalNombreMap = new Map<number, string>();
@@ -143,78 +137,9 @@ export async function GET() {
     }
   }
 
-  /**
-   * Misma idea que POST /api/inventario: el trimestre vigente sale de base_productos
-   * (fechainicio <= hoy <= fechafin), no de un string fijo tipo Q12026.
-   */
-  async function contarProgresoBaseProductos(sucId: number): Promise<{
-    total: number;
-    inventariados: number;
-    pendientes: number;
-    porcentaje: number;
-  }> {
-    const variantes = [
-      {
-        id: 'idsucursal',
-        ini: 'fechainicio',
-        fin: 'fechafin',
-        veces: 'vecesinventariado',
-        trim: 'trimestre',
-      },
-      {
-        id: 'idSucursal',
-        ini: 'fechaInicio',
-        fin: 'fechaFin',
-        veces: 'vecesInventariado',
-        trim: 'trimestre',
-      },
-    ] as const;
-
-    for (const v of variantes) {
-      const { data: muestra, error: errMuestra } = await admin
-        .from('base_productos')
-        .select(v.trim)
-        .eq(v.id, sucId)
-        .lte(v.ini, hoyStrArgentina)
-        .gte(v.fin, hoyStrArgentina)
-        .limit(1);
-
-      if (errMuestra) continue;
-
-      const trimestreDb = String((muestra?.[0] as { trimestre?: string } | undefined)?.trimestre ?? '').trim();
-      if (!trimestreDb) {
-        return { total: 0, inventariados: 0, pendientes: 0, porcentaje: 0 };
-      }
-
-      const { count: total, error: errTotal } = await admin
-        .from('base_productos')
-        .select('*', { count: 'exact', head: true })
-        .eq(v.id, sucId)
-        .eq(v.trim, trimestreDb);
-
-      if (errTotal) continue;
-
-      const { count: inventariados, error: errInv } = await admin
-        .from('base_productos')
-        .select('*', { count: 'exact', head: true })
-        .eq(v.id, sucId)
-        .eq(v.trim, trimestreDb)
-        .gt(v.veces, 0);
-
-      if (errInv) continue;
-
-      const t = total ?? 0;
-      const inv = inventariados ?? 0;
-      const pendientes = Math.max(0, t - inv);
-      const porcentaje = t > 0 ? Math.round((inv / t) * 100) : 0;
-      return { total: t, inventariados: inv, pendientes, porcentaje };
-    }
-
-    return { total: 0, inventariados: 0, pendientes: 0, porcentaje: 0 };
-  }
-
   const inventarioBasePorSucursal = idsSucursales.map(async (idSuc) => {
-    const { total, inventariados, pendientes, porcentaje } = await contarProgresoBaseProductos(idSuc);
+    const progreso = await obtenerProgresoTrimestreSucursal(admin, idSuc, hoyStrArgentina);
+    const { total, inventariados, pendientes, porcentaje } = progreso;
     return {
       sucursal_id: idSuc,
       sucursal_nombre: sucursalNombreMap.get(idSuc) ?? String(idSuc),
@@ -222,6 +147,8 @@ export async function GET() {
       pendientes,
       total,
       porcentaje,
+      trimestre_padron_completo: trimestrePadronCompleto(progreso),
+      por_macro: progreso.por_macro ?? [],
     };
   });
   const inventarioBasePorSucursalResuelto = (
@@ -231,14 +158,21 @@ export async function GET() {
   return NextResponse.json({
     data: {
       rol: operador.rol ?? 'operador_sucursal',
+      permissions: permissionsToArray(rbac),
       inventarios_total: invTotal.count ?? 0,
       inventarios_mes: invMes.count ?? 0,
       items_con_diferencia: invItemsConDiferencia.count ?? 0,
       controles_vencimientos_total: vencTotal.count ?? 0,
-      productos_vencidos: vencidos.count ?? 0,
-      productos_por_vencer_30: sumarCantidad((porVencer30.data ?? []) as Array<{ cantidad?: number | null }>),
-      productos_por_vencer_60: sumarCantidad((porVencer60.data ?? []) as Array<{ cantidad?: number | null }>),
-      productos_por_vencer_90: sumarCantidad((porVencer90.data ?? []) as Array<{ cantidad?: number | null }>),
+      productos_para_devolver: productosParaDevolver,
+      productos_por_vencer_30: sumarCantidadDetalle(
+        (porVencer30.data ?? []) as Array<{ cantidad?: number | null }>
+      ),
+      productos_por_vencer_60: sumarCantidadDetalle(
+        (porVencer60.data ?? []) as Array<{ cantidad?: number | null }>
+      ),
+      productos_por_vencer_90: sumarCantidadDetalle(
+        (porVencer90.data ?? []) as Array<{ cantidad?: number | null }>
+      ),
       ultimos_inventarios: ultimosInv.data ?? [],
       ultimos_vencimientos: ultimosVenc.data ?? [],
       inventario_base_por_sucursal: inventarioBasePorSucursalResuelto,

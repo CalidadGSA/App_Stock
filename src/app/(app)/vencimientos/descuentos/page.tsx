@@ -7,6 +7,11 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
 import { ArrowLeft } from 'lucide-react';
+import {
+  CategoriasFinalesListMobile,
+  DescuentosCreadosListMobile,
+} from '@/components/vencimientos/DescuentosConfigListMobile';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 
 type OpcionPadron = {
   subrubro: string;
@@ -47,6 +52,7 @@ function normalizarTexto(v: string): string {
 
 export default function DescuentosConfigPage() {
   const router = useRouter();
+  const notify = useAppNotify();
   const [loading, setLoading] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
@@ -321,7 +327,13 @@ export default function DescuentosConfigPage() {
   }
 
   async function eliminarCategoriaFinal(id: number) {
-    if (!confirm('¿Eliminar esta categoría final?')) return;
+    if (!(await notify.confirm({
+      title: 'Eliminar categoría',
+      message: '¿Eliminar esta categoría final?',
+      confirmLabel: 'Eliminar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    }))) return;
     setGuardando(true);
     setError('');
     try {
@@ -385,7 +397,13 @@ export default function DescuentosConfigPage() {
   }
 
   async function eliminarDescuento(id: number) {
-    if (!confirm('¿Eliminar este descuento?')) return;
+    if (!(await notify.confirm({
+      title: 'Eliminar descuento',
+      message: '¿Eliminar este descuento?',
+      confirmLabel: 'Eliminar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    }))) return;
     setGuardando(true);
     setError('');
     try {
@@ -409,30 +427,33 @@ export default function DescuentosConfigPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             onClick={() => router.back()}
             aria-label="Volver"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-slate-900"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <h1 className="text-xl font-bold text-gray-900">Configuración de descuentos</h1>
+          <h1 className="text-lg font-bold leading-tight text-gray-900 sm:text-xl dark:text-gray-100">
+            Configuración de descuentos
+          </h1>
         </div>
-        <Link href="/vencimientos/descuentos/productos">
-          <Button size="sm" variant="secondary">
+        <Link href="/vencimientos/descuentos/productos" className="shrink-0">
+          <Button size="sm" variant="secondary" className="w-full sm:w-auto">
             Productos con descuentos
           </Button>
         </Link>
       </div>
 
       <Card>
-        <CardContent className="pt-6 flex flex-wrap gap-3">
+        <CardContent className="grid grid-cols-1 gap-2 pt-6 sm:flex sm:flex-wrap sm:gap-3">
           <Button
             size="sm"
             variant="outline"
+            className="w-full justify-center sm:w-auto"
             onClick={() => {
               if (showCategoriaSoloCard) {
                 cerrarModalCategoriaFinalSolo();
@@ -446,6 +467,7 @@ export default function DescuentosConfigPage() {
           <Button
             size="sm"
             variant="outline"
+            className="w-full justify-center sm:w-auto"
             onClick={() => {
               if (showCategoriaCard) {
                 cerrarModalCategoriaFinal();
@@ -459,6 +481,7 @@ export default function DescuentosConfigPage() {
           <Button
             size="sm"
             variant="outline"
+            className="w-full justify-center sm:w-auto"
             onClick={() => {
               if (showDescuentoCard) {
                 cerrarModalDescuento();
@@ -473,24 +496,24 @@ export default function DescuentosConfigPage() {
       </Card>
 
       {showCategoriaCard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <Card className="w-full max-w-3xl">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-3 sm:items-center sm:p-4">
+          <Card className="my-auto w-full max-w-3xl">
             <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="font-semibold text-gray-900">Nueva categoría final</h2>
-                <Button size="sm" variant="outline" onClick={cerrarModalCategoriaFinal}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="font-semibold text-gray-900 dark:text-gray-100">Nueva categoría final</h2>
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={cerrarModalCategoriaFinal}>
                   Cerrar
                 </Button>
               </div>
             </CardHeader>
-            <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <CardContent className="flex flex-col gap-3 md:grid md:grid-cols-4">
               <select
                 value={categoriaSel}
                 onChange={(e) => {
                   setCategoriaSel(e.target.value);
                   setSubrubroSel('');
                 }}
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
               >
                 <option value="">Categoría</option>
                 {categoriasGlobales.map((c) => (
@@ -502,7 +525,7 @@ export default function DescuentosConfigPage() {
               <select
                 value={subrubroSel}
                 onChange={(e) => setSubrubroSel(e.target.value)}
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
               >
                 <option value="">Sub Rubro</option>
                 {subrubrosPorCategoria.map((s) => (
@@ -516,9 +539,9 @@ export default function DescuentosConfigPage() {
                 value={categoriaFinalTxt}
                 onChange={(e) => setCategoriaFinalTxt(e.target.value)}
                 placeholder="Categoría Final"
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
               />
-              <Button size="sm" loading={guardando} onClick={crearCategoriaFinal}>
+              <Button size="sm" className="w-full md:w-auto" loading={guardando} onClick={crearCategoriaFinal}>
                 Guardar
               </Button>
             </CardContent>
@@ -527,21 +550,23 @@ export default function DescuentosConfigPage() {
       )}
 
       {showCategoriaSoloCard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <Card className="w-full max-w-2xl">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-3 sm:items-center sm:p-4">
+          <Card className="my-auto w-full max-w-2xl">
             <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="font-semibold text-gray-900">Nueva categoría final (solo categoría)</h2>
-                <Button size="sm" variant="outline" onClick={cerrarModalCategoriaFinalSolo}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="text-sm font-semibold text-gray-900 sm:text-base dark:text-gray-100">
+                  Nueva categoría final (solo categoría)
+                </h2>
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={cerrarModalCategoriaFinalSolo}>
                   Cerrar
                 </Button>
               </div>
             </CardHeader>
-            <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <CardContent className="flex flex-col gap-3 md:grid md:grid-cols-3">
               <select
                 value={categoriaSel}
                 onChange={(e) => setCategoriaSel(e.target.value)}
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
               >
                 <option value="">Categoría</option>
                 {categoriasGlobales.map((c) => (
@@ -555,9 +580,9 @@ export default function DescuentosConfigPage() {
                 value={categoriaFinalTxt}
                 onChange={(e) => setCategoriaFinalTxt(e.target.value)}
                 placeholder="Categoría Final"
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
               />
-              <Button size="sm" loading={guardando} onClick={crearCategoriaFinalSoloCategoria}>
+              <Button size="sm" className="w-full md:w-auto" loading={guardando} onClick={crearCategoriaFinalSoloCategoria}>
                 Guardar
               </Button>
             </CardContent>
@@ -566,21 +591,21 @@ export default function DescuentosConfigPage() {
       )}
 
       {showDescuentoCard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <Card className="w-full max-w-4xl">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-3 sm:items-center sm:p-4">
+          <Card className="my-auto w-full max-w-4xl">
             <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="font-semibold text-gray-900">Nuevo descuento</h2>
-                <Button size="sm" variant="outline" onClick={cerrarModalDescuento}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="font-semibold text-gray-900 dark:text-gray-100">Nuevo descuento</h2>
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={cerrarModalDescuento}>
                   Cerrar
                 </Button>
               </div>
             </CardHeader>
-            <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-5">
+            <CardContent className="flex flex-col gap-3 md:grid md:grid-cols-5">
               <select
                 value={catFinalSel}
                 onChange={(e) => setCatFinalSel(e.target.value)}
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
               >
                 <option value="">Categoría Final</option>
                 {data.categorias_finales.map((c) => (
@@ -596,7 +621,7 @@ export default function DescuentosConfigPage() {
                 value={descuentoTxt}
                 onChange={(e) => setDescuentoTxt(e.target.value)}
                 placeholder="Descuento (1-100)"
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
               />
             <input
               type="number"
@@ -604,7 +629,7 @@ export default function DescuentosConfigPage() {
               value={diasMin}
               onChange={(e) => setDiasMin(e.target.value)}
               placeholder="Días mín."
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
             />
             <input
               type="number"
@@ -612,9 +637,9 @@ export default function DescuentosConfigPage() {
               value={diasMax}
               onChange={(e) => setDiasMax(e.target.value)}
               placeholder="Días máx."
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-slate-900"
             />
-              <Button size="sm" loading={guardando} onClick={crearDescuento}>
+              <Button size="sm" className="w-full md:w-auto" loading={guardando} onClick={crearDescuento}>
                 Guardar
               </Button>
             </CardContent>
@@ -636,9 +661,20 @@ export default function DescuentosConfigPage() {
           ) : data.categorias_finales.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400">No hay categorías finales creadas.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="border-b bg-gray-50 text-xs text-gray-600">
+            <>
+            <div className="md:hidden">
+              <CategoriasFinalesListMobile
+                items={data.categorias_finales}
+                editCat={editCat}
+                setEditCat={setEditCat}
+                guardando={guardando}
+                onSave={() => void guardarCategoriaFinalEdit()}
+                onDelete={(id) => void eliminarCategoriaFinal(id)}
+              />
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="min-w-[640px] w-full text-sm">
+                <thead className="border-b bg-gray-50 text-xs text-gray-600 dark:bg-slate-900">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">Sub Rubro</th>
                     <th className="px-3 py-2 text-left font-medium">Categoría</th>
@@ -646,7 +682,7 @@ export default function DescuentosConfigPage() {
                     <th className="px-3 py-2 text-right font-medium">Acciones</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                   {data.categorias_finales.map((c) => {
                     const isEditing = editCat?.id === c.id;
                     return (
@@ -694,13 +730,14 @@ export default function DescuentosConfigPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <h2 className="font-semibold text-gray-900">Descuentos creados</h2>
+          <h2 className="font-semibold text-gray-900 dark:text-gray-100">Descuentos creados</h2>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -710,9 +747,28 @@ export default function DescuentosConfigPage() {
           ) : data.descuentos.length === 0 ? (
             <p className="px-5 py-4 text-sm text-gray-400">No hay descuentos creados.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="border-b bg-gray-50 text-xs text-gray-600">
+            <>
+            <div className="md:hidden">
+              <DescuentosCreadosListMobile
+                items={data.descuentos}
+                editDesc={editDesc}
+                setEditDesc={setEditDesc}
+                guardando={guardando}
+                onSave={() => void guardarDescuentoEdit()}
+                onDelete={(id) => void eliminarDescuento(id)}
+                onStartEdit={(d) =>
+                  setEditDesc({
+                    id: d.id,
+                    descuento: String(d.descuento),
+                    dias_min: String(d.dias_min),
+                    dias_max: String(d.dias_max),
+                  })
+                }
+              />
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="min-w-[560px] w-full text-sm">
+                <thead className="border-b bg-gray-50 text-xs text-gray-600 dark:bg-slate-900">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">Categoría Final</th>
                     <th className="px-3 py-2 text-right font-medium">Descuento</th>
@@ -721,7 +777,7 @@ export default function DescuentosConfigPage() {
                     <th className="px-3 py-2 text-right font-medium">Acciones</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                   {data.descuentos.map((d) => {
                     const isEditing = editDesc?.id === d.id;
                     return (
@@ -811,6 +867,7 @@ export default function DescuentosConfigPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { createOperadorSessionCookie } from '@/lib/auth/session';
-import { getAppMaintenanceStatus } from '@/lib/maintenance';
+import { SUCURSAL_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
   const userAgent = request.headers.get('user-agent') ?? null;
   const { data: row, error } = await admin
     .from('operadores')
-    .select('idoperador, operador, nombrecompleto, rol, activo')
+    .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
     .eq('operador', operador)
     .eq('codigo', codigo)
     .maybeSingle();
@@ -98,28 +98,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Operador o código incorrectos' }, { status: 401 });
   }
 
-  try {
-    const maintenanceStatus = await getAppMaintenanceStatus();
-    const esSuperadmin = String(row.rol ?? '').toLowerCase() === 'superadmin';
-    if (maintenanceStatus.isActive && !esSuperadmin) {
-      return NextResponse.json(
-        {
-          error: 'La aplicación está en mantenimiento. Intentá nuevamente en unos minutos.',
-          maintenance: true,
-        },
-        { status: 503 }
-      );
+  if (!row.app_role_id && row.rol) {
+    const { data: sysRole } = await admin
+      .from('app_roles')
+      .select('id')
+      .eq('codigo', row.rol)
+      .maybeSingle();
+    if (sysRole?.id) {
+      await admin
+        .from('operadores')
+        .update({ app_role_id: sysRole.id })
+        .eq('idoperador', row.idoperador);
     }
-  } catch (error) {
-    console.error('No se pudo validar estado de mantenimiento en login:', error);
   }
+
+  const rolSesion = (String(row.rol ?? 'operador_sucursal').toLowerCase() === 'superadmin'
+    ? 'superadmin'
+    : String(row.rol ?? '').toLowerCase() === 'admin'
+      ? 'admin'
+      : 'operador_sucursal') as 'superadmin' | 'admin' | 'operador_sucursal';
 
   const cookieStore = await cookies();
   const operadorCookie = createOperadorSessionCookie({
     idoperador: row.idoperador,
     operador: row.operador,
     nombrecompleto: row.nombrecompleto ?? row.operador,
-    rol: row.rol ?? 'operador_sucursal',
+    rol: rolSesion,
   });
   cookieStore.set(operadorCookie.name, operadorCookie.value, operadorCookie.options);
 
@@ -173,7 +177,12 @@ export async function POST(request: NextRequest) {
         });
         return NextResponse.json({ error: 'Contraseña de sucursal incorrecta' }, { status: 401 });
       }
-      const opts = { httpOnly: true, path: '/' as const, maxAge: 60 * 60 * 12, sameSite: 'lax' as const };
+      const opts = {
+        httpOnly: true,
+        path: '/' as const,
+        maxAge: SUCURSAL_SESSION_MAX_AGE_SEC,
+        sameSite: 'lax' as const,
+      };
       cookieStore.set('sucursal_id', String(sucursal.sucursal), opts);
       cookieStore.set('sucursal_nombre', sucursal.nombrefantasia, opts);
       cookieStore.set('sucursal_codigo', String(sucursal.sucursal), opts);

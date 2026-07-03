@@ -1,15 +1,11 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
-import { isAdminLikeRole } from '@/lib/auth/roles';
+import { requirePermission } from '@/lib/auth/rbac';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/ajustes - lista de ajustes realizados (solo admin) */
 export async function GET(request: NextRequest) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (!isAdminLikeRole(operador.rol)) {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
+  const guard = await requirePermission('admin.ajustes_historial');
+  if (!guard.ok) return guard.response;
 
   const { searchParams } = new URL(request.url);
   const page = parseInt(searchParams.get('page') ?? '1', 10);

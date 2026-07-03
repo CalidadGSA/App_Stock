@@ -198,7 +198,22 @@ set tipo = case
   else 'ocasional_sucursal'
 end
 where tipo is null
-   or tipo not in ('diario', 'ocasional_sucursal', 'ocasional_auditoria', 'auditoria');
+   or tipo not in ('diario', 'ocasional_sucursal', 'ocasional_auditoria', 'auditoria', 'auditoria_integral');
+
+alter table controles_inventario
+  drop constraint if exists controles_inventario_tipo_check;
+
+alter table controles_inventario
+  add constraint controles_inventario_tipo_check
+  check (
+    tipo in (
+      'diario',
+      'ocasional_sucursal',
+      'ocasional_auditoria',
+      'auditoria',
+      'auditoria_integral'
+    )
+  );
 
 -- ------------------------------------------------------------
 -- CONTROLES DE INVENTARIO  (detalle)
@@ -336,12 +351,17 @@ alter table controles_vencimientos_detalle
 create table if not exists vencimientos_detalle_ventas (
   id                         uuid primary key default gen_random_uuid(),
   detalle_id                 uuid not null references controles_vencimientos_detalle(id) on delete cascade,
-  cantidad_vendida           numeric(12,2) not null check (cantidad_vendida > 0),
+  cantidad_vendida           numeric(12,2) not null,
   cantidad_restante_despues  numeric(12,2) not null check (cantidad_restante_despues >= 0),
   linea_vendida_completa     smallint not null default 0,
+  es_ajuste                  smallint not null default 0,
   usuario_id                 integer references operadores(IDOperador),
   sucursal_id                integer not null references sucursales(Sucursal),
-  created_at                 timestamptz not null default now()
+  created_at                 timestamptz not null default now(),
+  check (
+    (es_ajuste = 0 and cantidad_vendida > 0)
+    or (es_ajuste = 1 and cantidad_vendida <> 0)
+  )
 );
 create index if not exists idx_vdv_detalle on vencimientos_detalle_ventas(detalle_id);
 create index if not exists idx_vdv_sucursal on vencimientos_detalle_ventas(sucursal_id);
@@ -469,6 +489,25 @@ before update on modo_mantenimiento
 for each row
 execute function set_modo_mantenimiento_updated_at();
 
+-- Historial de lapsos en mantenimiento (escritura desde n8n)
+create table if not exists historial_modo_mantenimiento (
+  id         uuid primary key default gen_random_uuid(),
+  inicio_at  timestamptz not null,
+  fin_at     timestamptz,
+  origen     text,
+  notas      text,
+  created_at timestamptz not null default now(),
+  constraint historial_mantenimiento_fin_despues_inicio_chk
+    check (fin_at is null or fin_at >= inicio_at)
+);
+create unique index if not exists idx_historial_mantenimiento_periodo_abierto
+  on historial_modo_mantenimiento ((true))
+  where fin_at is null;
+create index if not exists idx_historial_mantenimiento_inicio
+  on historial_modo_mantenimiento (inicio_at desc);
+create index if not exists idx_historial_mantenimiento_fin
+  on historial_modo_mantenimiento (fin_at desc nulls last);
+
 -- Compatibilidad con instalaciones existentes
 alter table if exists controles_inventario_detalle
   alter column codigo_barras drop not null;
@@ -492,6 +531,7 @@ alter table controles_vencimientos       enable row level security;
 alter table controles_vencimientos_detalle enable row level security;
 alter table vencimientos_detalle_ventas enable row level security;
 alter table modo_mantenimiento           enable row level security;
+alter table historial_modo_mantenimiento enable row level security;
 
 -- ------------------------------------------------------------
 -- FUNCIÓN: incrementar vecesInventariado al cerrar un inventario diario
@@ -517,3 +557,5 @@ $$;
 
 -- Políticas: el service_role bypassa RLS automáticamente.
 -- (Operadores se gestiona por sync legacy; sin tabla usuarios no hay política por auth.uid.)
+
+-- RBAC (roles y permisos configurables): ver supabase/migrations/001_rbac.sql

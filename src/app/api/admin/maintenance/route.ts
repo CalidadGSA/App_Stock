@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getOperadorSession } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/server';
 import { getAppMaintenanceStatus } from '@/lib/maintenance';
-import { isSuperAdminRole } from '@/lib/auth/roles';
+import { requirePermission } from '@/lib/auth/rbac';
 
 const MAINTENANCE_ROW_ID = 1;
 
 export async function GET() {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (!isSuperAdminRole(operador.rol)) {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
+  const guard = await requirePermission('admin.maintenance');
+  if (!guard.ok) return guard.response;
 
   try {
     const status = await getAppMaintenanceStatus();
@@ -23,11 +19,8 @@ export async function GET() {
 }
 
 export async function PATCH(request: NextRequest) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-  if (!isSuperAdminRole(operador.rol)) {
-    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-  }
+  const guard = await requirePermission('admin.maintenance');
+  if (!guard.ok) return guard.response;
 
   let body: { is_active?: number } = {};
   try {

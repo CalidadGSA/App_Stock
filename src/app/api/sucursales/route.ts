@@ -1,5 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { isAdminLikeRole } from '@/lib/auth/roles';
+import { filtroSucursalesExcluidasLogin } from '@/lib/sucursales/login-sucursales';
 import { NextResponse } from 'next/server';
 
 /** GET /api/sucursales - todas las sucursales activas */
@@ -12,7 +14,7 @@ export async function GET() {
     .from('sucursales')
     .select('sucursal, nombrefantasia, domicilio, activa')
     .eq('activa', true)
-    .not('sucursal', 'in', '(9,10,15,18)')
+    .not('sucursal', 'in', filtroSucursalesExcluidasLogin())
     .order('nombrefantasia');
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -24,5 +26,8 @@ export async function GET() {
     ubicacion: r.domicilio,
     activa: r.activa,
   }));
-  return NextResponse.json({ data: dataMapped });
+  return NextResponse.json({
+    data: dataMapped,
+    omitir_contraseña_sucursal: isAdminLikeRole(operador.rol),
+  });
 }
