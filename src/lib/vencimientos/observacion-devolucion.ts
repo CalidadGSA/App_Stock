@@ -14,8 +14,10 @@ export function ratioVendidoSobreOriginal(
 
 export function obligatorioObservacionDevolucion(
   cantidadCargadaOriginal: number,
-  cantidadVendidaAcumulada: number
+  cantidadVendidaAcumulada: number,
+  opts?: { omitirSiSuperadmin?: boolean }
 ): boolean {
+  if (opts?.omitirSiSuperadmin) return false;
   const orig = Number(cantidadCargadaOriginal) || 0;
   if (orig <= 0) return false;
   const vend = Number(cantidadVendidaAcumulada) || 0;

@@ -19,6 +19,11 @@ export type PadronProductoFicha = {
   fraccionable?: number;
   refrigerado?: boolean;
   codigos_secundarios: string[];
+  /** Ubicación física droguería (base_productos_drogueria). */
+  sector?: number | null;
+  modulo?: string | null;
+  fila?: number | null;
+  posicion?: number | null;
 };
 
 type ResolvedCols = {
@@ -462,6 +467,10 @@ export function fichaPadronAProductoLegacy(
     unidades_por_caja: stock?.unidades_por_caja,
     fraccionable: ficha.fraccionable,
     refrigerado: ficha.refrigerado,
+    sector: ficha.sector ?? null,
+    modulo: ficha.modulo ?? null,
+    fila: ficha.fila ?? null,
+    posicion: ficha.posicion ?? null,
   };
 }
 
@@ -602,12 +611,20 @@ async function getFichasDesdeMedicamentos(
 export async function getFichasInventarioDiario(
   admin: Awaited<ReturnType<typeof import('@/lib/supabase/server').createAdminClient>>,
   ids: number[],
-  opts: { sinPadron: boolean }
+  opts: { sinPadron: boolean; drogueria?: boolean; trimestre?: string | null }
 ): Promise<PadronProductoFicha[]> {
   const ordenados = ids.filter((n) => Number.isFinite(n) && n > 0);
   if (ordenados.length === 0) return [];
 
   const porId = new Map<number, PadronProductoFicha>();
+
+  if (opts.drogueria) {
+    const { getFichasDesdeBaseProductosDrogueria } = await import(
+      '@/lib/inventario/base-productos-drogueria'
+    );
+    return getFichasDesdeBaseProductosDrogueria(admin, ordenados, opts.trimestre ?? null);
+  }
+
   if (padronProductosDisponible()) {
     const fromPadron = await getProductosPadronByIds(ordenados);
     for (const f of fromPadron) {

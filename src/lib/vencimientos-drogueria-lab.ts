@@ -13,6 +13,56 @@ export const SIN_DROGUERIA_ASIGNADA = '__sin_drogueria_asignada__';
 
 export const SIN_DROGUERIA_ASIGNADA_LABEL = 'Sin droguería asignada';
 
+/** Valor interno del filtro «Trazables» en Separar por bulto. */
+export const FILTRO_TRAZABLES = '__trazables__';
+
+export const TRAZABLE_LABEL = 'Trazable';
+export const FILTRO_TRAZABLES_LABEL = 'Trazables';
+
+/**
+ * Carga el set de productos trazables (tabla `trazables.idproducto`).
+ * Si la tabla no existe o falla, devuelve set vacío.
+ */
+export async function cargarIdsTrazables(admin: AdminClient): Promise<Set<number>> {
+  const out = new Set<number>();
+  const chunkSize = 1000;
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await admin
+      .from('trazables')
+      .select('idproducto')
+      .range(from, from + chunkSize - 1);
+
+    if (error) {
+      console.warn('cargarIdsTrazables:', error.message);
+      break;
+    }
+
+    const batch = data ?? [];
+    if (batch.length === 0) break;
+
+    for (const row of batch) {
+      const id = Number((row as { idproducto?: number }).idproducto);
+      if (Number.isFinite(id) && id > 0) out.add(id);
+    }
+
+    if (batch.length < chunkSize) break;
+    from += chunkSize;
+  }
+
+  return out;
+}
+
+export function esProductoTrazable(
+  productoIdSistema: string | number | null | undefined,
+  idsTrazables: Set<number>
+): boolean {
+  const id = Number(productoIdSistema);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  return idsTrazables.has(id);
+}
+
 export type MacroBulto = 'FARMA' | 'BIENESTAR' | 'PSICOTROPICOS';
 
 export type PadronProductoResumen = {
@@ -367,6 +417,7 @@ export function excluidoDeFiltroBulto(
 export function etiquetaDrogueriaDevolucion(drogueria: string | null | undefined): string | null {
   if (!drogueria) return null;
   if (drogueria === SIN_DROGUERIA_ASIGNADA) return SIN_DROGUERIA_ASIGNADA_LABEL;
+  if (drogueria === FILTRO_TRAZABLES) return FILTRO_TRAZABLES_LABEL;
   return drogueria;
 }
 
@@ -380,6 +431,7 @@ export function textoBadgeDrogueriaDevolucion(drogueria: string | null | undefin
  * Asignación «Separar por bulto»:
  * producto_id → medicamentos.codlab → vencimientos_drogueria_laboratorio.drogueria
  * (padrón solo define si es FARMA / bienestar / psico para excluir).
+ * Productos en tabla `trazables` no se asignan a ninguna droguería ni a «sin droguería».
  */
 export function resolverDrogueriaDevolucion(
   item: {
@@ -391,8 +443,13 @@ export function resolverDrogueriaDevolucion(
   medicamentoMeta: MedicamentoDrogueriaMeta | undefined,
   drogueriaPorCodlab: Map<number, DrogueriaLaboratorioRow>,
   nombrePsicoPorId: Map<string, string>,
-  hoyYmd: string = fechaHoyArgentinaYmd()
+  hoyYmd: string = fechaHoyArgentinaYmd(),
+  idsTrazables?: Set<number>
 ): string | null {
+  if (idsTrazables && esProductoTrazable(item.producto_id_sistema, idsTrazables)) {
+    return null;
+  }
+
   if (
     excluidoDeFiltroBulto(
       macroEfectiva,
@@ -423,7 +480,7 @@ export function resolverDrogueriaDevolucion(
 
 export function opcionesFiltroBulto(droguerias: string[]): string[] {
   const ordenadas = [...droguerias].sort((a, b) => a.localeCompare(b, 'es'));
-  return [...ordenadas, SIN_DROGUERIA_ASIGNADA];
+  return [...ordenadas, SIN_DROGUERIA_ASIGNADA, FILTRO_TRAZABLES];
 }
 
 export function serializarPadronPorProducto(

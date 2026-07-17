@@ -25,6 +25,11 @@ interface DetalleBody {
   descripcion: string;
   presentacion?: string;
   laboratorio?: string;
+  /** Ubicación física droguería (opcional) */
+  sector?: number | null;
+  modulo?: string | null;
+  fila?: number | null;
+  posicion?: number | null;
   stock_sistema: number;
   /** Stock de sistema desglosado, si el frontend lo conoce */
   stock_sist_cajas?: number;
@@ -138,6 +143,10 @@ export async function POST(
       descripcion: body.descripcion,
       presentacion: body.presentacion ?? null,
       laboratorio: body.laboratorio ?? null,
+      sector: body.sector ?? null,
+      modulo: body.modulo ?? null,
+      fila: body.fila ?? null,
+      posicion: body.posicion ?? null,
       stock_sistema: body.stock_sistema,
       stock_sist_cajas: sistCajas,
       stock_sist_unidades: sistUnidades,

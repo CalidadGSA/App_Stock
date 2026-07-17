@@ -67,6 +67,8 @@ const {
 const {
   testproductoscodebarsconnection,
   syncproductoscodebars,
+  syncusuariosquantio,
+  syncproductosquantio,
 } = require('../../controllers/obrasSociales/controller');
 const {
   syncmedicamentoscodebars,
@@ -178,6 +180,10 @@ router.get('/stock/sync/progress', (req, res) => {
 // Productos ↔ codebars (Quantio → Supabase)
 router.get('/productoscodebars/test-connection', testproductoscodebarsconnection);
 router.post('/productoscodebars/sync', syncproductoscodebars);
+
+// Droguería Quantio: usuarios y productos
+router.post('/usuarios-quantio/sync', syncusuariosquantio);
+router.post('/productos-quantio/sync', syncproductosquantio);
 
 // Completar codebar2/3/4 en medicamentos a partir de productoscodebars
 router.post('/medicamentos/codebars/sync', syncmedicamentoscodebars);

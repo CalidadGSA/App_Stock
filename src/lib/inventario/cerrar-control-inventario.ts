@@ -6,6 +6,11 @@ import {
 } from '@/lib/inventario/categoria-macro';
 import { consolidarDiferenciasDetalleControl } from '@/lib/inventario/consolidar-diferencias-detalle';
 import { esTipoDiario, inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
+import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
+import {
+  incrementarVecesInventariadoDrogueria,
+  obtenerTrimestreVigenteDrogueria,
+} from '@/lib/inventario/base-productos-drogueria';
 
 export type ControlInventarioParaCerrar = {
   id: string;
@@ -81,7 +86,8 @@ export async function cerrarControlInventario(
   const { error: detalleCloseError } = await admin
     .from('controles_inventario_detalle')
     .update({ fecha_registro: fechaCierre })
-    .eq('control_id', controlId);
+    .eq('control_id', controlId)
+    .eq('con_diferencias', 1);
 
   if (detalleCloseError) {
     return { ok: false, controlId, code: 'error', message: detalleCloseError.message };
@@ -96,21 +102,31 @@ export async function cerrarControlInventario(
     const macroBase = esCategoriaMacroSinPadron(categoriaMacro)
       ? CATEGORIA_MACRO_SIN_PADRON
       : categoriaMacro;
+    const esDrogueria = await esSucursalDrogueria(admin, sucursalNum);
 
-    const { data: trRows, error: trError } = await filtrarQueryBaseProductosPorMacro(
-      admin
-        .from('base_productos')
-        .select('trimestre')
-        .eq('idsucursal', sucursalNum)
-        .lte('fechainicio', fechaControl)
-        .gte('fechafin', fechaControl)
-        .limit(1),
-      macroBase
-    );
+    let trimestre: string | null = null;
 
-    if (!trError && trRows && trRows.length > 0) {
-      const trimestre = (trRows[0] as { trimestre: string }).trimestre;
+    if (esDrogueria) {
+      const trDro = await obtenerTrimestreVigenteDrogueria(admin, fechaControl, macroBase);
+      trimestre = trDro?.trimestre ?? null;
+    } else {
+      const { data: trRows, error: trError } = await filtrarQueryBaseProductosPorMacro(
+        admin
+          .from('base_productos')
+          .select('trimestre')
+          .eq('idsucursal', sucursalNum)
+          .lte('fechainicio', fechaControl)
+          .gte('fechafin', fechaControl)
+          .limit(1),
+        macroBase
+      );
 
+      if (!trError && trRows && trRows.length > 0) {
+        trimestre = (trRows[0] as { trimestre: string }).trimestre;
+      }
+    }
+
+    if (trimestre) {
       const { data: detRows, error: detError } = await admin
         .from('controles_inventario_detalle')
         .select('producto_id_sistema, stock_real_cajas, stock_real_unidades')
@@ -130,15 +146,19 @@ export async function cerrarControlInventario(
         ) as number[];
 
         if (idProductos.length > 0) {
-          const { error: rpcError } = await admin.rpc('incrementar_veces_inventariado', {
-            p_sucursal_id: sucursalNum,
-            p_categoria_macro: categoriaMacro,
-            p_trimestre: trimestre,
-            p_id_productos: idProductos,
-          });
+          if (esDrogueria) {
+            await incrementarVecesInventariadoDrogueria(admin, trimestre, idProductos);
+          } else {
+            const { error: rpcError } = await admin.rpc('incrementar_veces_inventariado', {
+              p_sucursal_id: sucursalNum,
+              p_categoria_macro: categoriaMacro,
+              p_trimestre: trimestre,
+              p_id_productos: idProductos,
+            });
 
-          if (rpcError) {
-            console.error('Error al incrementar vecesInventariado en base_productos:', rpcError);
+            if (rpcError) {
+              console.error('Error al incrementar vecesInventariado en base_productos:', rpcError);
+            }
           }
         }
       }

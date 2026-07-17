@@ -14,6 +14,12 @@ import {
   cargarDiferenciasSucursalPorProducto,
   diferenciaSucursalParaProducto,
 } from '@/lib/inventario/diferencia-sucursal-auditoria';
+import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
+import {
+  debeOcultarInventariosDeAdmin,
+  esUsuarioAdminLikeId,
+  idsOperadoresAdminLike,
+} from '@/lib/auth/operadores-admin-like';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -62,6 +68,13 @@ export async function GET(
     return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   }
 
+  if (debeOcultarInventariosDeAdmin(rbac)) {
+    const idsAdminLike = await idsOperadoresAdminLike(admin);
+    if (esUsuarioAdminLikeId(data.usuario_id as number | string | null, idsAdminLike)) {
+      return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
+    }
+  }
+
   const sucursalJoin = data.sucursales as { nombrefantasia?: string } | { nombrefantasia?: string }[] | null;
   const sucursalNombre = Array.isArray(sucursalJoin)
     ? sucursalJoin[0]?.nombrefantasia
@@ -81,14 +94,59 @@ export async function GET(
     );
   }
 
-  let payload = data;
+  let payload = data as typeof data & { es_drogueria?: boolean };
+  const esDrogueria = await esSucursalDrogueria(admin, Number(data.sucursal_id));
+  payload = {
+    ...payload,
+    es_drogueria: esDrogueria,
+  };
 
   if (
-    esTipoAuditoria(tipoControl) &&
+    esDrogueria &&
     Array.isArray(data.controles_inventario_detalle) &&
     data.controles_inventario_detalle.length > 0
   ) {
-    const productoIds = data.controles_inventario_detalle.map(
+    const detalles = data.controles_inventario_detalle as Array<{
+      producto_id_sistema?: string;
+      laboratorio?: string | null;
+    }>;
+    const sinLab = detalles.filter((d) => !String(d.laboratorio ?? '').trim());
+    if (sinLab.length > 0) {
+      try {
+        const { getFichasDesdeProductosQuantio } = await import(
+          '@/lib/quantio-productos-lookup'
+        );
+        const ids = sinLab
+          .map((d) => Number(d.producto_id_sistema))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        const fichas = await getFichasDesdeProductosQuantio(admin, ids);
+        const labPorId = new Map(
+          fichas.map((f) => [String(f.producto_id_sistema), f.laboratorio ?? null])
+        );
+        payload = {
+          ...payload,
+          controles_inventario_detalle: detalles.map((d) => {
+            const actual = String(d.laboratorio ?? '').trim();
+            if (actual) return d;
+            const lab = labPorId.get(String(d.producto_id_sistema ?? ''));
+            return lab ? { ...d, laboratorio: lab } : d;
+          }),
+        };
+      } catch (e) {
+        console.warn(
+          '[inventario/id] enriquecer laboratorio droguería:',
+          (e as Error).message
+        );
+      }
+    }
+  }
+
+  if (
+    esTipoAuditoria(tipoControl) &&
+    Array.isArray(payload.controles_inventario_detalle) &&
+    payload.controles_inventario_detalle.length > 0
+  ) {
+    const productoIds = payload.controles_inventario_detalle.map(
       (d: { producto_id_sistema?: string }) => String(d.producto_id_sistema ?? '')
     );
     try {
@@ -98,8 +156,8 @@ export async function GET(
         productoIds
       );
       payload = {
-        ...data,
-        controles_inventario_detalle: data.controles_inventario_detalle.map(
+        ...payload,
+        controles_inventario_detalle: payload.controles_inventario_detalle.map(
           (d: { producto_id_sistema?: string }) => {
             const dif = diferenciaSucursalParaProducto(
               difSucursalMap,

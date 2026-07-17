@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { requirePermission } from '@/lib/auth/rbac';
+import { rangoUtcAjustesInventario } from '@/lib/inventario/ajustes-query-fecha';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/inventario/diferencias - lista diferencias no ajustadas para una sucursal y rango de fechas (solo admin) */
@@ -30,19 +31,19 @@ export async function GET(request: NextRequest) {
 
   const admin = await createAdminClient();
 
-  const desdeIso = `${desde}T00:00:00.000Z`;
-  const hastaIso = `${hasta}T23:59:59.999Z`;
+  const { desdeIso, hastaIso } = rangoUtcAjustesInventario(desde, hasta);
 
-  // Traer detalles de inventario con diferencias y que no estén ajustados
+  // Por fecha de cierre del control (controles cerrados tarde no reaparecen en días ya ajustados).
   let query = admin
     .from('controles_inventario_detalle')
     .select(
-      'id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, origen, estado)'
+      'id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, fecha_registro, controles_inventario!inner(fecha_inicio, fecha_fin, sucursal_id, origen, estado)'
     )
     .eq('controles_inventario.sucursal_id', sucursalId)
     .eq('controles_inventario.estado', 'cerrado')
-    .gte('controles_inventario.fecha_inicio', desdeIso)
-    .lte('controles_inventario.fecha_inicio', hastaIso)
+    .not('controles_inventario.fecha_fin', 'is', null)
+    .gte('controles_inventario.fecha_fin', desdeIso)
+    .lte('controles_inventario.fecha_fin', hastaIso)
     .eq('con_diferencias', 1)
     .eq('ajustado', 0);
 

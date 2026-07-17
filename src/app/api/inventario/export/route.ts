@@ -2,6 +2,7 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { requirePermission } from '@/lib/auth/rbac';
 import { serializarCsvAjuste, type FormatoCsvAjuste } from '@/lib/csv-ajuste';
+import { rangoUtcAjustesInventario } from '@/lib/inventario/ajustes-query-fecha';
 import { NextRequest, NextResponse } from 'next/server';
 
 function etiquetaOrigenArchivoAjuste(origen: string | null): string {
@@ -55,19 +56,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Sucursal no encontrada' }, { status: 404 });
   }
 
-  const desdeIso = `${desde}T00:00:00.000Z`;
-  const hastaIso = `${hasta}T23:59:59.999Z`;
+  const { desdeIso, hastaIso } = rangoUtcAjustesInventario(desde, hasta);
 
-  // Traer detalles de inventario con unión a controles para filtrar por sucursal y fecha
   let query = admin
     .from('controles_inventario_detalle')
     .select(
-      'id, producto_id_sistema, codigo_barras, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, sucursal_id, origen, estado)'
+      'id, producto_id_sistema, codigo_barras, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(fecha_inicio, fecha_fin, sucursal_id, origen, estado)'
     )
     .eq('controles_inventario.sucursal_id', sucursalId)
     .eq('controles_inventario.estado', 'cerrado')
-    .gte('controles_inventario.fecha_inicio', desdeIso)
-    .lte('controles_inventario.fecha_inicio', hastaIso)
+    .not('controles_inventario.fecha_fin', 'is', null)
+    .gte('controles_inventario.fecha_fin', desdeIso)
+    .lte('controles_inventario.fecha_fin', hastaIso)
     .eq('con_diferencias', 1)
     .eq('ajustado', 0);
 

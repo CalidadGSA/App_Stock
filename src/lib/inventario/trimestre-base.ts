@@ -1,6 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { orFiltroMacrosPadronTrimestre } from '@/lib/inventario/categoria-macro';
 import { esDiferenciaDeControlAuditoria } from '@/lib/inventario/diferencias-resumen-carga';
+import {
+  calcularProgresoPsicotropicos,
+  leerVueltasPsicosSucursal,
+  sumarVecesInventariadoPsicotropicos,
+} from '@/lib/inventario/vueltas-psicos-sucursal';
+import {
+  obtenerProgresoPorMacroDrogueria,
+  obtenerTrimestreVigenteDrogueria,
+} from '@/lib/inventario/base-productos-drogueria';
+import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
 import { ymdAddDays, rangoFechasArgentinaIso } from '@/lib/utils';
 import { rangoIsoRegistroTrimestre } from '@/lib/inventario/trimestre-periodo';
 import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
@@ -83,34 +92,6 @@ export function trimestrePadronCompleto(
   return progreso.pendientes <= 0;
 }
 
-/** Conteo en base_productos solo para macros de padrón trimestral (sin «Sin padron»). */
-async function contarBaseProductosProgresoPadron(
-  admin: SupabaseClient,
-  v: (typeof COLUMN_VARIANTS)[number],
-  sucId: number,
-  trimestreDb: string,
-  opts?: { soloInventariados?: boolean }
-): Promise<number | null> {
-  const macroField = CAMPO_MACRO_BASE_PRODUCTOS;
-  let q = admin
-    .from('base_productos')
-    .select('*', { count: 'exact', head: true })
-    .eq(v.id, sucId)
-    .eq(v.trim, trimestreDb)
-    .or(orFiltroMacrosPadronTrimestre(macroField));
-
-  if (opts?.soloInventariados) {
-    q = q.gt(v.veces, 0);
-  }
-
-  const { count, error } = await q;
-  if (error) {
-    console.error('contarBaseProductosProgresoPadron:', error.message);
-    return null;
-  }
-  return count ?? 0;
-}
-
 async function obtenerProgresoPorMacroTrimestre(
   admin: SupabaseClient,
   v: (typeof COLUMN_VARIANTS)[number],
@@ -119,8 +100,27 @@ async function obtenerProgresoPorMacroTrimestre(
 ): Promise<ProgresoTrimestreMacro[]> {
   const macroField = CAMPO_MACRO_BASE_PRODUCTOS;
   const porMacro: ProgresoTrimestreMacro[] = [];
+  const vueltasPsicos = await leerVueltasPsicosSucursal(admin, sucId);
 
   for (const macro of MACROS_TRIMESTRE) {
+    if (macro === 'PSICOTROPICOS') {
+      const { cantidadProductos, sumaVecesInventariado } =
+        await sumarVecesInventariadoPsicotropicos(admin, sucId, trimestreDb, v);
+      const psico = calcularProgresoPsicotropicos(
+        cantidadProductos,
+        sumaVecesInventariado,
+        vueltasPsicos
+      );
+      porMacro.push({
+        macro,
+        total: psico.total,
+        inventariados: psico.inventariados,
+        pendientes: psico.pendientes,
+        porcentaje: psico.porcentaje,
+      });
+      continue;
+    }
+
     const { count: total, error: errTotal } = await admin
       .from('base_productos')
       .select('*', { count: 'exact', head: true })
@@ -173,6 +173,25 @@ export async function obtenerProgresoTrimestreSucursal(
     porcentaje: 0,
   };
 
+  if (await esSucursalDrogueria(admin, sucId)) {
+    const tr = await obtenerTrimestreVigenteDrogueria(admin, hoyStrArgentina);
+    if (!tr) return vacio;
+    const vueltasPsicos = await leerVueltasPsicosSucursal(admin, sucId);
+    const por_macro = await obtenerProgresoPorMacroDrogueria(admin, tr.trimestre, vueltasPsicos);
+    const { total, inventariados, pendientes, porcentaje } =
+      totalesDesdeProgresoPorMacro(por_macro);
+    return {
+      trimestre: tr.trimestre,
+      fecha_inicio: tr.fechainicio,
+      fecha_fin: tr.fechafin,
+      total,
+      inventariados,
+      pendientes,
+      porcentaje,
+      por_macro,
+    };
+  }
+
   for (const v of COLUMN_VARIANTS) {
     const { data: muestra, error: errMuestra } = await admin
       .from('base_productos')
@@ -192,27 +211,8 @@ export async function obtenerProgresoTrimestreSucursal(
 
     const por_macro = await obtenerProgresoPorMacroTrimestre(admin, v, sucId, trimestreDb);
 
-    const totalDirecto = await contarBaseProductosProgresoPadron(admin, v, sucId, trimestreDb);
-    const inventariadosDirecto = await contarBaseProductosProgresoPadron(admin, v, sucId, trimestreDb, {
-      soloInventariados: true,
-    });
-
-    if (totalDirecto == null || inventariadosDirecto == null) continue;
-
-    const desdeMacros = totalesDesdeProgresoPorMacro(por_macro);
-    const total = totalDirecto;
-    const inventariados = inventariadosDirecto;
-    const pendientes = Math.max(0, total - inventariados);
-    const porcentaje = total > 0 ? Math.round((inventariados / total) * 100) : 0;
-
-    if (desdeMacros.total !== total) {
-      console.warn('Progreso trimestre: total por macro no coincide con filtro OR', {
-        sucId,
-        trimestreDb,
-        totalDirecto: total,
-        totalPorMacro: desdeMacros.total,
-      });
-    }
+    const { total, inventariados, pendientes, porcentaje } =
+      totalesDesdeProgresoPorMacro(por_macro);
 
     return {
       trimestre: trimestreDb,
@@ -254,17 +254,8 @@ export async function obtenerProgresoPorTrimestreLabel(
   for (const v of COLUMN_VARIANTS) {
     const por_macro = await obtenerProgresoPorMacroTrimestre(admin, v, sucId, trimestreDb);
 
-    const totalDirecto = await contarBaseProductosProgresoPadron(admin, v, sucId, trimestreDb);
-    const inventariadosDirecto = await contarBaseProductosProgresoPadron(admin, v, sucId, trimestreDb, {
-      soloInventariados: true,
-    });
-
-    if (totalDirecto == null || inventariadosDirecto == null) continue;
-
-    const total = totalDirecto;
-    const inventariados = inventariadosDirecto;
-    const pendientes = Math.max(0, total - inventariados);
-    const porcentaje = total > 0 ? Math.round((inventariados / total) * 100) : 0;
+    const { total, inventariados, pendientes, porcentaje } =
+      totalesDesdeProgresoPorMacro(por_macro);
 
     return {
       trimestre: trimestreDb,

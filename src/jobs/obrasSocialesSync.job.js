@@ -19,6 +19,12 @@ const {
   syncPsicofarmacosLegacyToSupabase,
 } = require('../controllers/obrasSociales/syncpsicofarmacos');
 const {
+  syncUsuariosQuantioToSupabase,
+} = require('../controllers/obrasSociales/syncusuariosquantio');
+const {
+  syncProductosQuantioToSupabase,
+} = require('../controllers/obrasSociales/syncproductosquantio');
+const {
   syncLaboratoriosLegacyToSupabase,
 } = require('../controllers/obrasSociales/synclaboratorios');
 
@@ -54,12 +60,14 @@ function shouldSkipDuplicateStart() {
 
 async function runLegacySyncBatch() {
   console.log(
-    '\n⏰ Sync legacy → Supabase (sucursales, operadores, medicamentos, catálogos, laboratorios)',
+    '\n⏰ Sync legacy → Supabase (sucursales, operadores, medicamentos, catálogos, laboratorios, Quantio droguería)',
     new Date().toLocaleString('es-AR', { timeZone: TZ })
   );
 
   await syncLegacyToSupabase({ mode: 'ALL' });
   await syncOperadoresLegacyToSupabase({ mode: 'ALL' });
+  await syncUsuariosQuantioToSupabase();
+  await syncProductosQuantioToSupabase();
   await syncMedicamentosLegacyToSupabase({ mode: 'ALL' });
   await syncRubrosLegacyToSupabase({ mode: 'ALL' });
   await syncSubrubrosLegacyToSupabase({ mode: 'ALL' });

@@ -41,6 +41,14 @@ const {
   syncProductosCodebarsState,
 } = require('./syncproductoscodebars');
 const {
+  syncUsuariosQuantioToSupabase,
+  syncUsuariosQuantioState,
+} = require('./syncusuariosquantio');
+const {
+  syncProductosQuantioToSupabase,
+  syncProductosQuantioState,
+} = require('./syncproductosquantio');
+const {
   syncMedicamentosCodebars,
   syncMedicamentosCodebarsState,
 } = require('./syncmedicamentosCodebars');
@@ -152,6 +160,46 @@ exports.syncproductoscodebars = (req, res) => {
     message: 'Sync productoscodebars iniciado',
     limit: limit || null,
     state: syncProductosCodebarsState,
+  });
+};
+
+exports.syncusuariosquantio = (_req, res) => {
+  if (syncUsuariosQuantioState.inProgress) {
+    return res.status(409).json({
+      success: false,
+      message: 'Sync de usuarios Quantio ya en progreso',
+      state: syncUsuariosQuantioState,
+    });
+  }
+
+  void syncUsuariosQuantioToSupabase().catch((e) => {
+    console.error('❌ Error sync background usuarios Quantio:', e);
+  });
+
+  res.json({
+    success: true,
+    message: 'Sync usuarios Quantio iniciado',
+    state: syncUsuariosQuantioState,
+  });
+};
+
+exports.syncproductosquantio = (_req, res) => {
+  if (syncProductosQuantioState.inProgress) {
+    return res.status(409).json({
+      success: false,
+      message: 'Sync de productos Quantio ya en progreso',
+      state: syncProductosQuantioState,
+    });
+  }
+
+  void syncProductosQuantioToSupabase().catch((e) => {
+    console.error('❌ Error sync background productos Quantio:', e);
+  });
+
+  res.json({
+    success: true,
+    message: 'Sync productos Quantio iniciado',
+    state: syncProductosQuantioState,
   });
 };
 

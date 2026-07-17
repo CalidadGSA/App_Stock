@@ -17,6 +17,7 @@ import VencidosListMobile from '@/components/vencimientos/VencidosListMobile';
 import {
   etiquetaDrogueriaDevolucion,
   textoBadgeDrogueriaDevolucion,
+  TRAZABLE_LABEL,
 } from '@/lib/vencimientos-drogueria-lab';
 import {
   BotonImprimirListadoVencimientos,
@@ -47,6 +48,7 @@ import {
   tieneObservacionDevolucion,
 } from '@/lib/vencimientos/observacion-devolucion';
 import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
+import { isSuperAdminRole, type RolOperador } from '@/lib/auth/roles';
 
 interface VencidoItem {
   id: string;
@@ -67,6 +69,7 @@ interface VencidoItem {
   obligatorio_observacion_devolucion: boolean;
   venta_posterior_a_carga?: boolean;
   drogueria_devolucion?: string | null;
+  trazable?: boolean;
 }
 
 function textoObservacionEfectiva(
@@ -77,24 +80,30 @@ function textoObservacionEfectiva(
   return item.accion_observacion ?? '';
 }
 
-function itemRequiereObservacionDevolucion(item: {
-  cantidad_cargada_original: number;
-  cantidad_vendida_acumulada: number;
-}): boolean {
+function itemRequiereObservacionDevolucion(
+  item: {
+    cantidad_cargada_original: number;
+    cantidad_vendida_acumulada: number;
+  },
+  omitirSiSuperadmin = false
+): boolean {
   return obligatorioObservacionDevolucion(
     item.cantidad_cargada_original,
-    item.cantidad_vendida_acumulada
+    item.cantidad_vendida_acumulada,
+    { omitirSiSuperadmin }
   );
 }
 
 function calcularIdsSinObservacionDevolucion(
   idsDesdeApi: string[],
   itemsPagina: VencidoItem[],
-  obsLocal: Record<string, string>
+  obsLocal: Record<string, string>,
+  omitirSiSuperadmin = false
 ): Set<string> {
+  if (omitirSiSuperadmin) return new Set();
   const pending = new Set(idsDesdeApi);
   for (const item of itemsPagina) {
-    if (!itemRequiereObservacionDevolucion(item)) continue;
+    if (!itemRequiereObservacionDevolucion(item, omitirSiSuperadmin)) continue;
     const eff = textoObservacionEfectiva(item, obsLocal);
     if (tieneObservacionDevolucion(eff)) pending.delete(item.id);
     else pending.add(item.id);
@@ -117,6 +126,7 @@ export default function VencidosPage() {
   const [drogueriaFiltro, setDrogueriaFiltro] = useState('');
   const [droguerias, setDroguerias] = useState<string[]>([]);
   const [obsLocal, setObsLocal] = useState<Record<string, string>>({});
+  const [esSuperadmin, setEsSuperadmin] = useState(false);
   const [sinObservacionDevolucionIds, setSinObservacionDevolucionIds] = useState<string[]>([]);
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<
@@ -149,8 +159,14 @@ export default function VencidosPage() {
   const itemsPaginados = items;
 
   const idsSinObservacion = useMemo(
-    () => calcularIdsSinObservacionDevolucion(sinObservacionDevolucionIds, items, obsLocal),
-    [sinObservacionDevolucionIds, items, obsLocal]
+    () =>
+      calcularIdsSinObservacionDevolucion(
+        sinObservacionDevolucionIds,
+        items,
+        obsLocal,
+        esSuperadmin
+      ),
+    [sinObservacionDevolucionIds, items, obsLocal, esSuperadmin]
   );
 
   const puedeDevolverTodos = total > 0 && !loading && idsSinObservacion.size === 0;
@@ -158,6 +174,27 @@ export default function VencidosPage() {
     idsSinObservacion.size > 0
       ? `Completá la observación en ${idsSinObservacion.size} producto(s) con menos del 50 % vendido`
       : undefined;
+
+  useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      try {
+        const res = await fetch('/api/dashboard');
+        const json = (await res.json().catch(() => ({}))) as {
+          data?: { rol?: RolOperador; es_superadmin?: boolean };
+        };
+        if (!mounted || !res.ok) return;
+        setEsSuperadmin(
+          Boolean(json.data?.es_superadmin) || isSuperAdminRole(json.data?.rol)
+        );
+      } catch {
+        // Si falla, se mantiene el comportamiento estrictivo por defecto.
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   function toggleSort(key: 'producto' | 'macro' | 'vencimiento' | 'cantidad' | 'restante' | 'vendido') {
     if (sortKey === key) {
@@ -308,13 +345,16 @@ export default function VencidosPage() {
             ...x,
             accion_observacion: guardado,
             ratio_vendido_sobre_original: ratio,
-            obligatorio_observacion_devolucion: itemRequiereObservacionDevolucion(x),
+            obligatorio_observacion_devolucion: itemRequiereObservacionDevolucion(
+              x,
+              esSuperadmin
+            ),
           };
         })
       );
       setSinObservacionDevolucionIds((prev) => {
         const row = items.find((x) => x.id === item.id);
-        if (!row || !itemRequiereObservacionDevolucion(row)) return prev;
+        if (!row || !itemRequiereObservacionDevolucion(row, esSuperadmin)) return prev;
         if (tieneObservacionDevolucion(guardado)) return prev.filter((id) => id !== item.id);
         if (!prev.includes(item.id)) return [...prev, item.id];
         return prev;
@@ -330,7 +370,7 @@ export default function VencidosPage() {
     } finally {
       setGuardandoId(null);
     }
-  }, [items, notify, obsLocal]);
+  }, [items, notify, obsLocal, esSuperadmin]);
 
   async function marcarVendido(id: string, cantidadDisponible: number) {
     const max = Math.max(0, Math.floor(Number(cantidadDisponible) || 0));
@@ -371,7 +411,9 @@ export default function VencidosPage() {
               cantidad: restante,
               cantidad_vendida_acumulada: newVend,
               ratio_vendido_sobre_original: ratio,
-              obligatorio_observacion_devolucion: obligatorioObservacionDevolucion(orig, newVend),
+              obligatorio_observacion_devolucion: obligatorioObservacionDevolucion(orig, newVend, {
+                omitirSiSuperadmin: esSuperadmin,
+              }),
             };
             return next;
           })
@@ -381,7 +423,11 @@ export default function VencidosPage() {
         const row = items.find((x) => x.id === id);
         if (!row) return prev.filter((itemId) => itemId !== id);
         const newVend = (row.cantidad_vendida_acumulada ?? 0) + cantidad;
-        const obligatorio = obligatorioObservacionDevolucion(row.cantidad_cargada_original, newVend);
+        const obligatorio = obligatorioObservacionDevolucion(
+          row.cantidad_cargada_original,
+          newVend,
+          { omitirSiSuperadmin: esSuperadmin }
+        );
         const obs = textoObservacionEfectiva(row, obsLocal);
         if (!obligatorio || tieneObservacionDevolucion(obs)) {
           return prev.filter((itemId) => itemId !== id);
@@ -416,7 +462,7 @@ export default function VencidosPage() {
     const todos = await fetchTodosFiltrados();
     const sinObsPrevio = todos.filter(
       (i) =>
-        itemRequiereObservacionDevolucion(i) &&
+        itemRequiereObservacionDevolucion(i, esSuperadmin) &&
         !tieneObservacionDevolucion(textoObservacionEfectiva(i, obsLocal))
     );
     if (sinObsPrevio.length > 0) {
@@ -636,7 +682,7 @@ export default function VencidosPage() {
                 guardandoId={guardandoId}
                 onGuardarObs={(item) => void guardarObservacion(item)}
                 onVendido={(id, cant) => void marcarVendido(id, cant)}
-                alertaObs={(item) => itemRequiereObservacionDevolucion(item)}
+                alertaObs={(item) => itemRequiereObservacionDevolucion(item, esSuperadmin)}
               />
             }
             table={
@@ -665,7 +711,7 @@ export default function VencidosPage() {
                     const dias = diasHastaVencimiento(r.fecha_vencimiento);
                     const color = colorVencimiento(dias);
                     const valObs = obsLocal[r.id] ?? r.accion_observacion ?? '';
-                    const requiereObs = itemRequiereObservacionDevolucion(r);
+                    const requiereObs = itemRequiereObservacionDevolucion(r, esSuperadmin);
                     return (
                       <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-slate-900/50">
                         <td className={DATATABLE_TD}>
@@ -680,6 +726,14 @@ export default function VencidosPage() {
                               className="mt-1 ml-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
                             >
                               Venta posterior a la carga
+                            </span>
+                          ) : null}
+                          {r.trazable ? (
+                            <span
+                              data-print-hide
+                              className="mt-1 ml-1 inline-flex rounded-full border border-violet-300 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-900 dark:border-violet-800 dark:bg-violet-950/50 dark:text-violet-200"
+                            >
+                              {TRAZABLE_LABEL}
                             </span>
                           ) : null}
                           {textoBadgeDrogueriaDevolucion(r.drogueria_devolucion) ? (

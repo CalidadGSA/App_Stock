@@ -1,6 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { createOperadorSessionCookie } from '@/lib/auth/session';
 import { SUCURSAL_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
+import {
+  esSucursalDrogueria,
+  OPERADOR_FUENTE_ONZE,
+  OPERADOR_FUENTE_QUANTIO,
+} from '@/lib/sucursales/drogueria';
+import { setCookieSucursalEsDrogueria } from '@/lib/sucursales/sesion-drogueria';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -16,10 +22,23 @@ type AuthLogParams = {
   sessionId?: string | null;
 };
 
+type OperadorRow = {
+  idoperador: number;
+  operador: string;
+  nombrecompleto: string;
+  rol?: string | null;
+  activo: string;
+  app_role_id?: number | null;
+};
+
+type ResolverOperadorResult =
+  | { ok: true; row: OperadorRow }
+  | { ok: false; reason: 'invalid_credentials' };
+
 function getClientIp(req: NextRequest): string {
   const xff = req.headers.get('x-forwarded-for');
   const fromHeader = xff?.split(',')[0]?.trim();
-  const direct = (req as any).ip as string | undefined;
+  const direct = (req as { ip?: string }).ip;
   const realIp = req.headers.get('x-real-ip') || undefined;
   let ip = fromHeader || direct || realIp || '';
 
@@ -45,6 +64,72 @@ async function logAuth(admin: AdminClient, params: AuthLogParams) {
   }
 }
 
+async function resolverOperadorLogin(
+  admin: AdminClient,
+  operador: string,
+  codigo: number,
+  esDrogueria: boolean
+): Promise<ResolverOperadorResult> {
+  if (esDrogueria) {
+    const { data: row, error } = await admin
+      .from('operadores')
+      .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
+      .eq('fuente', OPERADOR_FUENTE_QUANTIO)
+      .eq('operador', operador)
+      .eq('codigo', codigo)
+      .maybeSingle();
+
+    if (error) {
+      if (error.message?.includes('fuente')) {
+        console.error('resolverOperadorLogin droguería: falta columna fuente en operadores');
+        return { ok: false, reason: 'invalid_credentials' };
+      }
+      console.error('resolverOperadorLogin droguería:', error.message);
+      return { ok: false, reason: 'invalid_credentials' };
+    }
+
+    if (row && row.activo === 'S') {
+      return { ok: true, row: row as OperadorRow };
+    }
+    return { ok: false, reason: 'invalid_credentials' };
+  }
+
+  const { data: row, error } = await admin
+    .from('operadores')
+    .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
+    .eq('operador', operador)
+    .eq('codigo', codigo)
+    .eq('fuente', OPERADOR_FUENTE_ONZE)
+    .maybeSingle();
+
+  if (error) {
+    if (error.message?.includes('fuente')) {
+      const { data: legacyRow, error: legacyError } = await admin
+        .from('operadores')
+        .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
+        .eq('operador', operador)
+        .eq('codigo', codigo)
+        .maybeSingle();
+      if (legacyError) {
+        console.error('resolverOperadorLogin:', legacyError.message);
+        return { ok: false, reason: 'invalid_credentials' };
+      }
+      if (legacyRow && legacyRow.activo === 'S') {
+        return { ok: true, row: legacyRow as OperadorRow };
+      }
+      return { ok: false, reason: 'invalid_credentials' };
+    }
+    console.error('resolverOperadorLogin:', error.message);
+    return { ok: false, reason: 'invalid_credentials' };
+  }
+
+  if (row && row.activo === 'S') {
+    return { ok: true, row: row as OperadorRow };
+  }
+
+  return { ok: false, reason: 'invalid_credentials' };
+}
+
 /** POST /api/auth/login — login con operador + código; opcional sucursal + contraseña para ir directo al dashboard */
 export async function POST(request: NextRequest) {
   let body: { operador?: string; codigo?: string | number; sucursal_id?: string; sucursal_password?: string };
@@ -65,38 +150,43 @@ export async function POST(request: NextRequest) {
   const admin = await createAdminClient();
   const ip = getClientIp(request);
   const userAgent = request.headers.get('user-agent') ?? null;
-  const { data: row, error } = await admin
-    .from('operadores')
-    .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
-    .eq('operador', operador)
-    .eq('codigo', codigo)
-    .maybeSingle();
 
-  if (error) {
-    await logAuth(admin, {
-      username: operador,
-      sucursalNombre: null,
-      ip,
-      userAgent,
-      success: false,
-      action: 'login_error',
-      sessionId: null,
-    });
-    return NextResponse.json({ error: 'Error al validar credenciales' }, { status: 500 });
+  const sucursalId = typeof body.sucursal_id === 'string' ? body.sucursal_id.trim() : '';
+  const sucursalPassword = typeof body.sucursal_password === 'string' ? body.sucursal_password : '';
+
+  let esDrogueria = false;
+  if (sucursalId) {
+    const sucursalIdNum = parseInt(sucursalId, 10);
+    if (!Number.isNaN(sucursalIdNum)) {
+      esDrogueria = await esSucursalDrogueria(admin, sucursalIdNum);
+    }
   }
 
-  if (!row || row.activo !== 'S') {
+  const resolved = await resolverOperadorLogin(admin, operador, codigo, esDrogueria);
+
+  if (!resolved.ok || resolved.row.activo !== 'S') {
     await logAuth(admin, {
       username: operador,
       sucursalNombre: null,
       ip,
       userAgent,
       success: false,
-      action: 'login_invalid_credentials',
+      action: esDrogueria ? 'login_invalid_credentials_quantio' : 'login_invalid_credentials',
       sessionId: null,
     });
+    if (esDrogueria) {
+      return NextResponse.json(
+        {
+          error:
+            'Operador o código incorrectos. Verificá que el usuario esté sincronizado en Supabase (fuente Quantio).',
+        },
+        { status: 401 }
+      );
+    }
     return NextResponse.json({ error: 'Operador o código incorrectos' }, { status: 401 });
   }
+
+  const row = resolved.row;
 
   if (!row.app_role_id && row.rol) {
     const { data: sysRole } = await admin
@@ -126,9 +216,6 @@ export async function POST(request: NextRequest) {
     rol: rolSesion,
   });
   cookieStore.set(operadorCookie.name, operadorCookie.value, operadorCookie.options);
-
-  const sucursalId = typeof body.sucursal_id === 'string' ? body.sucursal_id.trim() : '';
-  const sucursalPassword = typeof body.sucursal_password === 'string' ? body.sucursal_password : '';
 
   let sucursalSet = false;
   let sucursalNombre: string | null = null;
@@ -177,6 +264,9 @@ export async function POST(request: NextRequest) {
         });
         return NextResponse.json({ error: 'Contraseña de sucursal incorrecta' }, { status: 401 });
       }
+
+      const sucursalEsDrogueria = await esSucursalDrogueria(admin, sucursalIdNum);
+
       const opts = {
         httpOnly: true,
         path: '/' as const,
@@ -186,6 +276,7 @@ export async function POST(request: NextRequest) {
       cookieStore.set('sucursal_id', String(sucursal.sucursal), opts);
       cookieStore.set('sucursal_nombre', sucursal.nombrefantasia, opts);
       cookieStore.set('sucursal_codigo', String(sucursal.sucursal), opts);
+      setCookieSucursalEsDrogueria(cookieStore, sucursalEsDrogueria, opts);
       sucursalNombre = sucursal.nombrefantasia;
       sucursalSet = true;
     }

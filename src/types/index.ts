@@ -63,6 +63,11 @@ export interface ProductoLegacy {
   fraccionable?: number;
   /** Si requiere cadena de frío (medicamentos.refrigeracion = 'S'). */
   refrigerado?: boolean;
+  /** Ubicación física droguería (base_productos_drogueria). */
+  sector?: number | null;
+  modulo?: string | null;
+  fila?: number | null;
+  posicion?: number | null;
 }
 
 // ------------------------------------------------------------
@@ -97,6 +102,11 @@ export interface ControlInventarioDetalle {
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
+  /** Ubicación física droguería (snapshot al precargar / enriquecer). */
+  sector?: number | null;
+  modulo?: string | null;
+  fila?: number | null;
+  posicion?: number | null;
   stock_sistema: number;
   stock_sist_cajas?: number | null;
   stock_sist_unidades?: number | null;

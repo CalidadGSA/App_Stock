@@ -8,6 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageSpinner } from '@/components/ui/spinner';
 import AjustesDiferenciasListMobile from '@/components/ajustes/AjustesDiferenciasListMobile';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
+import {
+  claveDupAjuste,
+  idsDuplicadosMasViejosADescartar,
+} from '@/lib/inventario/ajustes-duplicados';
 
 interface SucursalOption {
   id: string;
@@ -29,14 +34,17 @@ interface DiferenciaItem {
   origen?: string | null;
   diffCajas: number;
   diffUnidades: number;
+  fecha_registro?: string | null;
+  fecha_fin_control?: string | null;
 }
 
 function claveDupDiferencia(d: Pick<DiferenciaItem, 'producto_id_sistema' | 'codigo_barras'>) {
-  return `${String(d.producto_id_sistema).trim()}::${String(d.codigo_barras ?? '').trim()}`;
+  return claveDupAjuste(d.producto_id_sistema, d.codigo_barras);
 }
 
 export default function AjustesPage() {
   const router = useRouter();
+  const notify = useAppNotify();
   const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
   const [sucursalId, setSucursalId] = useState('');
   const [desde, setDesde] = useState('');
@@ -47,6 +55,7 @@ export default function AjustesPage() {
   const [loadingDiferencias, setLoadingDiferencias] = useState(false);
   const [diferencias, setDiferencias] = useState<DiferenciaItem[]>([]);
   const [exportando, setExportando] = useState(false);
+  const [eliminandoRepetidosViejos, setEliminandoRepetidosViejos] = useState(false);
   const [error, setError] = useState('');
   const [busquedaBorrador, setBusquedaBorrador] = useState('');
   const [busquedaAplicada, setBusquedaAplicada] = useState('');
@@ -80,6 +89,11 @@ export default function AjustesPage() {
       return texto.includes(term);
     });
   }, [diferencias, busquedaAplicada]);
+
+  const idsRepetidosViejos = useMemo(
+    () => idsDuplicadosMasViejosADescartar(diferencias),
+    [diferencias]
+  );
 
   const diferenciasVisibles = useMemo(() => {
     if (!soloRepetidos) return diferenciasFiltradasBusqueda;
@@ -162,6 +176,8 @@ export default function AjustesPage() {
           stock_real_cajas: r.stock_real_cajas,
           stock_real_unidades: r.stock_real_unidades,
           origen: r.controles_inventario?.origen ?? null,
+          fecha_registro: r.fecha_registro ?? null,
+          fecha_fin_control: r.controles_inventario?.fecha_fin ?? null,
           diffCajas: realC - sistC,
           diffUnidades: realU - sistU,
         };
@@ -188,6 +204,49 @@ export default function AjustesPage() {
       setDiferencias((prev) => prev.filter((d) => d.id !== id));
     } catch {
       setError('Error al eliminar diferencia');
+    }
+  }
+
+  async function handleEliminarRepetidosViejos() {
+    if (idsRepetidosViejos.length === 0) return;
+    setError('');
+    const ok = await notify.confirm({
+      title: 'Quitar repetidos',
+      message: `Se quitarán ${idsRepetidosViejos.length} diferencia${
+        idsRepetidosViejos.length !== 1 ? 's' : ''
+      } repetida${idsRepetidosViejos.length !== 1 ? 's' : ''} y quedará solo la más reciente de cada producto. ¿Continuar?`,
+    });
+    if (!ok) return;
+
+    setEliminandoRepetidosViejos(true);
+    try {
+      const res = await fetch('/api/inventario/diferencias/descartar-repetidos-viejos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sucursal_id: sucursalId,
+          desde,
+          hasta,
+          origen: origenFiltro,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json.error ?? 'Error al quitar repetidos');
+        return;
+      }
+      const descartados = Number(json.descartados ?? 0);
+      const idsQuitar = new Set(idsRepetidosViejos);
+      setDiferencias((prev) => prev.filter((d) => !idsQuitar.has(d.id)));
+      notify.success(
+        descartados > 0
+          ? `Se quitaron ${descartados} repetido${descartados !== 1 ? 's' : ''} más viejos${descartados !== 1 ? 's' : ''}.`
+          : 'No había repetidos para quitar.'
+      );
+    } catch {
+      setError('Error al quitar repetidos');
+    } finally {
+      setEliminandoRepetidosViejos(false);
     }
   }
 
@@ -393,15 +452,30 @@ export default function AjustesPage() {
               ) : null}
             </h2>
             {diferencias.length > 0 ? (
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={soloRepetidos}
-                  onChange={(e) => setSoloRepetidos(e.target.checked)}
-                  className="rounded border-gray-300"
-                />
-                Solo repetidos
-              </label>
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={soloRepetidos}
+                    onChange={(e) => setSoloRepetidos(e.target.checked)}
+                    className="rounded border-gray-300"
+                  />
+                  Solo repetidos
+                </label>
+                {idsRepetidosViejos.length > 0 ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    loading={eliminandoRepetidosViejos}
+                    disabled={eliminandoRepetidosViejos || loadingDiferencias}
+                    onClick={() => void handleEliminarRepetidosViejos()}
+                  >
+                    Quitar repetidos ({idsRepetidosViejos.length})
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
           </div>
           {diferencias.length > 0 ? (

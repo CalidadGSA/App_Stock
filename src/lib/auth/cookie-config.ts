@@ -16,5 +16,6 @@ export const AUTH_COOKIE_NAMES = [
   'sucursal_id',
   'sucursal_nombre',
   'sucursal_codigo',
+  'sucursal_es_drogueria',
   CAMBIO_SUCURSAL_COOKIE,
 ] as const;

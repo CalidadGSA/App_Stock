@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { getOperadorRbacContext, isSuperAdminContext } from '@/lib/auth/rbac';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
@@ -21,6 +22,8 @@ import {
   cargarIdSubrubroPorProducto,
   cargarMedicamentoMetaPorProducto,
   cargarNombresPsicofarmacos,
+  cargarIdsTrazables,
+  esProductoTrazable,
   controlVencimientoDesdeFila,
   macroBultoParaProducto,
   metaMedicamentoPorProducto,
@@ -30,6 +33,7 @@ import {
   type PadronProductoResumen,
   opcionesFiltroBulto,
   resolverDrogueriaDevolucion,
+  FILTRO_TRAZABLES,
   SIN_DROGUERIA_ASIGNADA,
 } from '@/lib/vencimientos-drogueria-lab';
 import { parsePaginationParams, slicePaginated } from '@/lib/api/pagination';
@@ -56,6 +60,7 @@ type ItemRow = {
   venta_posterior_a_carga?: boolean;
   codlab?: number | null;
   drogueria_devolucion?: string | null;
+  trazable?: boolean;
 };
 
 function enriquecerItem(
@@ -67,7 +72,8 @@ function enriquecerItem(
     | 'ratio_vendido_sobre_original'
     | 'obligatorio_observacion_devolucion'
   > & { accion_observacion: string | null },
-  ventasMap: Map<string, number>
+  ventasMap: Map<string, number>,
+  omitirObsSiSuperadmin = false
 ): ItemRow {
   const vend = ventasMap.get(base.id) ?? 0;
   const rest = Number(base.cantidad) || 0;
@@ -79,7 +85,9 @@ function enriquecerItem(
     cantidad_vendida_acumulada: vend,
     cantidad_cargada_original: orig,
     ratio_vendido_sobre_original: ratio,
-    obligatorio_observacion_devolucion: obligatorioObservacionDevolucion(orig, vend),
+    obligatorio_observacion_devolucion: obligatorioObservacionDevolucion(orig, vend, {
+      omitirSiSuperadmin: omitirObsSiSuperadmin,
+    }),
   };
 }
 
@@ -90,6 +98,9 @@ function enriquecerItem(
 export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+
+  const rbacCtx = await getOperadorRbacContext();
+  const omitirObsSiSuperadmin = rbacCtx ? isSuperAdminContext(rbacCtx) : false;
 
   const { searchParams } = new URL(request.url);
   const checkVentaPosterior = searchParams.get('check_venta_posterior') !== '0';
@@ -254,12 +265,14 @@ export async function GET(request: NextRequest) {
         ...p,
         accion_observacion: p.accion_observacion,
       },
-      ventasMap
+      ventasMap,
+      omitirObsSiSuperadmin
     )
   );
 
   let bultoOpciones: string[] = [];
   let drogueriaPorCodlab = new Map<number, { drogueria: string; laboratorio: string; codlab: number }>();
+  let idsTrazables = new Set<number>();
 
   try {
     const mapaDrogueria = await cargarMapaDrogueriaPorCodlab(admin);
@@ -267,6 +280,17 @@ export async function GET(request: NextRequest) {
     drogueriaPorCodlab = mapaDrogueria.porCodlab;
   } catch (e) {
     console.warn('[vencidos] vencimientos_drogueria_laboratorio:', (e as Error).message);
+    bultoOpciones = opcionesFiltroBulto([]);
+  }
+
+  if (!bultoOpciones.includes(FILTRO_TRAZABLES)) {
+    bultoOpciones = [...bultoOpciones, FILTRO_TRAZABLES];
+  }
+
+  try {
+    idsTrazables = await cargarIdsTrazables(admin);
+  } catch (e) {
+    console.warn('[vencidos] trazables:', (e as Error).message);
   }
 
   let itemsConDrogueria = baseItems.map((i) => {
@@ -276,6 +300,7 @@ export async function GET(request: NextRequest) {
     const macroEfectiva: MacroBulto | null =
       macroBultoParaProducto(padron, meta, nombrePsicoPorId) ??
       (i.categoria_macro as MacroBulto | null);
+    const trazable = esProductoTrazable(i.producto_id_sistema, idsTrazables);
     const drogueria_devolucion = resolverDrogueriaDevolucion(
       {
         producto_id_sistema: i.producto_id_sistema,
@@ -286,20 +311,26 @@ export async function GET(request: NextRequest) {
       meta,
       drogueriaPorCodlab,
       nombrePsicoPorId,
-      hoyStr
+      hoyStr,
+      idsTrazables
     );
     return {
       ...i,
       codlab,
+      trazable,
       drogueria_devolucion,
     };
   });
 
   let filtrados = itemsConDrogueria;
   if (drogueriaFiltro) {
-    filtrados = filtrados.filter(
-      (i) => String(i.drogueria_devolucion ?? '').trim() === drogueriaFiltro
-    );
+    if (drogueriaFiltro === FILTRO_TRAZABLES) {
+      filtrados = filtrados.filter((i) => Boolean(i.trazable));
+    } else {
+      filtrados = filtrados.filter(
+        (i) => String(i.drogueria_devolucion ?? '').trim() === drogueriaFiltro
+      );
+    }
   }
   if (categoriaFiltro) {
     filtrados = filtrados.filter((i) => String(i.categoria_macro ?? '') === categoriaFiltro);
@@ -398,6 +429,9 @@ export async function PATCH(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
+  const rbacCtx = await getOperadorRbacContext();
+  const omitirObsSiSuperadmin = rbacCtx ? isSuperAdminContext(rbacCtx) : false;
+
   const cookieStore = await cookies();
   const sucursalId = cookieStore.get('sucursal_id')?.value;
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
@@ -450,14 +484,16 @@ export async function PATCH(request: NextRequest) {
     );
 
     const productosSinObservacion: string[] = [];
-    for (const r of rows) {
-      const vend = ventasMap.get(String(r.id)) ?? 0;
-      const rest = Number(r.cantidad ?? 0);
-      const orig = rest + vend;
-      if (!obligatorioObservacionDevolucion(orig, vend)) continue;
-      const obs = String(r.accion_observacion ?? '').trim();
-      if (!tieneObservacionDevolucion(obs)) {
-        productosSinObservacion.push(String(r.descripcion ?? r.codigo_barras ?? r.id));
+    if (!omitirObsSiSuperadmin) {
+      for (const r of rows) {
+        const vend = ventasMap.get(String(r.id)) ?? 0;
+        const rest = Number(r.cantidad ?? 0);
+        const orig = rest + vend;
+        if (!obligatorioObservacionDevolucion(orig, vend)) continue;
+        const obs = String(r.accion_observacion ?? '').trim();
+        if (!tieneObservacionDevolucion(obs)) {
+          productosSinObservacion.push(String(r.descripcion ?? r.codigo_barras ?? r.id));
+        }
       }
     }
 

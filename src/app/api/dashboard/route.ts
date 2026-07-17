@@ -2,6 +2,7 @@ import { createAdminClient } from '@/lib/supabase/server';
 import {
   canSeeAllInventarioTipos,
   getOperadorRbacContext,
+  isSuperAdminContext,
   permissionsToArray,
 } from '@/lib/auth/rbac';
 import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
@@ -10,6 +11,11 @@ import {
 } from '@/lib/inventario/tipo-control';
 import { obtenerProgresoTrimestreSucursal, sumarCantidadDetalle, trimestrePadronCompleto } from '@/lib/inventario/trimestre-base';
 import { contarProductosParaDevolver } from '@/lib/vencimientos/devolver-para-devolver-masivo';
+import {
+  filtroUsuarioIds,
+  idsOperadoresAdminLike,
+  debeOcultarInventariosDeAdmin,
+} from '@/lib/auth/operadores-admin-like';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
@@ -34,6 +40,9 @@ export async function GET() {
   /** Para base_productos: misma lógica que POST /api/inventario (fechainicio/fechafin vs “hoy” local AR). */
   const hoyStrArgentina = hoyVen;
   const esAdmin = canSeeAllInventarioTipos(rbac);
+  const idsAdminLike = await idsOperadoresAdminLike(admin);
+  const excluirUsuariosAdmin = filtroUsuarioIds(idsAdminLike);
+  const ocultarAdminInv = debeOcultarInventariosDeAdmin(rbac);
 
   let invTotalQuery = admin
     .from('controles_inventario')
@@ -53,10 +62,18 @@ export async function GET() {
     .neq('origen', 'Auditoria')
     .in('tipo', [...TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL]);
 
+  // Inventarios hechos por admin/superadmin no cuentan para el KPI del mes.
+  if (excluirUsuariosAdmin) {
+    invMesQuery = invMesQuery.not('usuario_id', 'in', excluirUsuariosAdmin);
+  }
+
   /** Líneas de detalle marcadas con diferencia (BD), de controles de esta sucursal y ventana de fechas. */
   let invItemsConDiferenciaQuery = admin
     .from('controles_inventario_detalle')
-    .select('id, controles_inventario!inner(sucursal_id, tipo, fecha_inicio)', { count: 'exact', head: true })
+    .select('id, controles_inventario!inner(sucursal_id, tipo, fecha_inicio, usuario_id)', {
+      count: 'exact',
+      head: true,
+    })
     .eq('con_diferencias', 1)
     .eq('controles_inventario.sucursal_id', sucursalId)
     .gte('controles_inventario.fecha_inicio', inicio60dias)
@@ -79,6 +96,17 @@ export async function GET() {
       ...TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL,
     ]);
     ultimosInvQuery = ultimosInvQuery.in('tipo', [...TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL]);
+  }
+
+  // Operadores de sucursal: ocultar inventarios creados por admin/superadmin.
+  if (ocultarAdminInv && excluirUsuariosAdmin) {
+    invTotalQuery = invTotalQuery.not('usuario_id', 'in', excluirUsuariosAdmin);
+    ultimosInvQuery = ultimosInvQuery.not('usuario_id', 'in', excluirUsuariosAdmin);
+    invItemsConDiferenciaQuery = invItemsConDiferenciaQuery.not(
+      'controles_inventario.usuario_id',
+      'in',
+      excluirUsuariosAdmin
+    );
   }
 
   const sucursalActualNum = parseInt(sucursalId, 10);
@@ -158,6 +186,7 @@ export async function GET() {
   return NextResponse.json({
     data: {
       rol: operador.rol ?? 'operador_sucursal',
+      es_superadmin: isSuperAdminContext(rbac),
       permissions: permissionsToArray(rbac),
       inventarios_total: invTotal.count ?? 0,
       inventarios_mes: invMes.count ?? 0,

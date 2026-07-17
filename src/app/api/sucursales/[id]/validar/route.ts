@@ -1,6 +1,8 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { isAdminLikeRole } from '@/lib/auth/roles';
+import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
+import { setCookieSucursalEsDrogueria } from '@/lib/sucursales/sesion-drogueria';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { CAMBIO_SUCURSAL_COOKIE, SUCURSAL_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
@@ -51,6 +53,15 @@ export async function POST(
     }
   }
 
+  const sucursalEsDrogueria = await esSucursalDrogueria(admin, sucursalIdNum);
+  const operadorEsQuantio = operador.idoperador >= 10_000_000;
+  if (!omitirContraseña && sucursalEsDrogueria !== operadorEsQuantio) {
+    return NextResponse.json(
+      { error: 'Este operador no corresponde a la sucursal seleccionada' },
+      { status: 403 }
+    );
+  }
+
   const cookieStore = await cookies();
   const cookieOpts = {
     httpOnly: true,
@@ -61,6 +72,7 @@ export async function POST(
   cookieStore.set('sucursal_id', String(sucursal.sucursal), cookieOpts);
   cookieStore.set('sucursal_nombre', sucursal.nombrefantasia, cookieOpts);
   cookieStore.set('sucursal_codigo', String(sucursal.sucursal), cookieOpts);
+  setCookieSucursalEsDrogueria(cookieStore, sucursalEsDrogueria, cookieOpts);
   cookieStore.delete(CAMBIO_SUCURSAL_COOKIE);
 
   return NextResponse.json({ data: { id: String(sucursal.sucursal), nombre: sucursal.nombrefantasia, codigo_interno: String(sucursal.sucursal) } });

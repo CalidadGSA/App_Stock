@@ -35,6 +35,8 @@ create table sucursales (
   _CodPostal    text,
   contraseña text not null,
   activa        boolean not null default true,
+  es_drogueria  boolean not null default false,
+  vueltas_psicos integer not null default 4,
   creada    timestamptz not null default now(),
   actualizada    timestamptz not null default now()
 );
@@ -45,13 +47,15 @@ create table sucursales (
 -- Operadores (sincronizado desde base legacy)
 create table operadores (
   IDOperador         integer primary key,
-  Operador     text not null unique,
+  Operador     text not null,
   NombreCompleto      text not null ,
   Codigo       integer not null,
   rol        rol_usuario not null default 'operador_sucursal',
   Activo     char(1) not null,
+  fuente     text not null default 'onze',
   creado timestamptz not null default now(),
-  actualizado timestamptz not null default now()
+  actualizado timestamptz not null default now(),
+  unique (Operador, fuente)
 );
 
 -- ------------------------------------------------------------
@@ -160,6 +164,34 @@ create table productoscodebars (
   primary key (IDProducto, codebar)
 );
 create index idx_productoscodebars_codebar on productoscodebars(codebar);
+
+-- Catálogo Quantio (droguería central)
+create table productos_quantio (
+  idproducto       bigint primary key,
+  producto         text,
+  presentacion     text,
+  prod_pres        text,
+  codebar          text,
+  troquel          bigint,
+  unidades         integer,
+  activo           char(1),
+  refrigeracion    char(1),
+  idlaboratorio    integer,
+  idrubro          integer,
+  idsubrubro       integer,
+  idpsicofarmaco   varchar(20),
+  gtin             varchar(50),
+  costo            double precision not null default 0,
+  ultimoprecio     double precision not null default 0,
+  actualizado      timestamptz not null default now()
+);
+create index idx_productos_quantio_codebar on productos_quantio(codebar);
+
+-- Productos trazables (excluidos de bultos de droguería en devoluciones)
+create table if not exists trazables (
+  idproducto bigint primary key,
+  creado     timestamptz not null default now()
+);
 
 
 -- ------------------------------------------------------------

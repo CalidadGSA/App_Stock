@@ -20,6 +20,7 @@ import {
   Shield,
   FileUp,
   Table2,
+  RotateCcw,
 } from 'lucide-react';
 import type { RolOperador } from '@/lib/auth/roles';
 import { isSuperAdminRole } from '@/lib/auth/roles';
@@ -199,6 +200,13 @@ export const APP_NAV_SECTIONS: AppNavSection[] = [
         label: 'Resumen trimestral',
         href: '/admin/resumen-trimestral',
         icon: BarChart3,
+        permission: 'admin.resumen_trimestral',
+      },
+      {
+        id: 'vueltas-psicos',
+        label: 'Vueltas psicotrópicos',
+        href: '/admin/vueltas-psicos',
+        icon: RotateCcw,
         permission: 'admin.resumen_trimestral',
       },
       {

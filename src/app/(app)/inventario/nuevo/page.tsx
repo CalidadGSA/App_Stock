@@ -24,7 +24,6 @@ export default function NuevoInventarioPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [trimestrePadronCompleto, setTrimestrePadronCompleto] = useState(false);
-  const [cargandoProgreso, setCargandoProgreso] = useState(true);
 
   useEffect(() => {
     let cancelado = false;
@@ -37,8 +36,6 @@ export default function NuevoInventarioPage() {
         setTrimestrePadronCompleto(fila?.trimestre_padron_completo === true);
       } catch {
         if (!cancelado) setTrimestrePadronCompleto(false);
-      } finally {
-        if (!cancelado) setCargandoProgreso(false);
       }
     })();
     return () => {
@@ -169,11 +166,6 @@ export default function NuevoInventarioPage() {
               <p className="text-xs text-gray-500">
                 Si seleccionás una categoría macro, este inventario diario quedará asociado a ese grupo de productos.
               </p>
-              {!cargandoProgreso && !trimestrePadronCompleto ? (
-                <p className="text-xs text-amber-700">
-                  «Sin padrón» se habilita cuando la sucursal completa el 100% del progreso trimestral (FARMA, BIENESTAR y PSICOTROPICOS).
-                </p>
-              ) : null}
             </div>
 
             {maintenance && (

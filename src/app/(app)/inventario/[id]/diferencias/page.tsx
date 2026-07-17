@@ -28,6 +28,7 @@ import {
 } from '@/lib/inventario/tipo-control';
 import { esAjusteSucursalInversoAuditoria } from '@/lib/inventario/diferencia-sucursal-auditoria';
 import { formatDateTime } from '@/lib/utils';
+import { formatearUbicacionDrogueria } from '@/lib/inventario/ubicacion-drogueria';
 import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 import type {
   ControlInventario,
@@ -37,6 +38,7 @@ import type {
 
 interface ControlConDetalles extends ControlInventario {
   controles_inventario_detalle: ControlInventarioDetalle[];
+  es_drogueria?: boolean;
 }
 
 /** Con código de barras: bloquear unidades mientras carga o si no admite unidades sueltas. */
@@ -296,13 +298,14 @@ export default function InventarioDiferenciasPage() {
       return;
     }
 
+    const esDrogueria = Boolean(control?.es_drogueria);
     const sistCajasNum = parseCantidad(current.sistCajas);
-    const sistUnidadesNum = parseCantidad(current.sistUnidades);
+    const sistUnidadesNum = esDrogueria ? 0 : parseCantidad(current.sistUnidades);
     const realCajasNum = parseCantidad(current.realCajas);
-    const realUnidadesNum = parseCantidad(current.realUnidades);
+    const realUnidadesNum = esDrogueria ? 0 : parseCantidad(current.realUnidades);
 
     if (
-      [sistCajasNum, sistUnidadesNum, realCajasNum, realUnidadesNum].some(
+      [sistCajasNum, realCajasNum, ...(esDrogueria ? [] : [sistUnidadesNum, realUnidadesNum])].some(
         (n) => !esCantidadStockValida(n)
       )
     ) {
@@ -313,7 +316,7 @@ export default function InventarioDiferenciasPage() {
       notify.warning(mensajeMaxStockRealCajas());
       return;
     }
-    if (realUnidadesNum > MAX_STOCK_REAL_UNIDADES) {
+    if (!esDrogueria && realUnidadesNum > MAX_STOCK_REAL_UNIDADES) {
       notify.warning(mensajeMaxStockRealUnidades());
       return;
     }
@@ -324,9 +327,18 @@ export default function InventarioDiferenciasPage() {
       return;
     }
 
-    const bloquearUnidades = debeBloquearUnidadesStockReal(detalle.codigo_barras, prod);
-    const sistUnidadesFinal = bloquearUnidades ? baseline.sistUnidades : sistUnidadesNum;
-    const realUnidadesFinal = bloquearUnidades ? baseline.realUnidades : realUnidadesNum;
+    const bloquearUnidades =
+      esDrogueria || debeBloquearUnidadesStockReal(detalle.codigo_barras, prod);
+    const sistUnidadesFinal = esDrogueria
+      ? 0
+      : bloquearUnidades
+        ? baseline.sistUnidades
+        : sistUnidadesNum;
+    const realUnidadesFinal = esDrogueria
+      ? 0
+      : bloquearUnidades
+        ? baseline.realUnidades
+        : realUnidadesNum;
 
     const cambioSist =
       sistCajasNum !== baseline.sistCajas || sistUnidadesFinal !== baseline.sistUnidades;
@@ -592,21 +604,39 @@ export default function InventarioDiferenciasPage() {
                           <p className="mt-0.5 font-mono text-sm text-gray-700">
                             {det.codigo_barras ?? 'Sin código de barras'}
                           </p>
+                          {control?.es_drogueria ? (
+                            <p className="mt-0.5 text-sm font-medium text-blue-800">
+                              {formatearUbicacionDrogueria({
+                                sector: det.sector ?? null,
+                                modulo: det.modulo ?? null,
+                                fila: det.fila ?? null,
+                                posicion: det.posicion ?? null,
+                              })}
+                            </p>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">
                           <div className="flex flex-col items-end gap-0.5">
                             <span className="text-[11px] uppercase tracking-wide text-gray-400">Cajas</span>
                             <span>{det.stock_sist_cajas == null ? '-' : sistCajas}</span>
-                            <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
-                            <span>{det.stock_sist_unidades == null ? '-' : sistUnidades}</span>
+                            {!control?.es_drogueria ? (
+                              <>
+                                <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
+                                <span>{det.stock_sist_unidades == null ? '-' : sistUnidades}</span>
+                              </>
+                            ) : null}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right text-gray-700">
                           <div className="flex flex-col items-end gap-0.5">
                             <span className="text-[11px] uppercase tracking-wide text-gray-400">Cajas</span>
                             <span>{det.stock_real_cajas == null ? '-' : realCajas}</span>
-                            <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
-                            <span>{det.stock_real_unidades == null ? '-' : realUnidades}</span>
+                            {!control?.es_drogueria ? (
+                              <>
+                                <span className="text-[11px] uppercase tracking-wide text-gray-400 mt-1">Unidades</span>
+                                <span>{det.stock_real_unidades == null ? '-' : realUnidades}</span>
+                              </>
+                            ) : null}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
@@ -619,14 +649,16 @@ export default function InventarioDiferenciasPage() {
                               {diffCajas > 0 ? <TrendingUp className="h-3 w-3" /> : diffCajas < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
                               {diffCajas > 0 ? '+' : ''}{diffCajas}
                             </span>
-                            <span className={`inline-flex items-center gap-0.5 font-semibold ${
-                              diffUnidades === 0 ? 'text-gray-500'
-                              : diffUnidades > 0 ? 'text-blue-600'
-                              : 'text-red-600'
-                            }`}>
-                              {diffUnidades > 0 ? <TrendingUp className="h-3 w-3" /> : diffUnidades < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
-                              {diffUnidades > 0 ? '+' : ''}{diffUnidades}
-                            </span>
+                            {!control?.es_drogueria ? (
+                              <span className={`inline-flex items-center gap-0.5 font-semibold ${
+                                diffUnidades === 0 ? 'text-gray-500'
+                                : diffUnidades > 0 ? 'text-blue-600'
+                                : 'text-red-600'
+                              }`}>
+                                {diffUnidades > 0 ? <TrendingUp className="h-3 w-3" /> : diffUnidades < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
+                                {diffUnidades > 0 ? '+' : ''}{diffUnidades}
+                              </span>
+                            ) : null}
                           </div>
                         </td>
                         {esAuditoria ? (
@@ -669,6 +701,16 @@ export default function InventarioDiferenciasPage() {
                 <p className="text-sm text-gray-700 mt-0.5">
                   {detalleSeleccionado.codigo_barras}
                 </p>
+                {control?.es_drogueria ? (
+                  <p className="text-sm font-medium text-blue-800 mt-0.5">
+                    {formatearUbicacionDrogueria({
+                      sector: detalleSeleccionado.sector ?? null,
+                      modulo: detalleSeleccionado.modulo ?? null,
+                      fila: detalleSeleccionado.fila ?? null,
+                      posicion: detalleSeleccionado.posicion ?? null,
+                    })}
+                  </p>
+                ) : null}
               </div>
               <Button
                 size="sm"
@@ -689,13 +731,19 @@ export default function InventarioDiferenciasPage() {
               const sistUnidades = parseCantidad(edit.sistUnidades);
               const realCajas = parseCantidad(edit.realCajas);
               const realUnidades = parseCantidad(edit.realUnidades);
-              const noPermitirUnidades = debeBloquearUnidadesStockReal(det.codigo_barras, prod);
-              const efectivoSistUnidades = noPermitirUnidades
-                ? baseline?.sistUnidades ?? sistUnidades
-                : sistUnidades;
-              const efectivoRealUnidades = noPermitirUnidades
-                ? baseline?.realUnidades ?? realUnidades
-                : realUnidades;
+              const noPermitirUnidades =
+                Boolean(control?.es_drogueria) ||
+                debeBloquearUnidadesStockReal(det.codigo_barras, prod);
+              const efectivoSistUnidades = control?.es_drogueria
+                ? 0
+                : noPermitirUnidades
+                  ? baseline?.sistUnidades ?? sistUnidades
+                  : sistUnidades;
+              const efectivoRealUnidades = control?.es_drogueria
+                ? 0
+                : noPermitirUnidades
+                  ? baseline?.realUnidades ?? realUnidades
+                  : realUnidades;
               const diffCajas = realCajas - sistCajas;
               const diffUnidades = efectivoRealUnidades - efectivoSistUnidades;
               const difSucCajas = det.diferencia_sucursal_cajas;
@@ -733,31 +781,35 @@ export default function InventarioDiferenciasPage() {
                         placeholder="Cajas"
                         disabled={cargandoProd}
                       />
-                      <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
-                      <Input
-                        type="number"
-                        step="1"
-                        value={
-                          noPermitirUnidades
-                            ? String(baseline?.sistUnidades ?? edit.sistUnidades)
-                            : edit.sistUnidades
-                        }
-                        onChange={(e) =>
-                          !noPermitirUnidades &&
-                          setEdits((prev) => ({
-                            ...prev,
-                            [det.id]: { ...edit, sistUnidades: e.target.value },
-                          }))
-                        }
-                        className="h-9 w-full text-center text-sm"
-                        placeholder="Unidades"
-                        disabled={noPermitirUnidades || cargandoProd}
-                        title={
-                          noPermitirUnidades
-                            ? 'Producto no fraccionable: unidades de sistema no editables.'
-                            : undefined
-                        }
-                      />
+                      {!control?.es_drogueria ? (
+                        <>
+                          <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
+                          <Input
+                            type="number"
+                            step="1"
+                            value={
+                              noPermitirUnidades
+                                ? String(baseline?.sistUnidades ?? edit.sistUnidades)
+                                : edit.sistUnidades
+                            }
+                            onChange={(e) =>
+                              !noPermitirUnidades &&
+                              setEdits((prev) => ({
+                                ...prev,
+                                [det.id]: { ...edit, sistUnidades: e.target.value },
+                              }))
+                            }
+                            className="h-9 w-full text-center text-sm"
+                            placeholder="Unidades"
+                            disabled={noPermitirUnidades || cargandoProd}
+                            title={
+                              noPermitirUnidades
+                                ? 'Producto no fraccionable: unidades de sistema no editables.'
+                                : undefined
+                            }
+                          />
+                        </>
+                      ) : null}
                     </div>
                   </div>
                   <div className="rounded-md border border-gray-200 bg-white p-3">
@@ -777,33 +829,37 @@ export default function InventarioDiferenciasPage() {
                         className="h-9 w-full text-center text-sm"
                         placeholder="Cajas"
                       />
-                      <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
-                      <Input
-                        type="number"
-                        step="1"
-                        value={
-                          noPermitirUnidades
-                            ? String(baseline?.realUnidades ?? edit.realUnidades)
-                            : edit.realUnidades
-                        }
-                        onChange={(e) =>
-                          !noPermitirUnidades &&
-                          setEdits((prev) => ({
-                            ...prev,
-                            [det.id]: { ...edit, realUnidades: e.target.value },
-                          }))
-                        }
-                        className="h-9 w-full text-center text-sm"
-                        placeholder="Unidades"
-                        disabled={noPermitirUnidades}
-                        title={
-                          cargandoProd
-                            ? 'Cargando datos del producto…'
-                            : noPermitirUnidades
-                              ? 'Producto no fraccionable o sin dato: solo podés corregir cajas.'
-                              : undefined
-                        }
-                      />
+                      {!control?.es_drogueria ? (
+                        <>
+                          <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
+                          <Input
+                            type="number"
+                            step="1"
+                            value={
+                              noPermitirUnidades
+                                ? String(baseline?.realUnidades ?? edit.realUnidades)
+                                : edit.realUnidades
+                            }
+                            onChange={(e) =>
+                              !noPermitirUnidades &&
+                              setEdits((prev) => ({
+                                ...prev,
+                                [det.id]: { ...edit, realUnidades: e.target.value },
+                              }))
+                            }
+                            className="h-9 w-full text-center text-sm"
+                            placeholder="Unidades"
+                            disabled={noPermitirUnidades}
+                            title={
+                              cargandoProd
+                                ? 'Cargando datos del producto…'
+                                : noPermitirUnidades
+                                  ? 'Producto no fraccionable o sin dato: solo podés corregir cajas.'
+                                  : undefined
+                            }
+                          />
+                        </>
+                      ) : null}
                     </div>
                   </div>
                   <div className="rounded-md border border-gray-200 bg-white p-3">
@@ -816,13 +872,17 @@ export default function InventarioDiferenciasPage() {
                         {diffCajas > 0 ? '+' : ''}
                         {diffCajas.toFixed(0)}
                       </span>
-                      <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
-                      <span className={`h-9 flex items-center justify-center font-semibold tabular-nums ${
-                        diffUnidades === 0 ? 'text-gray-700' : diffUnidades > 0 ? 'text-blue-700' : 'text-red-700'
-                      }`}>
-                        {diffUnidades > 0 ? '+' : ''}
-                        {diffUnidades.toFixed(0)}
-                      </span>
+                      {!control?.es_drogueria ? (
+                        <>
+                          <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Unidades</span>
+                          <span className={`h-9 flex items-center justify-center font-semibold tabular-nums ${
+                            diffUnidades === 0 ? 'text-gray-700' : diffUnidades > 0 ? 'text-blue-700' : 'text-red-700'
+                          }`}>
+                            {diffUnidades > 0 ? '+' : ''}
+                            {diffUnidades.toFixed(0)}
+                          </span>
+                        </>
+                      ) : null}
                     </div>
                   </div>
                   {esAuditoria ? (
@@ -835,10 +895,14 @@ export default function InventarioDiferenciasPage() {
                         <span className="h-9 flex items-center justify-center font-semibold tabular-nums text-amber-900 dark:text-amber-100">
                           {difSucCajas == null ? '—' : `${difSucCajas > 0 ? '+' : ''}${difSucCajas}`}
                         </span>
-                        <span className="h-9 flex items-center text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Unidades</span>
-                        <span className="h-9 flex items-center justify-center font-semibold tabular-nums text-amber-900 dark:text-amber-100">
-                          {difSucUnidades == null ? '—' : `${difSucUnidades > 0 ? '+' : ''}${difSucUnidades}`}
-                        </span>
+                        {!control?.es_drogueria ? (
+                          <>
+                            <span className="h-9 flex items-center text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Unidades</span>
+                            <span className="h-9 flex items-center justify-center font-semibold tabular-nums text-amber-900 dark:text-amber-100">
+                              {difSucUnidades == null ? '—' : `${difSucUnidades > 0 ? '+' : ''}${difSucUnidades}`}
+                            </span>
+                          </>
+                        ) : null}
                       </div>
                     </div>
                   ) : null}
