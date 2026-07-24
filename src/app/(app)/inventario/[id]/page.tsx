@@ -1610,10 +1610,11 @@ export default function InventarioDetailPage() {
           new Date(a.fecha_registro).getTime() - new Date(b.fecha_registro).getTime()
       );
   let detallesFiltrados = detalles;
-  if (control.categoria_macro && filtroCodigo) {
+  // El filtro por código es solo para foco durante el conteo en progreso.
+  if (enProgreso && control.categoria_macro && filtroCodigo) {
     detallesFiltrados = detallesFiltrados.filter((d) => d.codigo_barras === filtroCodigo);
   }
-  if (filtroNombre.trim()) {
+  if (enProgreso && filtroNombre.trim()) {
     const q = filtroNombre.toLowerCase();
     detallesFiltrados = detallesFiltrados.filter((d) => {
       const nombreCompleto = `${d.descripcion ?? ''} ${d.presentacion ?? ''}`.toLowerCase();
@@ -1695,7 +1696,7 @@ export default function InventarioDetailPage() {
           </Link>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl font-bold text-gray-900">Control de inventario</h1>
+              <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Control de inventario</h1>
               <Badge variant={enProgreso ? 'warning' : 'success'}>
                 {enProgreso ? 'En progreso' : 'Cerrado'}
               </Badge>
@@ -2177,7 +2178,7 @@ export default function InventarioDetailPage() {
                     return (
                       <tr
                         key={det.id}
-                        className={`hover:bg-gray-50 cursor-pointer ${
+                        className={`${enProgreso ? 'hover:bg-gray-50 cursor-pointer' : ''} ${
                           abriendoDetalleId === det.id ? 'opacity-60 pointer-events-none' : ''
                         } ${
                           !yaInventariado
@@ -2185,8 +2186,9 @@ export default function InventarioDetailPage() {
                             : conDiferencia
                               ? 'bg-red-50 dark:bg-red-950/35'
                               : 'bg-green-50 dark:bg-emerald-950/35'
-                        } ${isSelected ? 'ring-2 ring-blue-300' : ''}`}
+                        } ${isSelected && enProgreso ? 'ring-2 ring-blue-300' : ''}`}
                         onClick={async () => {
+                          if (!enProgreso) return;
                           if (abriendoDetalleId || guardando) return;
                           setErrorProducto('');
                           setAbriendoDetalleId(det.id);

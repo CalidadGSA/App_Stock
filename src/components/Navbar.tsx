@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Building2, LogOut, Menu, Moon, Sun } from 'lucide-react';
+import { Building2, LogOut, Menu, Moon, Sun, User } from 'lucide-react';
 import Link from 'next/link';
 import type { RolOperador } from '@/lib/auth/roles';
 import { clientHasAdminAccess } from '@/lib/auth/permissions-client';
@@ -74,14 +74,17 @@ export default function Navbar({
   }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-950">
+    <header
+      className="sticky top-0 z-40 border-b border-[#1548c9] shadow-sm"
+      style={{ backgroundColor: '#1C5DFD' }}
+    >
       <div className="flex h-14 items-center justify-between gap-4 px-4">
         <div className="flex items-center gap-2 shrink-0">
           {showSidebarToggle && onOpenSidebar && (
             <button
               type="button"
               onClick={onOpenSidebar}
-              className="rounded-lg p-1.5 text-gray-600 hover:bg-gray-100 lg:hidden dark:text-gray-300 dark:hover:bg-gray-800"
+              className="rounded-lg p-1.5 text-white/90 hover:bg-white/15 lg:hidden"
               aria-label="Abrir menú"
             >
               <Menu className="h-5 w-5" />
@@ -92,24 +95,37 @@ export default function Navbar({
             className="flex items-center gap-3 shrink-0"
             aria-label="Ir al dashboard"
           >
-            <img src="/logogsa800.png" alt="Logo" className="h-8 w-8 object-contain rounded-lg" />
-            <p className="hidden sm:block text-sm font-semibold text-gray-900 leading-tight dark:text-gray-100">
+            <img
+              src="/logo-gsa-icon-white.png"
+              alt="GSA"
+              className="h-8 w-8 object-contain"
+            />
+            <p className="hidden sm:block text-sm font-semibold text-white leading-tight">
               Gestión Stock
             </p>
           </Link>
         </div>
 
         <div className="flex flex-1 items-center justify-end gap-2 min-w-0">
-          <div className="hidden md:flex items-center gap-4 shrink-0">
-            <span className="text-sm text-gray-600 truncate max-w-[180px] dark:text-gray-400" title={nombreSucursal}>
-              {nombreSucursal || codigoSucursal}
-            </span>
-            <span
-              className="text-sm font-medium text-gray-800 truncate max-w-[160px] dark:text-gray-200"
+          <div className="hidden md:flex items-center gap-2 shrink-0">
+            <div
+              className="flex items-center gap-2 rounded-lg border border-white/40 bg-white/10 px-2.5 py-1.5"
+              title={nombreSucursal || codigoSucursal}
+            >
+              <Building2 className="h-4 w-4 shrink-0 text-white" aria-hidden />
+              <span className="text-sm text-white truncate max-w-[180px]">
+                {nombreSucursal || codigoSucursal}
+              </span>
+            </div>
+            <div
+              className="flex items-center gap-2 rounded-lg border border-white/40 bg-white/10 px-2.5 py-1.5"
               title={nombreUsuario}
             >
-              {nombreUsuario}
-            </span>
+              <User className="h-4 w-4 shrink-0 text-white" aria-hidden />
+              <span className="text-sm font-medium text-white truncate max-w-[160px]">
+                {nombreUsuario}
+              </span>
+            </div>
           </div>
 
           {clientHasAdminAccess(permissions, rol) && !ocultarAccionesOperativas && (
@@ -118,7 +134,7 @@ export default function Navbar({
               onClick={handleCambiarSucursal}
               title="Cambiar sucursal"
               aria-label="Cambiar sucursal"
-              className="flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors shrink-0 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800 sm:px-2.5"
+              className="flex items-center gap-1 rounded-lg border border-white/35 bg-white/10 px-2 py-1.5 text-xs text-white hover:bg-white/20 transition-colors shrink-0 sm:px-2.5"
             >
               <Building2 className="h-4 w-4 sm:hidden" aria-hidden />
               <span className="hidden sm:inline">Cambiar sucursal</span>
@@ -128,7 +144,7 @@ export default function Navbar({
           <button
             type="button"
             onClick={toggleModoOscuro}
-            className="inline-flex items-center justify-center rounded-lg p-2 text-sm text-gray-600 hover:bg-gray-100 transition-colors shrink-0 dark:text-gray-300 dark:hover:bg-gray-800"
+            className="inline-flex items-center justify-center rounded-lg p-2 text-sm text-white/90 hover:bg-white/15 transition-colors shrink-0"
             title={modoOscuro ? 'Desactivar modo oscuro' : 'Activar modo oscuro'}
             aria-label={modoOscuro ? 'Desactivar modo oscuro' : 'Activar modo oscuro'}
           >
@@ -140,7 +156,7 @@ export default function Navbar({
               type="button"
               onClick={handleLogout}
               disabled={loggingOut}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-gray-600 hover:bg-red-50 hover:text-red-700 transition-colors shrink-0 dark:text-gray-300 dark:hover:bg-red-950 dark:hover:text-red-400"
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-white/90 hover:bg-red-500/25 hover:text-white transition-colors shrink-0"
             >
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline">{loggingOut ? 'Saliendo...' : 'Salir'}</span>

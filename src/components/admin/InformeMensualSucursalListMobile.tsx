@@ -36,18 +36,18 @@ export default function InformeMensualSucursalListMobile({
           </h3>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <ListStatPill
-              label="Inventariados (mes)"
+              label="Avance trim. (padrón)"
               value={
                 row.total_base_trimestre > 0
-                  ? `${row.productos_inventariados} (${formatPorcentaje(row.porcentaje_inventariados_sobre_base)}% del trim.)`
-                  : String(row.productos_inventariados)
+                  ? `${row.inventariados_padron_trimestre}/${row.total_base_trimestre} (${formatPorcentaje(row.porcentaje_inventariados_sobre_base)}%)`
+                  : String(row.inventariados_padron_trimestre)
               }
             />
             <ListStatPill
               label="Con diferencia"
               value={textoConDiferenciaInventariados(
                 row.productos_con_diferencia,
-                row.productos_inventariados
+                row.inventariados_padron_trimestre
               )}
               emphasize
               valueClassName={

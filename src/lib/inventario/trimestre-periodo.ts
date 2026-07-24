@@ -80,6 +80,22 @@ function solapanRangos(iniA: string, finA: string, iniB: string, finB: string): 
   return iniA <= finB && finA >= iniB;
 }
 
+function midpointYmd(ini: string, fin: string): string {
+  const parse = (ymd: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+    if (!m) return NaN;
+    return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  };
+  const a = parse(ini);
+  const b = parse(fin);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return ini;
+  const mid = new Date((a + b) / 2);
+  const y = mid.getUTCFullYear();
+  const mo = String(mid.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(mid.getUTCDate()).padStart(2, '0');
+  return `${y}-${mo}-${d}`;
+}
+
 /** Lista trimestres distintos en base_productos con fechas agregadas. */
 export async function listarTrimestresEnBase(
   admin: SupabaseClient
@@ -116,7 +132,12 @@ export async function listarTrimestresEnBase(
 
   const opciones: TrimestreDbOpcion[] = [];
   for (const [trimestre, { ini, fin }] of mapa) {
-    const inf = inferirCuatrimestreDesdeYmd(ini) ?? inferirCuatrimestreDesdeYmd(fin);
+    // Preferir el punto medio del rango: un fechainicio el 31/03 no debe
+    // clasificar un Q2 como Q1.
+    const inf =
+      inferirCuatrimestreDesdeYmd(midpointYmd(ini, fin)) ??
+      inferirCuatrimestreDesdeYmd(ini) ??
+      inferirCuatrimestreDesdeYmd(fin);
     if (!inf) continue;
     opciones.push({
       trimestre,
@@ -135,7 +156,11 @@ export async function listarTrimestresEnBase(
   return opciones;
 }
 
-/** Resuelve etiqueta trimestre en BD que solapa el cuatrimestre calendario. */
+/**
+ * Resuelve el período pedido por el usuario (año + trimestre calendario).
+ * Las fechas del informe SIEMPRE son las del calendario; la etiqueta de BD
+ * solo sirve para matchear base_productos / progreso.
+ */
 export async function resolverTrimestreDbPorCalendario(
   admin: SupabaseClient,
   anio: number,
@@ -144,22 +169,29 @@ export async function resolverTrimestreDbPorCalendario(
   const cal = rangoCalendarioCuatrimestre(anio, cuatrimestre);
   const opciones = await listarTrimestresEnBase(admin);
 
-  const candidatos = opciones.filter(
-    (o) =>
-      o.anio === anio &&
-      o.cuatrimestre === cuatrimestre &&
+  const exactos = opciones.filter(
+    (o) => o.anio === anio && o.cuatrimestre === cuatrimestre
+  );
+
+  let label = exactos[0]?.trimestre;
+
+  if (!label) {
+    const porMitad = opciones.filter((o) => {
+      const mid = midpointYmd(o.fecha_inicio, o.fecha_fin);
+      return mid >= cal.fecha_inicio && mid <= cal.fecha_fin;
+    });
+    label = porMitad[0]?.trimestre;
+  }
+
+  if (!label) {
+    const solapan = opciones.filter((o) =>
       solapanRangos(o.fecha_inicio, o.fecha_fin, cal.fecha_inicio, cal.fecha_fin)
-  );
-
-  if (candidatos.length > 0) return candidatos[0];
-
-  const porRango = opciones.filter((o) =>
-    solapanRangos(o.fecha_inicio, o.fecha_fin, cal.fecha_inicio, cal.fecha_fin)
-  );
-  if (porRango.length > 0) return porRango[0];
+    );
+    label = solapan[0]?.trimestre;
+  }
 
   return {
-    trimestre: etiquetaCuatrimestre(anio, cuatrimestre),
+    trimestre: label ?? etiquetaCuatrimestre(anio, cuatrimestre),
     fecha_inicio: cal.fecha_inicio,
     fecha_fin: cal.fecha_fin,
     anio,

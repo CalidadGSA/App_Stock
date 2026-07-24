@@ -493,7 +493,11 @@ export async function resolverStockLegacy(
   }
 
   const MAX_ATTEMPTS = 3;
-  const TIMEOUT_MS = 3000;
+  // Antes 3s: MySQL Onze a menudo supera eso y devolvía 503 en ~1–3s por carrera/reintentos.
+  const TIMEOUT_MS = (() => {
+    const n = parseInt(process.env.ONZE_STOCK_QUERY_TIMEOUT_MS ?? '', 10);
+    return Number.isFinite(n) && n > 0 ? n : 12_000;
+  })();
 
   try {
     const { getStockFromLegacyDetailed, legacyStockRaceToSistemaFields } = await import(
@@ -524,8 +528,19 @@ export async function resolverStockLegacy(
       const transitorio =
         stockResult.status === 'timeout' || stockResult.status === 'unavailable';
       if (transitorio && attempt < MAX_ATTEMPTS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
         continue;
+      }
+
+      if (stockResult.status === 'timeout') {
+        console.warn(
+          `[stock-live] timeout MySQL tras ${TIMEOUT_MS}ms (intento ${attempt + 1}/${MAX_ATTEMPTS}) producto=${productoId}`
+        );
+      } else if (stockResult.status === 'unavailable') {
+        console.warn(
+          `[stock-live] MySQL unavailable (intento ${attempt + 1}/${MAX_ATTEMPTS}) producto=${productoId}`,
+          'error' in stockResult ? stockResult.error : undefined
+        );
       }
 
       return { ok: false, failed: true };
@@ -606,7 +621,10 @@ async function getFichasDesdeMedicamentos(
 
 /**
  * Fichas para precargar inventario diario.
- * Con `sinPadron`, completa ítems faltantes del padrón desde medicamentos.
+ * Los IDs siempre vienen de base_productos / base_productos_drogueria.
+ * - Droguería: datos desde base_productos_drogueria (+ Quantio si aplica).
+ * - Resto: enriquecer desde padrón; si falta ficha, stub mínimo para no perder el cupo.
+ * - Sin padrón: completa faltantes desde la tabla catálogo `medicamentos`.
  */
 export async function getFichasInventarioDiario(
   admin: Awaited<ReturnType<typeof import('@/lib/supabase/server').createAdminClient>>,
@@ -643,8 +661,19 @@ export async function getFichasInventarioDiario(
     }
   }
 
-  return ordenados.flatMap((id) => {
+  // No descartar IDs que vinieron de base_productos: stub si no hay ficha enriquecida.
+  return ordenados.map((id) => {
     const f = porId.get(id);
-    return f ? [f] : [];
+    if (f) return f;
+    return {
+      producto_id_sistema: String(id),
+      codigo_barras: null,
+      troquel: null,
+      descripcion: `Producto ${id}`,
+      presentacion: null,
+      laboratorio: null,
+      cat_macro: null,
+      codigos_secundarios: [],
+    };
   });
 }

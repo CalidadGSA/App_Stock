@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowDown,
   ArrowLeft,
@@ -30,6 +30,18 @@ import type {
 } from '@/app/api/admin/resumen-trimestral/route';
 import type { TrimestreDbOpcion } from '@/lib/inventario/trimestre-periodo';
 import ResumenTrimestralListMobile from '@/components/admin/ResumenTrimestralListMobile';
+
+function parseAnioUrl(value: string | null): number | null {
+  const n = parseInt(String(value ?? ''), 10);
+  if (Number.isFinite(n) && n >= 2000 && n <= 2100) return n;
+  return null;
+}
+
+function parseCuatrimestreUrl(value: string | null): number | null {
+  const n = parseInt(String(value ?? ''), 10);
+  if (n >= 1 && n <= 4) return n;
+  return null;
+}
 
 interface ResumenTrimestralData {
   hoy: string;
@@ -130,12 +142,25 @@ function compararFilas(
 }
 
 export default function ResumenTrimestralPage() {
+  return (
+    <Suspense fallback={<PageSpinner />}>
+      <ResumenTrimestralContent />
+    </Suspense>
+  );
+}
+
+function ResumenTrimestralContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<ResumenTrimestralData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [anioSel, setAnioSel] = useState<number | null>(null);
-  const [cuatrimestreSel, setCuatrimestreSel] = useState<number | null>(null);
+  const [anioSel, setAnioSel] = useState<number | null>(() =>
+    parseAnioUrl(searchParams.get('anio'))
+  );
+  const [cuatrimestreSel, setCuatrimestreSel] = useState<number | null>(() =>
+    parseCuatrimestreUrl(searchParams.get('cuatrimestre'))
+  );
   const [sortKey, setSortKey] = useState<SortKey>('sucursal_nombre');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
@@ -176,6 +201,13 @@ export default function ResumenTrimestralPage() {
         if (payload?.seleccion) {
           setAnioSel(payload.seleccion.anio);
           setCuatrimestreSel(payload.seleccion.cuatrimestre);
+          // Reflejar período aplicado en la URL (sin recargar la página).
+          const next = new URLSearchParams();
+          next.set('anio', String(payload.seleccion.anio));
+          next.set('cuatrimestre', String(payload.seleccion.cuatrimestre));
+          router.replace(`/admin/resumen-trimestral?${next.toString()}`, {
+            scroll: false,
+          });
         }
       } catch {
         setError('Error al cargar el resumen trimestral');
@@ -187,8 +219,12 @@ export default function ResumenTrimestralPage() {
   );
 
   useEffect(() => {
-    void cargar();
-  }, [cargar]);
+    const anioUrl = parseAnioUrl(searchParams.get('anio'));
+    const cuaUrl = parseCuatrimestreUrl(searchParams.get('cuatrimestre'));
+    void cargar(anioUrl, cuaUrl);
+    // Solo al montar: Aplicar llama cargar() a mano.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const aniosDisponibles = useMemo(() => {
     const set = new Set<number>();
@@ -196,6 +232,9 @@ export default function ResumenTrimestralPage() {
       set.add(o.anio);
     }
     if (anioSel != null) set.add(anioSel);
+    const y = new Date().getFullYear();
+    set.add(y);
+    set.add(y - 1);
     return Array.from(set).sort((a, b) => b - a);
   }, [data?.opciones_trimestre, anioSel]);
 
@@ -275,6 +314,9 @@ export default function ResumenTrimestralPage() {
     );
   }
 
+  const periodoCerrado =
+    Boolean(data.fecha_fin) && data.hoy > data.fecha_fin;
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -301,6 +343,11 @@ export default function ResumenTrimestralPage() {
                 ({periodoLabel})
               </span>
             </p>
+            {loading ? (
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                Actualizando período…
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -418,12 +465,12 @@ export default function ResumenTrimestralPage() {
             </div>
             <div>
               <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                {malContados}
+                {formatPorcentaje(porcentajeDesdeRatio(malContados, difAuditoria))}%
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Productos mal contados
+                Productos mal contados ({malContados}/{difAuditoria})
                 <span className="block text-[10px] font-normal text-gray-400 dark:text-gray-500">
-                  Auditoría: ajuste sucursal inverso al auditor
+                  Sobre diferencias de auditoría · ajuste sucursal inverso al auditor
                 </span>
               </p>
             </div>
@@ -444,6 +491,9 @@ export default function ResumenTrimestralPage() {
             </div>
           </CardContent>
         </Card>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400">
@@ -460,9 +510,6 @@ export default function ResumenTrimestralPage() {
             </div>
           </CardContent>
         </Card>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300">
@@ -487,7 +534,11 @@ export default function ResumenTrimestralPage() {
               <p className="text-2xl font-bold tabular-nums text-gray-900 dark:text-gray-100">
                 {data.totales.por_vencer_30_dias}
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Vencen en los próximos 30 días (o hasta fin del trimestre)</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {periodoCerrado
+                  ? 'Por vencer ≤30 d (solo aplica al trimestre vigente)'
+                  : 'Vencen en los próximos 30 días (o hasta fin del trimestre)'}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -500,7 +551,11 @@ export default function ResumenTrimestralPage() {
               <p className="text-2xl font-bold tabular-nums text-gray-900 dark:text-gray-100">
                 {data.totales.por_vencer_31_60_dias}
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Vencen entre los próximos 31 y 60 días (o hasta fin del trimestre)</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {periodoCerrado
+                  ? 'Por vencer 31–60 d (solo aplica al trimestre vigente)'
+                  : 'Vencen entre los próximos 31 y 60 días (o hasta fin del trimestre)'}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -513,7 +568,11 @@ export default function ResumenTrimestralPage() {
               <p className="text-2xl font-bold tabular-nums text-gray-900 dark:text-gray-100">
                 {data.totales.por_vencer_61_90_dias}
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Vencen entre los próximos 61 y 90 días (o hasta fin del trimestre)</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {periodoCerrado
+                  ? 'Por vencer 61–90 d (solo aplica al trimestre vigente)'
+                  : 'Vencen entre los próximos 61 y 90 días (o hasta fin del trimestre)'}
+              </p>
             </div>
           </CardContent>
         </Card>

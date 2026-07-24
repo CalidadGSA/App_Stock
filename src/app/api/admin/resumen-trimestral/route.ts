@@ -174,7 +174,9 @@ export async function GET(request: NextRequest) {
             contarVentanasPorVencerEnTrimestre(
               admin,
               sucId,
-              fechaCorte,
+              // Siempre la fecha real de hoy: si el trimestre ya cerró,
+              // la función devuelve 0 (no tiene sentido “próximos 30 días”).
+              hoyVen,
               periodo!.fecha_fin
             ),
           ]);

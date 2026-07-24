@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import AppSidebar from '@/components/AppSidebar';
+import AuthSessionRedirect from '@/components/AuthSessionRedirect';
 import { AppNotificationProvider } from '@/components/notifications/AppNotificationProvider';
 import type { RolOperador } from '@/lib/auth/roles';
 import { shouldHideAppNav } from '@/lib/navigation/app-nav';
@@ -31,7 +32,8 @@ export default function AppShell({
 
   return (
     <AppNotificationProvider>
-      <div className="flex h-dvh max-h-dvh flex-col overflow-hidden">
+      <AuthSessionRedirect />
+      <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-gray-50 dark:bg-gray-950">
         <Navbar
           nombreUsuario={nombreUsuario}
           nombreSucursal={nombreSucursal}
@@ -46,12 +48,13 @@ export default function AppShell({
             <AppSidebar
               rol={rol}
               permissions={permissions}
+              nombreUsuario={nombreUsuario}
               nombreSucursal={nombreSucursal}
               mobileOpen={sidebarOpen}
               onMobileClose={() => setSidebarOpen(false)}
             />
           )}
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto w-full px-3 py-4 sm:px-4 lg:px-4 lg:py-5">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto w-full bg-gray-50 px-3 py-4 text-gray-900 sm:px-4 lg:px-4 lg:py-5 dark:bg-gray-950 dark:text-gray-100">
             {children}
           </main>
         </div>

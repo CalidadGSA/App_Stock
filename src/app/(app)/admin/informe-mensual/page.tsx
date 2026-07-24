@@ -169,6 +169,74 @@ function fmtMonedaCorto(n: number) {
   return fmtMoneda(n);
 }
 
+/** Altura interna del gráfico (barras legibles); el viewport se limita con scroll. */
+function alturaInternaBarras(filas: number, series: number) {
+  const porFila = Math.max(44, series * 14 + 18);
+  return Math.max(280, filas * porFila + 72);
+}
+
+const GRAFICO_SCROLL_CLASS =
+  'w-full max-h-[min(70vh,640px)] overflow-y-auto overflow-x-hidden rounded-md';
+
+const BARRAS_PROPS = {
+  barSize: 11,
+  maxBarSize: 14,
+  radius: [0, 4, 4, 0] as [number, number, number, number],
+};
+
+/** Ancho fijo del eje de sucursales (no agrandar el margen). */
+const YAXIS_SUCURSAL_WIDTH = 128;
+
+function partirNombreSucursal(nombre: string, maxChars = 14): string[] {
+  const words = String(nombre ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return [''];
+  const lines: string[] = [];
+  let actual = '';
+  for (const w of words) {
+    const next = actual ? `${actual} ${w}` : w;
+    if (next.length <= maxChars) {
+      actual = next;
+    } else {
+      if (actual) lines.push(actual);
+      actual = w.length > maxChars ? w.slice(0, maxChars) : w;
+    }
+  }
+  if (actual) lines.push(actual);
+  return lines.slice(0, 3);
+}
+
+/** Tick del eje Y: tipografía un poco más grande, wrap dentro del mismo ancho. */
+function TickNombreSucursal(props: {
+  x?: number;
+  y?: number;
+  payload?: { value?: string | number };
+}) {
+  const x = props.x ?? 0;
+  const y = props.y ?? 0;
+  const lines = partirNombreSucursal(String(props.payload?.value ?? ''));
+  const lineH = 13;
+  const startY = y - ((lines.length - 1) * lineH) / 2;
+  return (
+    <text
+      x={x}
+      y={startY}
+      textAnchor="end"
+      fill="currentColor"
+      className="fill-gray-700 dark:fill-gray-200"
+      style={{ fontSize: 12, fontWeight: 600 }}
+    >
+      {lines.map((line, i) => (
+        <tspan key={`${line}-${i}`} x={x} dy={i === 0 ? 0 : lineH}>
+          {line}
+        </tspan>
+      ))}
+    </text>
+  );
+}
+
 function agregarBajasDetalle(
   filas: InformeBajasStockDetalleRow[],
   opts?: { sucursalId?: number; ym?: string }
@@ -315,8 +383,8 @@ export default function InformeMensualPage() {
     const rows = filasSucursalOrdenadas.map((r) => [
       r.nombrefantasia,
       r.total_base_trimestre > 0
-        ? `${r.productos_inventariados} (${formatPorcentaje(r.porcentaje_inventariados_sobre_base)}%)`
-        : String(r.productos_inventariados),
+        ? `${r.inventariados_padron_trimestre}/${r.total_base_trimestre} (${formatPorcentaje(r.porcentaje_inventariados_sobre_base)}%)`
+        : String(r.inventariados_padron_trimestre),
       r.productos_con_diferencia,
       r.productos_mal_contados,
       r.productos_cargados_vencimientos,
@@ -328,8 +396,8 @@ export default function InformeMensualPage() {
     const totalRow = [
       'Totales',
       sel.totales.total_base_trimestre > 0
-        ? `${sel.totales.productos_inventariados} (${formatPorcentaje(sel.totales.porcentaje_inventariados_sobre_base)}%)`
-        : String(sel.totales.productos_inventariados),
+        ? `${sel.totales.inventariados_padron_trimestre}/${sel.totales.total_base_trimestre} (${formatPorcentaje(sel.totales.porcentaje_inventariados_sobre_base)}%)`
+        : String(sel.totales.inventariados_padron_trimestre),
       sel.totales.productos_con_diferencia,
       sel.totales.productos_mal_contados,
       sel.totales.productos_cargados_vencimientos,
@@ -379,8 +447,8 @@ export default function InformeMensualPage() {
       body: filasSucursalOrdenadas.map((r) => [
         r.nombrefantasia,
         r.total_base_trimestre > 0
-          ? `${r.productos_inventariados} (${formatPorcentaje(r.porcentaje_inventariados_sobre_base)}%)`
-          : String(r.productos_inventariados),
+          ? `${r.inventariados_padron_trimestre}/${r.total_base_trimestre} (${formatPorcentaje(r.porcentaje_inventariados_sobre_base)}%)`
+          : String(r.inventariados_padron_trimestre),
         String(r.productos_con_diferencia),
         String(r.productos_mal_contados),
         String(r.productos_cargados_vencimientos),
@@ -393,8 +461,8 @@ export default function InformeMensualPage() {
         [
           'Totales',
           sel.totales.total_base_trimestre > 0
-            ? `${sel.totales.productos_inventariados} (${formatPorcentaje(sel.totales.porcentaje_inventariados_sobre_base)}%)`
-            : String(sel.totales.productos_inventariados),
+            ? `${sel.totales.inventariados_padron_trimestre}/${sel.totales.total_base_trimestre} (${formatPorcentaje(sel.totales.porcentaje_inventariados_sobre_base)}%)`
+            : String(sel.totales.inventariados_padron_trimestre),
           String(sel.totales.productos_con_diferencia),
           String(sel.totales.productos_mal_contados),
           String(sel.totales.productos_cargados_vencimientos),
@@ -568,13 +636,15 @@ export default function InformeMensualPage() {
 
   function celdaInventariadosMes(row: InformeMensualDetalleSucursal) {
     if (row.total_base_trimestre <= 0) {
-      return <span className="tabular-nums">{row.productos_inventariados}</span>;
+      return <span className="tabular-nums">{row.inventariados_padron_trimestre}</span>;
     }
     return (
       <span className="inline-flex flex-col items-end leading-tight tabular-nums">
-        <span>{row.productos_inventariados}</span>
+        <span>
+          {row.inventariados_padron_trimestre}/{row.total_base_trimestre}
+        </span>
         <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">
-          ({formatPorcentaje(row.porcentaje_inventariados_sobre_base)}% del trim.)
+          ({formatPorcentaje(row.porcentaje_inventariados_sobre_base)}%)
         </span>
       </span>
     );
@@ -709,12 +779,15 @@ export default function InformeMensualPage() {
               </CardHeader>
               <CardContent>
                 <p className="text-2xl font-bold tabular-nums text-gray-900 dark:text-gray-50">
-                  {inventariadosTotalMes.toLocaleString('es-AR')}
+                  {(
+                    payload.seleccionMes.totales.inventariados_padron_trimestre ??
+                    inventariadosTotalMes
+                  ).toLocaleString('es-AR')}
                   <span className="mx-1.5 font-semibold text-gray-400 dark:text-gray-500">/</span>
                   {difLineasMes.toLocaleString('es-AR')}
                 </p>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Total inventariado / con diferencia
+                  Avance padrón trim. / líneas con diferencia (mes)
                 </p>
               </CardContent>
             </Card>
@@ -950,17 +1023,20 @@ export default function InformeMensualPage() {
               {serieDifValorSucursal.length === 0 ? (
                 <p className="text-sm text-gray-500">Sin diferencias con valor en este mes.</p>
               ) : (
-                <div
-                  className="w-full"
-                  style={{
-                    height: Math.min(620, Math.max(280, serieDifValorSucursal.length * 28)),
-                  }}
-                >
+                <div className={GRAFICO_SCROLL_CLASS}>
+                  <div
+                    className="w-full"
+                    style={{
+                      height: alturaInternaBarras(serieDifValorSucursal.length, 3),
+                    }}
+                  >
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={serieDifValorSucursal}
                       layout="vertical"
                       margin={{ top: 8, right: 16, left: 8, bottom: 8 }}
+                      barCategoryGap={10}
+                      barGap={3}
                     >
                       <CartesianGrid
                         strokeDasharray="3 3"
@@ -975,8 +1051,8 @@ export default function InformeMensualPage() {
                       <YAxis
                         type="category"
                         dataKey="nombre"
-                        width={128}
-                        tick={{ fontSize: 10 }}
+                        width={YAXIS_SUCURSAL_WIDTH}
+                        tick={<TickNombreSucursal />}
                         interval={0}
                       />
                       <Tooltip
@@ -1000,11 +1076,12 @@ export default function InformeMensualPage() {
                               : 'Neto ($)'
                         }
                       />
-                      <Bar dataKey="valorPositivo" fill="#7c3aed" radius={[0, 2, 2, 0]} />
-                      <Bar dataKey="valorNegativo" fill="#dc2626" radius={[0, 2, 2, 0]} />
-                      <Bar dataKey="valorNeto" fill="#d97706" radius={[0, 2, 2, 0]} />
+                      <Bar dataKey="valorPositivo" fill="#7c3aed" {...BARRAS_PROPS} />
+                      <Bar dataKey="valorNegativo" fill="#dc2626" {...BARRAS_PROPS} />
+                      <Bar dataKey="valorNeto" fill="#d97706" {...BARRAS_PROPS} />
                     </BarChart>
                   </ResponsiveContainer>
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -1233,17 +1310,20 @@ export default function InformeMensualPage() {
                   {serieBajasSucursales.length === 0 ? (
                     <p className="text-sm text-gray-500">Sin bajas de stock en este mes.</p>
                   ) : (
-                    <div
-                      className="w-full"
-                      style={{
-                        height: Math.min(620, Math.max(280, serieBajasSucursales.length * 28)),
-                      }}
-                    >
+                    <div className={GRAFICO_SCROLL_CLASS}>
+                      <div
+                        className="w-full"
+                        style={{
+                          height: alturaInternaBarras(serieBajasSucursales.length, 4),
+                        }}
+                      >
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                           data={serieBajasSucursales}
                           layout="vertical"
                           margin={{ top: 8, right: 16, left: 8, bottom: 8 }}
+                          barCategoryGap={10}
+                          barGap={3}
                         >
                           <CartesianGrid
                             strokeDasharray="3 3"
@@ -1266,8 +1346,8 @@ export default function InformeMensualPage() {
                           <YAxis
                             type="category"
                             dataKey="nombre"
-                            width={128}
-                            tick={{ fontSize: 10 }}
+                            width={YAXIS_SUCURSAL_WIDTH}
+                            tick={<TickNombreSucursal />}
                             interval={0}
                           />
                           <Tooltip
@@ -1288,12 +1368,13 @@ export default function InformeMensualPage() {
                                     : 'Unid. (abs.)'
                             }
                           />
-                          <Bar xAxisId="qty" dataKey="movimientos" fill="#e11d48" radius={[0, 2, 2, 0]} />
-                          <Bar xAxisId="qty" dataKey="cajas" fill="#7c3aed" radius={[0, 2, 2, 0]} />
-                          <Bar xAxisId="qty" dataKey="unidades" fill="#64748b" radius={[0, 2, 2, 0]} />
-                          <Bar xAxisId="money" dataKey="valorTotal" fill="#0d9488" radius={[0, 2, 2, 0]} />
+                          <Bar xAxisId="qty" dataKey="movimientos" fill="#e11d48" {...BARRAS_PROPS} />
+                          <Bar xAxisId="qty" dataKey="cajas" fill="#7c3aed" {...BARRAS_PROPS} />
+                          <Bar xAxisId="qty" dataKey="unidades" fill="#64748b" {...BARRAS_PROPS} />
+                          <Bar xAxisId="money" dataKey="valorTotal" fill="#0d9488" {...BARRAS_PROPS} />
                         </BarChart>
                       </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
                 </CardContent>
@@ -1313,15 +1394,23 @@ export default function InformeMensualPage() {
               )}
             </CardHeader>
             <CardContent className="w-full">
-              <div
-                className="w-full"
-                style={{ height: Math.min(620, Math.max(360, serieSucursales.length * 28)) }}
-              >
+              <div className={GRAFICO_SCROLL_CLASS}>
+                <div
+                  className="w-full"
+                  style={{
+                    height: alturaInternaBarras(
+                      serieSucursales.length,
+                      muestraValorBajas ? 4 : 3
+                    ),
+                  }}
+                >
                 <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={serieSucursales}
                   layout="vertical"
                   margin={{ top: muestraValorBajas ? 28 : 8, right: 16, left: 8, bottom: 8 }}
+                  barCategoryGap={10}
+                  barGap={3}
                 >
                   <CartesianGrid strokeDasharray="3 3" horizontal className="stroke-gray-200 dark:stroke-gray-700" />
                   <XAxis xAxisId="qty" type="number" tick={{ fontSize: 11 }} allowDecimals />
@@ -1337,8 +1426,8 @@ export default function InformeMensualPage() {
                   <YAxis
                     type="category"
                     dataKey="nombre"
-                    width={128}
-                    tick={{ fontSize: 10 }}
+                    width={YAXIS_SUCURSAL_WIDTH}
+                    tick={<TickNombreSucursal />}
                     interval={0}
                   />
                   <Tooltip
@@ -1371,14 +1460,15 @@ export default function InformeMensualPage() {
                             : 'Dif. invent.'
                     }
                   />
-                  <Bar xAxisId="qty" dataKey="cargados" fill="#2563eb" radius={[0, 2, 2, 0]} />
-                  <Bar xAxisId="qty" dataKey="vendidas" fill="#16a34a" radius={[0, 2, 2, 0]} />
-                  <Bar xAxisId="qty" dataKey="difInventario" fill="#d97706" radius={[0, 2, 2, 0]} />
+                  <Bar xAxisId="qty" dataKey="cargados" fill="#2563eb" {...BARRAS_PROPS} />
+                  <Bar xAxisId="qty" dataKey="vendidas" fill="#16a34a" {...BARRAS_PROPS} />
+                  <Bar xAxisId="qty" dataKey="difInventario" fill="#d97706" {...BARRAS_PROPS} />
                   {muestraValorBajas && (
-                    <Bar xAxisId="money" dataKey="valorBajas" fill="#0d9488" radius={[0, 2, 2, 0]} />
+                    <Bar xAxisId="money" dataKey="valorBajas" fill="#0d9488" {...BARRAS_PROPS} />
                   )}
                 </BarChart>
               </ResponsiveContainer>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -1434,7 +1524,7 @@ export default function InformeMensualPage() {
                       <thead>
                         <tr className="border-b border-gray-100 bg-gray-50/80 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-800 dark:bg-gray-900/50 dark:text-gray-400 lg:text-xs">
                           {encabezadoOrdenableTabla('nombrefantasia', 'Sucursal')}
-                          {encabezadoOrdenableTabla('productos_inventariados', 'Invent. mes', 'right')}
+                          {encabezadoOrdenableTabla('productos_inventariados', 'Avance trim.', 'right')}
                           {encabezadoOrdenableTabla('productos_con_diferencia', 'Con dif.', 'right')}
                           {encabezadoOrdenableTabla('productos_mal_contados', 'Mal contados', 'right')}
                           {encabezadoOrdenableTabla(
@@ -1551,18 +1641,23 @@ export default function InformeMensualPage() {
                           <td className="px-2 py-2 text-right">
                             {payload.seleccionMes.totales.total_base_trimestre > 0 ? (
                               <span className="inline-flex flex-col items-end leading-tight tabular-nums">
-                                <span>{inventariadosTotalMes}</span>
+                                <span>
+                                  {payload.seleccionMes.totales.inventariados_padron_trimestre}/
+                                  {payload.seleccionMes.totales.total_base_trimestre}
+                                </span>
                                 <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">
                                   (
                                   {formatPorcentaje(
                                     payload.seleccionMes.totales
                                       .porcentaje_inventariados_sobre_base
                                   )}
-                                  % del trim.)
+                                  %)
                                 </span>
                               </span>
                             ) : (
-                              <span className="tabular-nums">{inventariadosTotalMes}</span>
+                              <span className="tabular-nums">
+                                {payload.seleccionMes.totales.inventariados_padron_trimestre}
+                              </span>
                             )}
                           </td>
                           <td className="px-2 py-2 text-right">

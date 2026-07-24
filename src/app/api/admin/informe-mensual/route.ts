@@ -518,7 +518,7 @@ export async function GET(request: NextRequest) {
     bajasStock,
     leyenda: {
       productos_inventariados:
-        'Productos distintos inventariados en el mes (fecha fin del control). Entre paréntesis: % sobre la base total del trimestre (base_productos).',
+        'Avance del padrón del trimestre (productos con vecesinventariado > 0 / base_productos). Mismo criterio que el progreso del dashboard. No cuenta líneas de controles de auditoría ni productos fuera del padrón.',
       inventario_diferencias:
         'Líneas de inventario con diferencias en controles cerrados cuya fecha fin cayó en el mes (KPI superior). Con dif. en tabla: productos distintos con diferencia (excluye auditoría).',
       productos_mal_contados:

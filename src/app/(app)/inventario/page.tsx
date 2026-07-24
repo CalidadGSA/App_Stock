@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -102,7 +102,7 @@ export default function InventarioListPage() {
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <h1 className="text-xl font-bold text-gray-900">Inventarios</h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Inventarios</h1>
         </div>
       </div>
 

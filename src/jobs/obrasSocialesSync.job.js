@@ -58,22 +58,47 @@ function shouldSkipDuplicateStart() {
   return false;
 }
 
+/**
+ * Cada paso corre aislado: un fallo (p. ej. Quantio MySQL inalcanzable desde la
+ * VPS) no aborta el resto del lote.
+ */
 async function runLegacySyncBatch() {
   console.log(
     '\n⏰ Sync legacy → Supabase (sucursales, operadores, medicamentos, catálogos, laboratorios, Quantio droguería)',
     new Date().toLocaleString('es-AR', { timeZone: TZ })
   );
 
-  await syncLegacyToSupabase({ mode: 'ALL' });
-  await syncOperadoresLegacyToSupabase({ mode: 'ALL' });
-  await syncUsuariosQuantioToSupabase();
-  await syncProductosQuantioToSupabase();
-  await syncMedicamentosLegacyToSupabase({ mode: 'ALL' });
-  await syncRubrosLegacyToSupabase({ mode: 'ALL' });
-  await syncSubrubrosLegacyToSupabase({ mode: 'ALL' });
-  await syncCategoriasLegacyToSupabase({ mode: 'ALL' });
-  await syncPsicofarmacosLegacyToSupabase({ mode: 'ALL' });
-  await syncLaboratoriosLegacyToSupabase({ mode: 'ALL' });
+  const pasos = [
+    ['sucursales', () => syncLegacyToSupabase({ mode: 'ALL' })],
+    ['operadores', () => syncOperadoresLegacyToSupabase({ mode: 'ALL' })],
+    ['usuarios_quantio', () => syncUsuariosQuantioToSupabase()],
+    ['productos_quantio', () => syncProductosQuantioToSupabase()],
+    ['medicamentos', () => syncMedicamentosLegacyToSupabase({ mode: 'ALL' })],
+    ['rubros', () => syncRubrosLegacyToSupabase({ mode: 'ALL' })],
+    ['subrubros', () => syncSubrubrosLegacyToSupabase({ mode: 'ALL' })],
+    ['categorias', () => syncCategoriasLegacyToSupabase({ mode: 'ALL' })],
+    ['psicofarmacos', () => syncPsicofarmacosLegacyToSupabase({ mode: 'ALL' })],
+    ['laboratorios', () => syncLaboratoriosLegacyToSupabase({ mode: 'ALL' })],
+  ];
+
+  const fallidos = [];
+  for (const [nombre, run] of pasos) {
+    try {
+      await run();
+    } catch (e) {
+      fallidos.push(nombre);
+      console.error(
+        `❌ Sync "${nombre}" falló (se continúa con el resto):`,
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
+
+  if (fallidos.length) {
+    console.warn(`⚠️ Lote sync legacy terminó con fallos en: ${fallidos.join(', ')}`);
+  } else {
+    console.log('✅ Lote sync legacy completo sin fallos');
+  }
 }
 
 async function runOperadoresMedicamentosSyncBatch() {

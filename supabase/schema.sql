@@ -53,6 +53,7 @@ create table operadores (
   rol        rol_usuario not null default 'operador_sucursal',
   Activo     char(1) not null,
   fuente     text not null default 'onze',
+  session_version integer not null default 0,
   creado timestamptz not null default now(),
   actualizado timestamptz not null default now(),
   unique (Operador, fuente)

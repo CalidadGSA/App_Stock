@@ -4,7 +4,6 @@ import { canSeeAllInventarioTipos, getOperadorRbacContext } from '@/lib/auth/rba
 import { nombreTipoControlInventario } from '@/lib/inventario/tipo-control';
 import {
   CATEGORIA_MACRO_SIN_PADRON,
-  esCategoriaMacro,
   esCategoriaMacroInventarioDiario,
   esCategoriaMacroSinPadron,
   filtrarQueryBaseProductosPorMacro,
@@ -13,9 +12,7 @@ import {
 import { obtenerProgresoTrimestreSucursal, trimestrePadronCompleto } from '@/lib/inventario/trimestre-base';
 import { leerVueltasPsicosSucursal } from '@/lib/inventario/vueltas-psicos-sucursal';
 import {
-  filtrarIdsPorCategoriaMacroPadron,
   getFichasInventarioDiario,
-  idsExistenEnPadron,
   padronProductosDisponible,
 } from '@/lib/padron-productos-lookup';
 import { quantioProductosDisponible } from '@/lib/quantio-productos-lookup';
@@ -33,35 +30,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { fechaHoyArgentinaYmd } from '@/lib/utils';
 
-async function filtrarCandidatosInventarioDiario(
-  candidatos: number[],
-  categoriaMacro: CategoriaMacroInventarioDiario,
-  opts?: { drogueria?: boolean }
-): Promise<number[]> {
-  if (candidatos.length === 0) return [];
-  if (opts?.drogueria) {
-    return candidatos.filter((id) => !Number.isNaN(id));
-  }
-  if (esCategoriaMacroSinPadron(categoriaMacro)) {
-    return candidatos.filter((id) => !Number.isNaN(id));
-  }
-
-  const existentes = await idsExistenEnPadron(candidatos);
-  const enPadron = candidatos.filter((id) => existentes.has(id));
-
-  // Los candidatos ya vienen de base_productos con la misma categoriamacro.
-  // En PSICO/BIENESTAR no re-filtramos por cat_macro del padrón (suele desincronizarse).
-  if (categoriaMacro === 'PSICOTROPICOS' || categoriaMacro === 'BIENESTAR') {
-    return enPadron;
-  }
-
-  if (esCategoriaMacro(categoriaMacro)) {
-    return filtrarIdsPorCategoriaMacroPadron(enPadron, categoriaMacro);
-  }
-
-  return [];
-}
-
 async function seleccionarIdsInventarioDiario(
   admin: Awaited<ReturnType<typeof createAdminClient>>,
   sucursalNum: number,
@@ -69,12 +37,24 @@ async function seleccionarIdsInventarioDiario(
   trimestreActual: string,
   idsExcluidos: Set<number>,
   opts?: { drogueria?: boolean }
-) {
+): Promise<{ ids: number[]; objetivo: number; motivoVacio: string | null }> {
+  /** Cupo por defecto si no hay fila en cantidad_inventario. */
+  function cupoFallbackSinCantidadInventario(): number {
+    if (categoriaMacro === 'PSICOTROPICOS') return 20;
+    // FARMA, BIENESTAR y Sin padrón
+    return 50;
+  }
+
   /**
    * Cupo del día desde cantidad_inventario.cantidadDiaria
    * (una fila por sucursal + categoriaMacro + trimestre).
    */
-  async function obtenerObjetivoDiario(): Promise<number> {
+  async function obtenerObjetivoDiario(): Promise<{
+    objetivo: number;
+    foundRow: boolean;
+    usedFallback: boolean;
+    lastError: string | null;
+  }> {
     const attempts: Array<{
       idField: string;
       categoriaField: string;
@@ -98,6 +78,7 @@ async function seleccionarIdsInventarioDiario(
     ];
 
     let lastError: string | null = null;
+    let foundRow = false;
     for (const a of attempts) {
       const { data, error } = await admin
         .from('cantidad_inventario')
@@ -105,50 +86,94 @@ async function seleccionarIdsInventarioDiario(
         .eq(a.idField, sucursalNum)
         .ilike(a.categoriaField, categoriaMacro)
         .eq('trimestre', trimestreActual)
-        .maybeSingle();
+        .limit(1);
 
       if (error) {
         lastError = error.message;
         continue;
       }
 
-      const row = (data ?? null) as Record<string, unknown> | null;
+      const row = (Array.isArray(data) && data.length > 0
+        ? data[0]
+        : null) as Record<string, unknown> | null;
       if (!row) continue;
+      foundRow = true;
       const valorRaw =
         row[a.cantidadDiariaField] ??
         row[a.cantidadDiariaField.toLowerCase()] ??
         Object.values(row)[0];
       const valor = Number(valorRaw);
       if (Number.isFinite(valor) && valor > 0) {
-        return Math.floor(valor);
+        return {
+          objetivo: Math.floor(valor),
+          foundRow: true,
+          usedFallback: false,
+          lastError: null,
+        };
       }
+      return {
+        objetivo: 0,
+        foundRow: true,
+        usedFallback: false,
+        lastError: null,
+      };
     }
 
-    console.warn('No se pudo leer cantidad_inventario.cantidadDiaria', {
+    const fallback = cupoFallbackSinCantidadInventario();
+    console.warn('cantidad_inventario ausente: usando cupo fallback', {
       sucursalNum,
       categoriaMacro,
       trimestreActual,
+      fallback,
       lastError,
     });
-    return 0;
+    return {
+      objetivo: fallback,
+      foundRow: false,
+      usedFallback: true,
+      lastError,
+    };
   }
 
-  const objetivo = await obtenerObjetivoDiario();
-  if (objetivo <= 0) return [];
+  const { objetivo, foundRow, usedFallback } = await obtenerObjetivoDiario();
+  if (objetivo <= 0) {
+    return {
+      ids: [],
+      objetivo: 0,
+      motivoVacio: foundRow
+        ? `El cupo diario (cantidad_inventario) para sucursal ${sucursalNum}, ${categoriaMacro}, trimestre «${trimestreActual}» es 0.`
+        : `No hay fila en cantidad_inventario para sucursal ${sucursalNum}, categoría ${categoriaMacro} y trimestre «${trimestreActual}». Sin cupo diario no se puede abrir el inventario.`,
+    };
+  }
+
+  if (usedFallback) {
+    console.info(
+      `Inventario diario sucursal ${sucursalNum} / ${categoriaMacro}: cupo fallback ${objetivo} (sin cantidad_inventario para «${trimestreActual}»).`
+    );
+  }
 
   if (opts?.drogueria) {
-    return seleccionarIdsInventarioDiarioDrogueria(
+    const ids = await seleccionarIdsInventarioDiarioDrogueria(
       admin,
       categoriaMacro,
       trimestreActual,
       objetivo,
       idsExcluidos
     );
+    return {
+      ids,
+      objetivo,
+      motivoVacio:
+        ids.length === 0
+          ? `Hay cupo (${objetivo}) pero no hay productos pendientes en base_productos de droguería para ${categoriaMacro} / «${trimestreActual}».`
+          : null,
+    };
   }
 
   const seleccionados: number[] = [];
   const vistos = new Set<number>();
 
+  // Fuente de verdad: base_productos (o base_productos_drogueria arriba). Sin filtro por padrón.
   if (categoriaMacro === 'PSICOTROPICOS') {
     const vueltasMax = await leerVueltasPsicosSucursal(admin, sucursalNum);
 
@@ -160,7 +185,8 @@ async function seleccionarIdsInventarioDiario(
       .eq('trimestre', trimestreActual)
       .lt('vecesinventariado', vueltasMax)
       .order('vecesinventariado', { ascending: true })
-      .order('orden', { ascending: true });
+      .order('orden', { ascending: true })
+      .order('idproducto', { ascending: true });
 
     if (baseError) {
       throw baseError;
@@ -175,13 +201,8 @@ async function seleccionarIdsInventarioDiario(
         .map((row) => Number(row.idproducto))
         .filter((n) => !Number.isNaN(n) && !vistos.has(n) && !idsExcluidos.has(n));
 
-      const validos = new Set(
-        await filtrarCandidatosInventarioDiario(candidatos, categoriaMacro)
-      );
-
       for (const id of candidatos) {
         vistos.add(id);
-        if (!validos.has(id)) continue;
         seleccionados.push(id);
         if (seleccionados.length === objetivo) break;
       }
@@ -191,7 +212,15 @@ async function seleccionarIdsInventarioDiario(
       }
     }
 
-    return seleccionados;
+    if (seleccionados.length === 0) {
+      return {
+        ids: [],
+        objetivo,
+        motivoVacio: `No hay productos PSICOTROPICOS pendientes en base_productos (sucursal ${sucursalNum}, trimestre «${trimestreActual}», vueltas < ${vueltasMax}).`,
+      };
+    }
+
+    return { ids: seleccionados, objetivo, motivoVacio: null };
   }
 
   if (
@@ -211,6 +240,7 @@ async function seleccionarIdsInventarioDiario(
           .eq('trimestre', trimestreActual)
           .eq('vecesinventariado', 0)
           .order('orden', { ascending: true })
+          .order('idproducto', { ascending: true })
           .range(offset, offset + fetchSize - 1),
         categoriaMacro
       );
@@ -227,13 +257,8 @@ async function seleccionarIdsInventarioDiario(
         .map((r: { idproducto: number }) => Number(r.idproducto))
         .filter((n) => !Number.isNaN(n) && !vistos.has(n) && !idsExcluidos.has(n));
 
-      const validos = new Set(
-        await filtrarCandidatosInventarioDiario(candidatos, categoriaMacro)
-      );
-
       for (const id of candidatos) {
         vistos.add(id);
-        if (!validos.has(id)) continue;
         seleccionados.push(id);
         if (seleccionados.length === objetivo) break;
       }
@@ -241,10 +266,22 @@ async function seleccionarIdsInventarioDiario(
       offset += baseRows.length;
     }
 
-    return seleccionados;
+    if (seleccionados.length === 0) {
+      return {
+        ids: [],
+        objetivo,
+        motivoVacio: `No hay productos ${categoriaMacro} con vecesinventariado = 0 en base_productos (sucursal ${sucursalNum}, trimestre «${trimestreActual}»).`,
+      };
+    }
+
+    return { ids: seleccionados, objetivo, motivoVacio: null };
   }
 
-  return [];
+  return {
+    ids: [],
+    objetivo: 0,
+    motivoVacio: `Categoría macro no soportada para inventario diario: ${categoriaMacro}`,
+  };
 }
 
 /** GET /api/inventario - listar controles de inventario de la sucursal (con paginación y filtros) */
@@ -369,6 +406,8 @@ export async function POST(request: NextRequest) {
 
   let idsProductosPrecargados: number[] = [];
   let trimestrePrecarga: string | null = null;
+  let cupoObjetivoDiario = 0;
+  let idsExcluidosAbiertos = new Set<number>();
 
   // Inventario diario guiado: validar trimestre y que haya productos antes de crear el control
   if (esDiarioGuiado) {
@@ -422,15 +461,27 @@ export async function POST(request: NextRequest) {
 
       if (trError) {
         console.error('Error obteniendo trimestre base_productos:', trError);
-        return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
+        return NextResponse.json(
+          {
+            error: `No se pudo leer el trimestre vigente en base_productos para sucursal ${sucursalNum} / ${macroConsulta}.`,
+          },
+          { status: 400 }
+        );
       }
 
-      trimestreActual =
-        trRows && trRows.length > 0 ? (trRows[0] as { trimestre: string }).trimestre : null;
+      const trRow = trRows && trRows.length > 0
+        ? (trRows[0] as { trimestre: string | null })
+        : null;
+      trimestreActual = trRow?.trimestre ? String(trRow.trimestre).trim() : null;
     }
 
     if (!trimestreActual) {
-      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: `No hay trimestre vigente en base_productos para sucursal ${sucursalNum} y categoría ${macroConsulta} (fechainicio/fechafin deben cubrir la fecha de hoy). Tener filas sin fechas vigentes no alcanza.`,
+        },
+        { status: 400 }
+      );
     }
     trimestrePrecarga = trimestreActual;
 
@@ -460,9 +511,10 @@ export async function POST(request: NextRequest) {
         );
       }
     }
+    idsExcluidosAbiertos = idsExcluidos;
 
     try {
-      idsProductosPrecargados = await seleccionarIdsInventarioDiario(
+      const seleccion = await seleccionarIdsInventarioDiario(
         admin,
         sucursalNum,
         categoriaMacro!,
@@ -470,12 +522,24 @@ export async function POST(request: NextRequest) {
         idsExcluidos,
         { drogueria: esDrogueriaSucursal }
       );
+      idsProductosPrecargados = seleccion.ids;
+      cupoObjetivoDiario = seleccion.objetivo;
+      if (idsProductosPrecargados.length === 0) {
+        return NextResponse.json(
+          { error: seleccion.motivoVacio ?? sinProductosMsg },
+          { status: 400 }
+        );
+      }
+      if (idsProductosPrecargados.length < cupoObjetivoDiario) {
+        console.warn('Inventario diario: selección bajo cupo', {
+          sucursalNum,
+          categoriaMacro,
+          cupo: cupoObjetivoDiario,
+          seleccionados: idsProductosPrecargados.length,
+        });
+      }
     } catch (selectionError) {
       console.error('Error seleccionando productos para inventario diario:', selectionError);
-      return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
-    }
-
-    if (idsProductosPrecargados.length === 0) {
       return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
     }
   }
@@ -509,22 +573,89 @@ export async function POST(request: NextRequest) {
 
   // 3) Precrear líneas de detalle desde padrón / Quantio + ubicación droguería
   if (idsProductos.length > 0) {
-    const fichasOrdenadas = await getFichasInventarioDiario(admin, idsProductos, {
+    const excluidosParaTopUp = new Set<number>([
+      ...idsExcluidosAbiertos,
+      ...idsProductos,
+    ]);
+
+    let fichasOrdenadas = await getFichasInventarioDiario(admin, idsProductos, {
       sinPadron: esCategoriaMacroSinPadron(categoriaMacro),
       drogueria: esDrogueriaSucursal,
       trimestre: trimestrePrecarga,
     });
+
+    // Si faltan fichas respecto del cupo, reponer con más IDs de la misma macro.
+    if (
+      cupoObjetivoDiario > 0 &&
+      fichasOrdenadas.length < cupoObjetivoDiario &&
+      trimestrePrecarga &&
+      categoriaMacro
+    ) {
+      const yaEnFicha = new Set(
+        fichasOrdenadas.map((f) => Number(f.producto_id_sistema)).filter((n) => Number.isFinite(n))
+      );
+      for (const id of idsProductos) excluidosParaTopUp.add(id);
+
+      let guard = 0;
+      while (fichasOrdenadas.length < cupoObjetivoDiario && guard < 10) {
+        guard += 1;
+        const faltan = cupoObjetivoDiario - fichasOrdenadas.length;
+        const mas = await seleccionarIdsInventarioDiario(
+          admin,
+          sucursalNum,
+          categoriaMacro,
+          trimestrePrecarga,
+          excluidosParaTopUp,
+          { drogueria: esDrogueriaSucursal }
+        );
+        if (mas.ids.length === 0) break;
+
+        for (const id of mas.ids) excluidosParaTopUp.add(id);
+
+        const extras = await getFichasInventarioDiario(admin, mas.ids, {
+          sinPadron: esCategoriaMacroSinPadron(categoriaMacro),
+          drogueria: esDrogueriaSucursal,
+          trimestre: trimestrePrecarga,
+        });
+        if (extras.length === 0) break;
+
+        for (const f of extras) {
+          const id = Number(f.producto_id_sistema);
+          if (!Number.isFinite(id) || yaEnFicha.has(id)) continue;
+          yaEnFicha.add(id);
+          fichasOrdenadas.push(f);
+          if (fichasOrdenadas.length === cupoObjetivoDiario) break;
+        }
+
+        if (extras.length < faltan && mas.ids.length < faltan) {
+          break;
+        }
+      }
+
+      if (fichasOrdenadas.length < cupoObjetivoDiario) {
+        console.warn('Inventario diario: fichas bajo cupo tras top-up', {
+          sucursalNum,
+          categoriaMacro,
+          cupo: cupoObjetivoDiario,
+          fichas: fichasOrdenadas.length,
+        });
+      }
+    }
 
     if (fichasOrdenadas.length === 0) {
       await admin.from('controles_inventario').delete().eq('id', controlId);
       return NextResponse.json({ error: sinProductosMsg }, { status: 400 });
     }
 
+    if (cupoObjetivoDiario > 0 && fichasOrdenadas.length > cupoObjetivoDiario) {
+      fichasOrdenadas = fichasOrdenadas.slice(0, cupoObjetivoDiario);
+    }
+
     const filas = fichasOrdenadas.map((f) => ({
       control_id: controlId,
       producto_id_sistema: f.producto_id_sistema,
       codigo_barras: f.codigo_barras,
-      descripcion: f.descripcion,
+      descripcion: f.descripcion || `Producto ${f.producto_id_sistema}`,
       presentacion: f.presentacion,
       laboratorio: f.laboratorio,
       sector: f.sector ?? null,
@@ -539,7 +670,26 @@ export async function POST(request: NextRequest) {
       stock_real: 0,
     }));
 
-    await admin.from('controles_inventario_detalle').insert(filas);
+    const { error: insertDetallesError } = await admin
+      .from('controles_inventario_detalle')
+      .insert(filas);
+
+    if (insertDetallesError) {
+      console.error('Error insertando detalle inventario diario:', insertDetallesError);
+      await admin.from('controles_inventario').delete().eq('id', controlId);
+      return NextResponse.json(
+        { error: insertDetallesError.message || 'Error al precargar productos del inventario' },
+        { status: 500 }
+      );
+    }
+
+    const warningCupo =
+      cupoObjetivoDiario > 0 && fichasOrdenadas.length < cupoObjetivoDiario
+        ? `Se precargaron ${fichasOrdenadas.length} de ${cupoObjetivoDiario} productos del cupo diario. Puede no haber más pendientes en base_productos o haber productos ya asignados en otros diarios abiertos.`
+        : null;
+
+    const warningFinal = [warning, warningCupo].filter(Boolean).join(' ') || null;
+    return NextResponse.json({ data: control, warning: warningFinal }, { status: 201 });
   }
 
   return NextResponse.json({ data: control, warning }, { status: 201 });

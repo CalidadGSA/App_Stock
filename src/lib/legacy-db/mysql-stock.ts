@@ -7,6 +7,18 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const globalThis: { __mysqlStockPool?: any };
 
+function readEnvMs(name: string, fallback: number): number {
+  const n = parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Timeout por intento al consultar stock live (API productos / diferencias). */
+export const DEFAULT_STOCK_QUERY_TIMEOUT_MS = 12_000;
+
+export function getStockQueryTimeoutMs(): number {
+  return readEnvMs('ONZE_STOCK_QUERY_TIMEOUT_MS', DEFAULT_STOCK_QUERY_TIMEOUT_MS);
+}
+
 export interface StockLegacyRow {
   cantidad: number;
   unidades: number;
@@ -60,6 +72,9 @@ async function getPool() {
     waitForConnections: true,
     connectionLimit: 5,
     queueLimit: 0,
+    connectTimeout: readEnvMs('ONZE_DB_CONNECT_TIMEOUT_MS', 15_000),
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0,
   });
   globalThis.__mysqlStockPool = pool;
   return pool;
@@ -261,11 +276,6 @@ export type StockmovimientosHealthResult =
 const DEFAULT_HEALTH_TIMEOUT_MS = 2500;
 const DEFAULT_SLOW_THRESHOLD_MS = 2000;
 const DEFAULT_VENTA_POSTERIOR_QUERY_MS = 45_000;
-
-function readEnvMs(name: string, fallback: number): number {
-  const n = parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
 
 export type OnzeDbReadinessReason = 'slow' | 'timeout' | 'unconfigured' | 'error';
 

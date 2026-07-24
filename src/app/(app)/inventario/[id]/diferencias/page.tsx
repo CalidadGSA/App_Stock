@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, CheckCircle2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
@@ -44,12 +44,17 @@ interface ControlConDetalles extends ControlInventario {
 /** Con código de barras: bloquear unidades mientras carga o si no admite unidades sueltas. */
 function debeBloquearUnidadesStockReal(
   codigoBarras: string | null | undefined,
-  prod: ProductoLegacy | null | undefined
+  prod: ProductoLegacy | null | undefined,
+  /** Preferir unidades del detalle/histórico; la ficha básica no trae stock live. */
+  stockUnidadesReferencia?: number | null
 ): boolean {
   if (!codigoBarras || String(codigoBarras).trim() === '') return false;
   if (prod === undefined) return true;
   if (prod === null) return true;
-  return bloquearCampoUnidadesInventario(prod.fraccionable, prod.stock_unidades);
+  return bloquearCampoUnidadesInventario(
+    prod.fraccionable,
+    stockUnidadesReferencia ?? prod.stock_unidades
+  );
 }
 
 type LineaEdit = {
@@ -145,9 +150,22 @@ export default function InventarioDiferenciasPage() {
   const [productosPorBarcode, setProductosPorBarcode] = useState<
     Record<string, ProductoLegacy | null>
   >({});
+  /** Stock live Plex/Quantio por producto_id_sistema (undefined = no pedido / en curso). */
+  const [stockLivePorProductoId, setStockLivePorProductoId] = useState<
+    Record<string, { cajas: number; unidades: number; unidades_por_caja?: number } | null>
+  >({});
+  const fichasSolicitadasRef = useRef<Set<string>>(new Set());
+  const stockLiveSolicitadoRef = useRef<Set<string>>(new Set());
+  /** Líneas donde el usuario ya tocó stock sistema: no sobrescribir con live. */
+  const sistEditadoManualRef = useRef<Set<string>>(new Set());
+  const editsRef = useRef<Record<string, LineaEdit>>({});
+  const baselinesRef = useRef<Record<string, LineaBaseline>>({});
 
   const [edits, setEdits] = useState<Record<string, LineaEdit>>({});
   const [baselines, setBaselines] = useState<Record<string, LineaBaseline>>({});
+
+  editsRef.current = edits;
+  baselinesRef.current = baselines;
 
   useEffect(() => {
     async function cargar() {
@@ -168,48 +186,176 @@ export default function InventarioDiferenciasPage() {
     cargar();
   }, [id]);
 
-  // Cargar info actual del producto (incluye fraccionable y stock_unidades) para cada código de barras
-  useEffect(() => {
-    async function cargarProductos() {
-      const detalles = control?.controles_inventario_detalle ?? [];
-      
-      // Filtramos nulos/vacíos y forzamos tipado string[] para indexar el map sin error.
-      const barcodes: string[] = Array.from(
-        new Set(
-          detalles
-            .map((d) => d.codigo_barras)
-            .filter((bc): bc is string => typeof bc === 'string' && bc.trim().length > 0)
-        )
-      );
+  async function fetchFichaBasica(bc: string): Promise<ProductoLegacy | null> {
+    try {
+      const res = await fetch(`/api/productos/basico/${encodeURIComponent(bc)}`);
+      const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+      return res.ok ? json.data ?? null : null;
+    } catch {
+      return null;
+    }
+  }
 
-      const faltantes = barcodes.filter(
-        (bc) => productosPorBarcode[bc] === undefined
-      );
-      
-      if (faltantes.length === 0) return;
+  function claveStockLive(det: Pick<ControlInventarioDetalle, 'producto_id_sistema' | 'codigo_barras'>) {
+    const id = String(det.producto_id_sistema ?? '').trim();
+    if (id) return id;
+    return String(det.codigo_barras ?? '').trim();
+  }
 
-      const nuevos: Record<string, ProductoLegacy | null> = {};
-      for (const bc of faltantes) {
-        try {
-          // Al ser 'bc' un string garantizado, encodeURIComponent no fallará
-          const res = await fetch(
-            `/api/productos/${encodeURIComponent(bc)}`
-          );
-          const json = (await res.json()) as {
-            data?: ProductoLegacy;
-            error?: string;
-          };
-          nuevos[bc] = res.ok ? json.data ?? null : null;
-        } catch {
-          nuevos[bc] = null;
-        }
+  async function fetchStockLive(det: Pick<ControlInventarioDetalle, 'producto_id_sistema' | 'codigo_barras'>): Promise<{
+    cajas: number;
+    unidades: number;
+    unidades_por_caja?: number;
+    producto: ProductoLegacy | null;
+  } | null> {
+    try {
+      const id = String(det.producto_id_sistema ?? '').trim();
+      // Preferir ID Plex del detalle (mismo que MySQL stock.IDProducto).
+      // Fallback a barcode si no hay id.
+      const url = id
+        ? `/api/productos/id/${encodeURIComponent(id)}`
+        : det.codigo_barras?.trim()
+          ? `/api/productos/${encodeURIComponent(det.codigo_barras.trim())}`
+          : null;
+      if (!url) return null;
+      const res = await fetch(url);
+      const json = (await res.json()) as { data?: ProductoLegacy; error?: string };
+      if (!res.ok || !json.data) return null;
+      const p = json.data;
+      return {
+        cajas: p.stock_cajas ?? 0,
+        unidades: p.stock_unidades ?? 0,
+        unidades_por_caja: p.unidades_por_caja,
+        producto: p,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function aplicarStockLiveALinea(
+    detalleId: string,
+    live: { cajas: number; unidades: number }
+  ) {
+    if (sistEditadoManualRef.current.has(detalleId)) return;
+
+    const base = baselinesRef.current[detalleId];
+    const edit = editsRef.current[detalleId];
+    if (!base || !edit) return;
+
+    if (
+      parseCantidad(edit.sistCajas) !== base.sistCajas ||
+      parseCantidad(edit.sistUnidades) !== base.sistUnidades
+    ) {
+      sistEditadoManualRef.current.add(detalleId);
+      return;
+    }
+
+    // Ya coincide con live: nada que hacer.
+    if (base.sistCajas === live.cajas && base.sistUnidades === live.unidades) return;
+
+    const nextBase: LineaBaseline = {
+      ...base,
+      sistCajas: live.cajas,
+      sistUnidades: live.unidades,
+    };
+    const nextEdit: LineaEdit = {
+      ...edit,
+      sistCajas: String(live.cajas),
+      sistUnidades: String(live.unidades),
+    };
+    baselinesRef.current = { ...baselinesRef.current, [detalleId]: nextBase };
+    editsRef.current = { ...editsRef.current, [detalleId]: nextEdit };
+    setBaselines(baselinesRef.current);
+    setEdits(editsRef.current);
+  }
+
+  function asegurarFichaProducto(bc: string | null | undefined) {
+    const codigo = String(bc ?? '').trim();
+    if (!codigo) return;
+    if (fichasSolicitadasRef.current.has(codigo)) return;
+    if (productosPorBarcode[codigo] !== undefined) return;
+
+    // Droguería: no hace falta fraccionable para editar diferencias.
+    if (control?.es_drogueria) {
+      fichasSolicitadasRef.current.add(codigo);
+      setProductosPorBarcode((prev) =>
+        prev[codigo] !== undefined ? prev : { ...prev, [codigo]: null }
+      );
+      return;
+    }
+
+    fichasSolicitadasRef.current.add(codigo);
+    void (async () => {
+      const data = await fetchFichaBasica(codigo);
+      setProductosPorBarcode((prev) =>
+        prev[codigo] !== undefined ? prev : { ...prev, [codigo]: data }
+      );
+    })();
+  }
+
+  function asegurarStockLive(
+    det: Pick<ControlInventarioDetalle, 'producto_id_sistema' | 'codigo_barras'>,
+    options?: { reintentarSiFallo?: boolean }
+  ) {
+    const clave = claveStockLive(det);
+    if (!clave) return;
+
+    const cacheado = stockLivePorProductoId[clave];
+    // Éxito previo: no volver a pedir.
+    if (cacheado != null) return;
+
+    // Fallo previo: al reabrir la línea, limpiar y reintentar.
+    if (cacheado === null) {
+      if (!options?.reintentarSiFallo) return;
+      stockLiveSolicitadoRef.current.delete(clave);
+      setStockLivePorProductoId((prev) => {
+        if (!(clave in prev)) return prev;
+        const next = { ...prev };
+        delete next[clave];
+        return next;
+      });
+    } else if (stockLiveSolicitadoRef.current.has(clave)) {
+      // Consulta en curso.
+      return;
+    }
+
+    if (stockLiveSolicitadoRef.current.has(clave)) return;
+    stockLiveSolicitadoRef.current.add(clave);
+    void (async () => {
+      const live = await fetchStockLive(det);
+      if (!live) {
+        setStockLivePorProductoId((prev) => ({ ...prev, [clave]: null }));
+        stockLiveSolicitadoRef.current.delete(clave);
+        return;
       }
-      setProductosPorBarcode((prev) => ({ ...prev, ...nuevos }));
-    }
-    if (control) {
-      void cargarProductos();
-    }
-  }, [control, productosPorBarcode]);
+
+      setStockLivePorProductoId((prev) => ({
+        ...prev,
+        [clave]: {
+          cajas: live.cajas,
+          unidades: live.unidades,
+          unidades_por_caja: live.unidades_por_caja,
+        },
+      }));
+
+      const bc = String(det.codigo_barras ?? '').trim();
+      if (live.producto && bc) {
+        setProductosPorBarcode((prev) => {
+          const actual = prev[bc];
+          if (actual === undefined) return prev;
+          return {
+            ...prev,
+            [bc]: {
+              ...(actual ?? live.producto!),
+              ...live.producto!,
+              fraccionable: actual?.fraccionable ?? live.producto!.fraccionable,
+            },
+          };
+        });
+      }
+    })();
+  }
 
   const detallesConDiferencias = useMemo(() => {
     const todos = control?.controles_inventario_detalle ?? [];
@@ -258,37 +404,75 @@ export default function InventarioDiferenciasPage() {
       });
   }, [control]);
 
+  // Precargar fichas de productos con diferencia (rápido). Stock live al abrir línea.
+  useEffect(() => {
+    const barcodes = Array.from(
+      new Set(
+        detallesConDiferencias
+          .map((d) => String(d.codigo_barras ?? '').trim())
+          .filter((bc) => bc.length > 0)
+      )
+    );
+    for (const bc of barcodes) {
+      asegurarFichaProducto(bc);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- carga por barcodes derivados; evita loops con el map
+  }, [detallesConDiferencias]);
+
   const detalleSeleccionado =
     detallesConDiferencias.find((d) => d.id === detalleSeleccionadoId) ?? null;
 
   function abrirDetalle(det: ControlInventarioDetalle) {
-    const prod = det.codigo_barras ? productosPorBarcode[det.codigo_barras] : undefined;
-    const sistInicialC = prod?.stock_cajas ?? det.stock_sist_cajas ?? 0;
-    const sistInicialU = prod?.stock_unidades ?? det.stock_sist_unidades ?? 0;
+    sistEditadoManualRef.current.delete(det.id);
+    asegurarFichaProducto(det.codigo_barras);
 
-    setBaselines((prev) => ({
-      ...prev,
-      [det.id]: {
-        sistCajas: sistInicialC,
-        sistUnidades: sistInicialU,
-        realCajas: det.stock_real_cajas ?? 0,
-        realUnidades: det.stock_real_unidades ?? 0,
-      },
-    }));
+    const clave = claveStockLive(det);
+    const livePrev = clave ? stockLivePorProductoId[clave] : undefined;
+    const reintentarSiFallo = livePrev === null;
+    // Si el intento anterior falló, al reabrir se vuelve a consultar.
+    asegurarStockLive(det, { reintentarSiFallo });
 
-    setEdits((prev) => ({
-      ...prev,
-      [det.id]: {
-        sistCajas: String(sistInicialC),
-        sistUnidades: String(sistInicialU),
-        realCajas: det.stock_real_cajas != null ? String(det.stock_real_cajas) : '',
-        realUnidades:
-          det.stock_real_unidades != null ? String(det.stock_real_unidades) : '',
-      },
-    }));
+    // Con reintento, no usar el null fallido: partir del snapshot del inventario.
+    const live = reintentarSiFallo ? undefined : livePrev;
+    const sistInicialC = live?.cajas ?? det.stock_sist_cajas ?? 0;
+    const sistInicialU = live?.unidades ?? det.stock_sist_unidades ?? 0;
 
+    const nextBase: LineaBaseline = {
+      sistCajas: sistInicialC,
+      sistUnidades: sistInicialU,
+      realCajas: det.stock_real_cajas ?? 0,
+      realUnidades: det.stock_real_unidades ?? 0,
+    };
+    const nextEdit: LineaEdit = {
+      sistCajas: String(sistInicialC),
+      sistUnidades: String(sistInicialU),
+      realCajas: det.stock_real_cajas != null ? String(det.stock_real_cajas) : '',
+      realUnidades:
+        det.stock_real_unidades != null ? String(det.stock_real_unidades) : '',
+    };
+    baselinesRef.current = { ...baselinesRef.current, [det.id]: nextBase };
+    editsRef.current = { ...editsRef.current, [det.id]: nextEdit };
+    setBaselines(baselinesRef.current);
+    setEdits(editsRef.current);
     setDetalleSeleccionadoId(det.id);
   }
+
+  function marcarSistEditadoManual(detalleId: string) {
+    sistEditadoManualRef.current.add(detalleId);
+  }
+
+  // Cuando llega el stock live, rellenar stock sistema si el usuario no lo tocó.
+  useEffect(() => {
+    if (!detalleSeleccionadoId) return;
+    const det = detallesConDiferencias.find((d) => d.id === detalleSeleccionadoId);
+    if (!det) return;
+    const clave = claveStockLive(det);
+    if (!clave) return;
+    const live = stockLivePorProductoId[clave];
+    if (!live) return;
+    aplicarStockLiveALinea(detalleSeleccionadoId, live);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockLivePorProductoId, detalleSeleccionadoId, detallesConDiferencias]);
 
   async function handleGuardarLinea(detalle: ControlInventarioDetalle) {
     const current = edits[detalle.id];
@@ -326,9 +510,19 @@ export default function InventarioDiferenciasPage() {
       notify.warning('Esperá a que cargue la información del producto antes de guardar.');
       return;
     }
+    const bcGuardar = claveStockLive(detalle);
+    if (bcGuardar && !(bcGuardar in stockLivePorProductoId)) {
+      notify.warning('Esperá a que termine la consulta del stock antes de guardar.');
+      return;
+    }
 
     const bloquearUnidades =
-      esDrogueria || debeBloquearUnidadesStockReal(detalle.codigo_barras, prod);
+      esDrogueria ||
+      debeBloquearUnidadesStockReal(
+        detalle.codigo_barras,
+        prod,
+        baseline.sistUnidades
+      );
     const sistUnidadesFinal = esDrogueria
       ? 0
       : bloquearUnidades
@@ -474,7 +668,7 @@ export default function InventarioDiferenciasPage() {
           </Button>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-gray-900">
+              <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                 Revisar diferencias
               </h1>
               <Badge variant={enProgreso ? 'warning' : 'success'}>
@@ -733,7 +927,11 @@ export default function InventarioDiferenciasPage() {
               const realUnidades = parseCantidad(edit.realUnidades);
               const noPermitirUnidades =
                 Boolean(control?.es_drogueria) ||
-                debeBloquearUnidadesStockReal(det.codigo_barras, prod);
+                debeBloquearUnidadesStockReal(
+                  det.codigo_barras,
+                  prod,
+                  baseline?.sistUnidades ?? det.stock_sist_unidades
+                );
               const efectivoSistUnidades = control?.es_drogueria
                 ? 0
                 : noPermitirUnidades
@@ -754,6 +952,12 @@ export default function InventarioDiferenciasPage() {
                   efectivoSistUnidades !== baseline.sistUnidades);
               const cargandoProd =
                 !!det.codigo_barras?.trim() && prod === undefined;
+              const claveLive = claveStockLive(det);
+              const stockLive = claveLive ? stockLivePorProductoId[claveLive] : undefined;
+              const consultandoPlex = !!claveLive && !(claveLive in stockLivePorProductoId);
+              const stockLiveFallido =
+                !!claveLive && claveLive in stockLivePorProductoId && stockLive === null;
+              const bloqueandoGuardar = cargandoProd || consultandoPlex;
               return (
                 <>
                   {cambioSist && (
@@ -762,24 +966,42 @@ export default function InventarioDiferenciasPage() {
                       stock real contado en el inventario.
                     </div>
                   )}
+                  {consultandoPlex && (
+                    <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+                      Consultando stock de Plex…
+                    </div>
+                  )}
+                  {stockLiveFallido && (
+                    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      No se pudo consultar el stock. Se muestran los valores del inventario; podés
+                      editar y guardar.
+                    </div>
+                  )}
                 <div className={`grid grid-cols-1 gap-3 ${esAuditoria ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
                   <div className="rounded-md border border-gray-200 bg-white p-3">
-                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Stock sistema</p>
+                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+                      Stock sistema
+                      {stockLive ? (
+                        <span className="ml-1 normal-case tracking-normal text-sky-700">
+                          (Plex)
+                        </span>
+                      ) : null}
+                    </p>
                     <div className="grid grid-cols-[92px_1fr] gap-y-2">
                       <span className="h-9 flex items-center text-xs uppercase tracking-wide text-gray-500">Cajas</span>
                       <Input
                         type="number"
                         step="1"
                         value={edit.sistCajas}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          marcarSistEditadoManual(det.id);
                           setEdits((prev) => ({
                             ...prev,
                             [det.id]: { ...edit, sistCajas: e.target.value },
-                          }))
-                        }
+                          }));
+                        }}
                         className="h-9 w-full text-center text-sm"
                         placeholder="Cajas"
-                        disabled={cargandoProd}
                       />
                       {!control?.es_drogueria ? (
                         <>
@@ -792,16 +1014,17 @@ export default function InventarioDiferenciasPage() {
                                 ? String(baseline?.sistUnidades ?? edit.sistUnidades)
                                 : edit.sistUnidades
                             }
-                            onChange={(e) =>
-                              !noPermitirUnidades &&
+                            onChange={(e) => {
+                              if (noPermitirUnidades) return;
+                              marcarSistEditadoManual(det.id);
                               setEdits((prev) => ({
                                 ...prev,
                                 [det.id]: { ...edit, sistUnidades: e.target.value },
-                              }))
-                            }
+                              }));
+                            }}
                             className="h-9 w-full text-center text-sm"
                             placeholder="Unidades"
-                            disabled={noPermitirUnidades || cargandoProd}
+                            disabled={noPermitirUnidades}
                             title={
                               noPermitirUnidades
                                 ? 'Producto no fraccionable: unidades de sistema no editables.'
@@ -911,11 +1134,16 @@ export default function InventarioDiferenciasPage() {
                       size="sm"
                       variant="primary"
                       onClick={() => handleGuardarLinea(det)}
-                      loading={guardando}
-                      disabled={cargandoProd}
+                      loading={guardando || consultandoPlex}
+                      disabled={bloqueandoGuardar}
                       className="w-full"
+                      title={
+                        consultandoPlex
+                          ? 'Esperá a que termine la consulta de stock'
+                          : undefined
+                      }
                     >
-                      Guardar cambios
+                      {consultandoPlex ? 'Consultando stock…' : 'Guardar cambios'}
                     </Button>
                   </div>
                 </div>

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -135,7 +135,7 @@ export default function ProductosConDescuentosPage() {
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <h1 className="text-xl font-bold text-gray-900">Productos con descuentos</h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Productos con descuentos</h1>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="secondary" onClick={exportarCsv} disabled={loading || filtrados.length === 0}>

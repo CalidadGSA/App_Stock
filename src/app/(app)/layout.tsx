@@ -8,7 +8,10 @@ import type { RolOperador } from '@/lib/auth/roles';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const operador = await getOperadorSession();
-  if (!operador) redirect('/login');
+  if (!operador) {
+    // Ruta API que limpia cookies con los mismos atributos (evita bucle /login ↔ /dashboard).
+    redirect('/api/auth/session-expired');
+  }
 
   const rbacCtx = await getOperadorRbacContext();
   const permissions = rbacCtx ? permissionsToArray(rbacCtx) : [];

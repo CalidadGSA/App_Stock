@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -137,7 +137,7 @@ export default function AuditoriaSorpresaPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Auditoría integral</h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Auditoría integral</h1>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -78,7 +78,7 @@ export default function VencimientosListPage() {
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <h1 className="text-xl font-bold text-gray-900">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
             Controles de vencimientos
           </h1>
         </div>

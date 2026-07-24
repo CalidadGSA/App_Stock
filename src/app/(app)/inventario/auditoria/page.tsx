@@ -7,6 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 import { PageSpinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 import {
   CATEGORIAS_MACRO,
   type CategoriaMacro,
@@ -14,10 +15,23 @@ import {
 
 export default function NuevaAuditoriaInventarioPage() {
   const router = useRouter();
+  const notify = useAppNotify();
   const [descripcion, setDescripcion] = useState('');
   const [categoriaMacro, setCategoriaMacro] = useState<CategoriaMacro | ''>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  async function crearAuditoria(confirmOverride = false) {
+    return fetch('/api/inventario/auditoria', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        descripcion: descripcion.trim() || undefined,
+        categoria_macro: categoriaMacro,
+        confirm_override: confirmOverride || undefined,
+      }),
+    });
+  }
 
   async function handleCrear(e?: React.FormEvent) {
     if (e) e.preventDefault();
@@ -29,19 +43,44 @@ export default function NuevaAuditoriaInventarioPage() {
 
     setLoading(true);
     try {
-      const res = await fetch('/api/inventario/auditoria', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          descripcion: descripcion.trim() || undefined,
-          categoria_macro: categoriaMacro,
-        }),
-      });
-      const json = await res.json();
+      let res = await crearAuditoria(false);
+      let json = (await res.json()) as {
+        data?: { id: string };
+        error?: string;
+        warning?: string | null;
+        requires_confirmation?: boolean;
+      };
+
+      if (!res.ok && json.requires_confirmation) {
+        const confirmar = await notify.confirm({
+          title: 'Auditoría abierta',
+          message:
+            json.warning ??
+            'Ya existe una auditoría abierta de esta categoría. ¿Querés crear otra con los siguientes productos?',
+          confirmLabel: 'Crear igual',
+          cancelLabel: 'Cancelar',
+          variant: 'warning',
+        });
+
+        if (!confirmar) {
+          setLoading(false);
+          return;
+        }
+
+        res = await crearAuditoria(true);
+        json = (await res.json()) as {
+          data?: { id: string };
+          error?: string;
+          warning?: string | null;
+          requires_confirmation?: boolean;
+        };
+      }
+
       if (!res.ok) {
         setError(json.error ?? 'Error al crear auditoría de inventario');
         return;
       }
+
       const id = json.data?.id;
       if (id) {
         router.replace(`/inventario/${id}`);
@@ -64,7 +103,7 @@ export default function NuevaAuditoriaInventarioPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Nueva auditoría de inventario</h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Nueva auditoría de inventario</h1>
           <p className="text-sm text-gray-500">
             Elegí la categoría macro y se cargarán productos con diferencias pendientes de esa
             categoría.

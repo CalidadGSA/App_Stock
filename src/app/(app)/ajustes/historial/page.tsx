@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -123,7 +123,7 @@ export default function HistorialAjustesPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-xl font-bold text-gray-900">Historial de ajustes</h1>
+        <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Historial de ajustes</h1>
         <Button
           variant="outline"
           size="sm"

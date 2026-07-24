@@ -115,7 +115,7 @@ export default function DashboardPage() {
         </div>
       )}
       <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">Resumen</h2>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Resumen</h2>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
             icon={ClipboardList}
@@ -439,24 +439,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Alerta vencimientos */}
-      {(stats?.productos_por_vencer_30 ?? 0) > 0 && (
-        <Card className="border-orange-200 bg-orange-50">
-          <CardContent className="flex items-center justify-between py-4">
-            <div className="flex items-center gap-3">
-              <AlertTriangle className="h-5 w-5 text-orange-500 shrink-0" />
-              <div>
-                <p className="font-medium text-orange-800">
-                  {stats?.productos_por_vencer_30} producto{stats!.productos_por_vencer_30 > 1 ? 's' : ''} próximo{stats!.productos_por_vencer_30 > 1 ? 's' : ''} a vencer
-                </p>
-                <p className="text-sm text-orange-600">Vencen en los próximos 30 días</p>
-              </div>
-            </div>
-            {/* Acción principal para vencimientos también está accesible desde el Navbar */}
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

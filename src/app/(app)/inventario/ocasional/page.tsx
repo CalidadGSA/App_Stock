@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -96,7 +96,7 @@ export default function NuevoInventarioOcasionalPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Nuevo inventario ocasional</h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Nuevo inventario ocasional</h1>
           <p className="text-sm text-gray-500">
             Creá un inventario ocasional para contar productos específicos.
           </p>

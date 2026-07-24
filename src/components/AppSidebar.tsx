@@ -2,20 +2,20 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, X } from 'lucide-react';
+import { Building2, User, X } from 'lucide-react';
 import type { RolOperador } from '@/lib/auth/roles';
-import { isSuperAdminRole } from '@/lib/auth/roles';
 import {
   getActiveNavItemId,
   getVisibleNavSections,
 } from '@/lib/navigation/app-nav';
 import { cn } from '@/lib/utils';
 import { useMaintenanceStatus } from '@/components/MaintenanceGuard';
-import SidebarMaintenanceToggle from '@/components/SidebarMaintenanceToggle';
+import SidebarSystemSection from '@/components/SidebarSystemSection';
 
 interface AppSidebarProps {
   rol: RolOperador;
   permissions: string[];
+  nombreUsuario: string;
   nombreSucursal: string;
   mobileOpen: boolean;
   onMobileClose: () => void;
@@ -24,6 +24,7 @@ interface AppSidebarProps {
 export default function AppSidebar({
   rol,
   permissions,
+  nombreUsuario,
   nombreSucursal,
   mobileOpen,
   onMobileClose,
@@ -34,6 +35,7 @@ export default function AppSidebar({
   const activeId = getActiveNavItemId(pathname, sections);
 
   const sucursalNombre = nombreSucursal.trim() || 'Sucursal';
+  const operadorNombre = nombreUsuario.trim() || 'Operador';
 
   const navContent = (
     <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
@@ -90,11 +92,9 @@ export default function AppSidebar({
           </ul>
         </div>
       ))}
-      {isSuperAdminRole(rol) ? (
-        <div className="mt-auto">
-          <SidebarMaintenanceToggle rol={rol} onAfterClick={onMobileClose} />
-        </div>
-      ) : null}
+      <div className="mt-auto">
+        <SidebarSystemSection rol={rol} onAfterClick={onMobileClose} />
+      </div>
     </nav>
   );
 
@@ -111,19 +111,28 @@ export default function AppSidebar({
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-gray-200 bg-white pt-14 shadow-xl transition-transform duration-200 dark:border-gray-800 dark:bg-gray-950 lg:hidden',
+          'fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-gray-200 bg-white shadow-xl transition-transform duration-200 dark:border-gray-800 dark:bg-gray-950 lg:hidden',
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         )}
         aria-label="Menú principal"
       >
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-start gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div
+              className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 dark:border-gray-700 dark:bg-gray-900"
+              title={operadorNombre}
+            >
+              <User className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden />
+              <p className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
+                {operadorNombre}
+              </p>
+            </div>
+            <div
+              className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 dark:border-gray-700 dark:bg-gray-900"
+              title={sucursalNombre}
+            >
               <Building2 className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden />
-              <p
-                className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100"
-                title={sucursalNombre}
-              >
+              <p className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
                 {sucursalNombre}
               </p>
             </div>
@@ -141,7 +150,7 @@ export default function AppSidebar({
       </aside>
 
       <aside
-        className="hidden lg:flex lg:w-64 lg:shrink-0 lg:flex-col lg:border-r lg:border-gray-200 lg:bg-gray-50/80 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] dark:lg:border-gray-800 dark:lg:bg-gray-950/50"
+        className="hidden lg:flex lg:w-64 lg:shrink-0 lg:flex-col lg:border-r lg:border-gray-200 lg:bg-white lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] dark:lg:border-gray-800 dark:lg:bg-gray-950"
         aria-label="Menú principal"
       >
         {navContent}

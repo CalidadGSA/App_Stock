@@ -110,8 +110,17 @@ function LoginForm() {
   return (
     <div className="w-full max-w-sm">
       <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center">
-          <img src="/logogsa800.png" alt="Logo" className="h-16 w-16 object-contain" />
+        <div className="mx-auto mb-5 flex items-center justify-center">
+          <img
+            src="/logo-gsa-light.png"
+            alt="GSA Farmacias"
+            className="h-28 w-auto object-contain dark:hidden"
+          />
+          <img
+            src="/logo-gsa-dark.png"
+            alt="GSA Farmacias"
+            className="hidden h-28 w-auto object-contain dark:block"
+          />
         </div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Gestión Stock</h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-300">Control de inventario y vencimientos</p>
@@ -122,7 +131,7 @@ function LoginForm() {
 
         {sesionExpirada && (
           <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100">
-            Tu sesión expiró o la sucursal dejó de estar activa. Iniciá sesión nuevamente.
+            Tu sesión expiró. Iniciá sesión nuevamente.
           </div>
         )}
 

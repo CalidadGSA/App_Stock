@@ -47,9 +47,9 @@ export default function DevolucionDetallePage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    // Si el id de la ruta es inválido, evitamos llamar a la API
+    // Si el id de la ruta es invรกlido, evitamos llamar a la API
     if (!params?.id || params.id === 'undefined') {
-      setError('Devolución no encontrada');
+      setError('Devoluciรณn no encontrada');
       setLoading(false);
       return;
     }
@@ -64,13 +64,13 @@ export default function DevolucionDetallePage() {
           error?: string;
         };
         if (!res.ok) {
-          setError(json.error ?? 'Error al cargar la devolución');
+          setError(json.error ?? 'Error al cargar la devoluciรณn');
           return;
         }
         setCabecera(json.data?.cabecera ?? null);
         setDetalles(json.data?.detalles ?? []);
       } catch {
-        setError('Error al cargar la devolución');
+        setError('Error al cargar la devoluciรณn');
       } finally {
         setLoading(false);
       }
@@ -85,7 +85,7 @@ export default function DevolucionDetallePage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-lg font-bold leading-tight text-gray-900 sm:text-xl dark:text-gray-100">
-          Detalle de devolución
+          Detalle de devoluciรณn
         </h1>
         <Button
           variant="outline"
@@ -113,7 +113,7 @@ export default function DevolucionDetallePage() {
         <Card>
           <CardContent className="py-4">
             <p className="text-sm text-gray-500">
-              No se encontró la devolución solicitada.
+              No se encontrรณ la devoluciรณn solicitada.
             </p>
           </CardContent>
         </Card>
@@ -124,7 +124,7 @@ export default function DevolucionDetallePage() {
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
                 <div className="flex flex-col gap-1">
                   <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                    Fecha de devolución
+                    Fecha de devoluciรณn
                   </p>
                   <p className="text-sm text-gray-700 dark:text-gray-300">
                     {formatDateTime(cabecera.fecha)}
@@ -163,7 +163,7 @@ export default function DevolucionDetallePage() {
             <CardContent className="p-0">
               {detalles.length === 0 ? (
                 <p className="px-4 py-4 text-sm text-gray-400">
-                  No hay productos asociados a esta devolución.
+                  No hay productos asociados a esta devoluciรณn.
                 </p>
               ) : (
                 <>
@@ -175,12 +175,12 @@ export default function DevolucionDetallePage() {
                   <thead>
                     <tr className="border-b bg-gray-50 text-[11px] text-gray-600">
                       <th className="px-3 py-2 text-left font-medium">Producto</th>
-                      <th className="px-3 py-2 text-left font-medium">Código</th>
+                      <th className="px-3 py-2 text-left font-medium">Cรณdigo</th>
                       <th className="px-3 py-2 text-left font-medium">Laboratorio</th>
                       <th className="px-3 py-2 text-left font-medium">Vencimiento</th>
                       <th className="px-3 py-2 text-right font-medium">Cantidad</th>
-                      <th className="px-3 py-2 text-left font-medium">Categoría</th>
-                      <th className="px-3 py-2 text-left font-medium">Acción / observación</th>
+                      <th className="px-3 py-2 text-left font-medium">Categorรญa</th>
+                      <th className="px-3 py-2 text-left font-medium">Acciรณn / observaciรณn</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -216,7 +216,7 @@ export default function DevolucionDetallePage() {
                         <td className="px-3 py-2 align-top text-[11px] text-gray-700 max-w-[220px] whitespace-pre-wrap break-words">
                           {d.accion_observacion?.trim()
                             ? d.accion_observacion.trim()
-                            : '—'}
+                            : 'โ��'}
                         </td>
                       </tr>
                     ))}

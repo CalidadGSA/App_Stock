@@ -29,6 +29,7 @@ type OperadorRow = {
   rol?: string | null;
   activo: string;
   app_role_id?: number | null;
+  session_version?: number | null;
 };
 
 type ResolverOperadorResult =
@@ -73,13 +74,34 @@ async function resolverOperadorLogin(
   if (esDrogueria) {
     const { data: row, error } = await admin
       .from('operadores')
-      .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
+      .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id, session_version')
       .eq('fuente', OPERADOR_FUENTE_QUANTIO)
       .eq('operador', operador)
       .eq('codigo', codigo)
       .maybeSingle();
 
     if (error) {
+      if (String(error.message ?? '').includes('session_version')) {
+        const { data: row2, error: err2 } = await admin
+          .from('operadores')
+          .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
+          .eq('fuente', OPERADOR_FUENTE_QUANTIO)
+          .eq('operador', operador)
+          .eq('codigo', codigo)
+          .maybeSingle();
+        if (err2) {
+          if (err2.message?.includes('fuente')) {
+            console.error('resolverOperadorLogin droguería: falta columna fuente en operadores');
+            return { ok: false, reason: 'invalid_credentials' };
+          }
+          console.error('resolverOperadorLogin droguería:', err2.message);
+          return { ok: false, reason: 'invalid_credentials' };
+        }
+        if (row2 && row2.activo === 'S') {
+          return { ok: true, row: row2 as OperadorRow };
+        }
+        return { ok: false, reason: 'invalid_credentials' };
+      }
       if (error.message?.includes('fuente')) {
         console.error('resolverOperadorLogin droguería: falta columna fuente en operadores');
         return { ok: false, reason: 'invalid_credentials' };
@@ -96,14 +118,27 @@ async function resolverOperadorLogin(
 
   const { data: row, error } = await admin
     .from('operadores')
-    .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
+    .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id, session_version')
     .eq('operador', operador)
     .eq('codigo', codigo)
     .eq('fuente', OPERADOR_FUENTE_ONZE)
     .maybeSingle();
 
   if (error) {
-    if (error.message?.includes('fuente')) {
+    if (String(error.message ?? '').includes('session_version')) {
+      const { data: row2, error: err2 } = await admin
+        .from('operadores')
+        .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
+        .eq('operador', operador)
+        .eq('codigo', codigo)
+        .eq('fuente', OPERADOR_FUENTE_ONZE)
+        .maybeSingle();
+      if (!err2 && row2 && row2.activo === 'S') {
+        return { ok: true, row: row2 as OperadorRow };
+      }
+      // caer al fallback fuente abajo si aplica
+    }
+    if (error.message?.includes('fuente') || String(error.message ?? '').includes('session_version')) {
       const { data: legacyRow, error: legacyError } = await admin
         .from('operadores')
         .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
@@ -214,6 +249,7 @@ export async function POST(request: NextRequest) {
     operador: row.operador,
     nombrecompleto: row.nombrecompleto ?? row.operador,
     rol: rolSesion,
+    session_version: Number(row.session_version ?? 0),
   });
   cookieStore.set(operadorCookie.name, operadorCookie.value, operadorCookie.options);
 

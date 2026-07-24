@@ -187,9 +187,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: abiertosError.message }, { status: 500 });
   }
 
-  let body: { descripcion?: string; categoria_macro?: string } = {};
+  let body: {
+    descripcion?: string;
+    categoria_macro?: string;
+    confirm_override?: boolean;
+  } = {};
   try {
-    body = (await request.json()) as { descripcion?: string; categoria_macro?: string };
+    body = (await request.json()) as {
+      descripcion?: string;
+      categoria_macro?: string;
+      confirm_override?: boolean;
+    };
   } catch {
     return NextResponse.json({ error: 'Cuerpo JSON inválido' }, { status: 400 });
   }
@@ -204,18 +212,50 @@ export async function POST(request: Request) {
   }
   const categoriaMacro: CategoriaMacro = categoriaMacroRaw;
 
-  const controlAbiertoMismaCategoria = (controlesAbiertos ?? []).find((control) => {
+  const controlesAbiertosMismaCategoria = (controlesAbiertos ?? []).filter((control) => {
     if (inferirTipoControlInventario(control) !== tipoObjetivo) return false;
     return normalizarCategoriaMacro(control.categoria_macro) === categoriaMacro;
   });
 
-  if (controlAbiertoMismaCategoria) {
+  const warning =
+    controlesAbiertosMismaCategoria.length > 0
+      ? `Ya hay una ${nombreTipoControlInventario(tipoObjetivo)} abierta para ${categoriaMacro}. Se abrirá una nueva y se omitirán los productos ya asignados en las auditorías abiertas de esa categoría.`
+      : null;
+
+  if (warning && body.confirm_override !== true) {
     return NextResponse.json(
       {
-        error: `Ya hay una ${nombreTipoControlInventario(tipoObjetivo)} abierta para ${categoriaMacro}.`,
+        error: warning,
+        warning,
+        requires_confirmation: true,
       },
       { status: 409 }
     );
+  }
+
+  // Productos ya cargados en auditorías abiertas de la misma macro → no repetir.
+  const idsExcluidos = new Set<string>();
+  if (controlesAbiertosMismaCategoria.length > 0) {
+    const idsAbiertos = controlesAbiertosMismaCategoria.map((c) => c.id);
+    const { data: detallesAbiertos, error: detallesAbiertosError } = await admin
+      .from('controles_inventario_detalle')
+      .select('producto_id_sistema')
+      .in('control_id', idsAbiertos);
+
+    if (detallesAbiertosError) {
+      console.error(
+        'Error obteniendo productos de auditorías abiertas:',
+        detallesAbiertosError
+      );
+    } else {
+      for (const row of detallesAbiertos ?? []) {
+        for (const k of clavesProductoId(
+          (row as { producto_id_sistema?: string | null }).producto_id_sistema
+        )) {
+          idsExcluidos.add(k);
+        }
+      }
+    }
   }
 
   const descripcion =
@@ -398,12 +438,6 @@ export async function POST(request: Request) {
           }
         }
 
-        const macroOrder: Record<string, number> = {
-          PSICOTROPICOS: 0,
-          FARMA: 1,
-          BIENESTAR: 2,
-        };
-
         const getTexto = (v: string | null | undefined) =>
           String(v ?? '')
             .normalize('NFD')
@@ -425,52 +459,57 @@ export async function POST(request: Request) {
           return {
             detalle: d,
             macro,
-            categoriaBienestar,
+            categoriaBienestar: getTexto(categoriaBienestar),
             laboratorio: getTexto(d.laboratorio),
-            descripcion: getTexto(`${d.descripcion ?? ''} ${d.presentacion ?? ''}`),
+            // Nombre + presentación para orden alfabético
+            nombrePresentacion: getTexto(
+              `${d.descripcion ?? ''} ${d.presentacion ?? ''}`.replace(/\s+/g, ' ')
+            ),
           };
         });
 
-        enriquecidos.sort((a, b) => {
-          const macroCmp = (macroOrder[a.macro] ?? 99) - (macroOrder[b.macro] ?? 99);
-          if (macroCmp !== 0) return macroCmp;
+        const compararNombrePresentacion = (
+          a: { nombrePresentacion: string },
+          b: { nombrePresentacion: string }
+        ) => a.nombrePresentacion.localeCompare(b.nombrePresentacion, 'es');
 
-          if (a.macro === 'PSICOTROPICOS') {
-            return a.descripcion.localeCompare(b.descripcion, 'es');
-          }
-
-          if (a.macro === 'FARMA') {
-            const labCmp = a.laboratorio.localeCompare(b.laboratorio, 'es');
-            if (labCmp !== 0) return labCmp;
-            return a.descripcion.localeCompare(b.descripcion, 'es');
-          }
-
-          const catCmp = getTexto(a.categoriaBienestar).localeCompare(
-            getTexto(b.categoriaBienestar),
-            'es'
-          );
-          if (catCmp !== 0) return catCmp;
+        const compararLabLuegoNombre = (
+          a: { laboratorio: string; nombrePresentacion: string },
+          b: { laboratorio: string; nombrePresentacion: string }
+        ) => {
           const labCmp = a.laboratorio.localeCompare(b.laboratorio, 'es');
           if (labCmp !== 0) return labCmp;
-          return a.descripcion.localeCompare(b.descripcion, 'es');
-        });
+          return compararNombrePresentacion(a, b);
+        };
 
-        const enriquecidosCategoria = enriquecidos.filter((x) => x.macro === categoriaMacro);
+        // FARMA / PSICO: laboratorio → nombre+presentación
+        // BIENESTAR: categoría → laboratorio → nombre+presentación
+        const enriquecidosCategoria = enriquecidos
+          .filter((x) => x.macro === categoriaMacro)
+          .filter((x) => {
+            if (idsExcluidos.size === 0) return true;
+            const claves = clavesProductoId(x.detalle.producto_id_sistema);
+            return !claves.some((k) => idsExcluidos.has(k));
+          })
+          .sort((a, b) => {
+            if (categoriaMacro === 'BIENESTAR') {
+              const catCmp = a.categoriaBienestar.localeCompare(b.categoriaBienestar, 'es');
+              if (catCmp !== 0) return catCmp;
+              return compararLabLuegoNombre(a, b);
+            }
+            return compararLabLuegoNombre(a, b);
+          });
 
         const limite =
           categoriaMacro === 'PSICOTROPICOS' ? LIMITE_AUDITORIA_PSICO : LIMITE_AUDITORIA_OTRAS;
-        const seleccionados = enriquecidosCategoria
-          .sort((a, b) =>
-            String(a.detalle.fecha_registro ?? '').localeCompare(
-              String(b.detalle.fecha_registro ?? '')
-            )
-          )
-          .slice(0, limite)
-          .map((x) => x.detalle);
+        // Mantener el orden de armado al insertar (no reordenar por fecha).
+        const seleccionados = enriquecidosCategoria.slice(0, limite).map((x) => x.detalle);
 
         // Para auditoría no precargamos stock en el listado.
         // El stock se obtiene en tiempo real cuando se abre la card del producto.
-        const filasInsert = seleccionados.map((d) => ({
+        // fecha_registro escalonada: al recargar (order by fecha_registro) se conserva lab/nombre.
+        const baseMs = Date.now();
+        const filasInsert = seleccionados.map((d, i) => ({
           control_id: controlId,
           producto_id_sistema: d.producto_id_sistema,
           codigo_barras: d.codigo_barras,
@@ -483,6 +522,7 @@ export async function POST(request: Request) {
           stock_real_cajas: null,
           stock_real_unidades: null,
           stock_real: 0,
+          fecha_registro: new Date(baseMs + i).toISOString(),
         }));
 
         if (filasInsert.length > 0) {
@@ -522,12 +562,15 @@ export async function POST(request: Request) {
     await admin.from('controles_inventario').delete().eq('id', controlId);
     return NextResponse.json(
       {
-        error: `No hay productos con diferencias ya ajustadas en sucursal para auditar en ${categoriaMacro}`,
+        error:
+          idsExcluidos.size > 0
+            ? `No hay más productos pendientes para auditar en ${categoriaMacro} (los disponibles ya están en auditorías abiertas o ya fueron auditados).`
+            : `No hay productos con diferencias ya ajustadas en sucursal para auditar en ${categoriaMacro}`,
       },
       { status: 400 }
     );
   }
 
-  return NextResponse.json({ data: control }, { status: 201 });
+  return NextResponse.json({ data: control, warning }, { status: 201 });
 }
 

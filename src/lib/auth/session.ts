@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { createHmac } from 'crypto';
 import type { RolOperador } from '@/lib/auth/roles';
 import { OPERADOR_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
+import { createAdminClient } from '@/lib/supabase/server';
 
 const COOKIE_NAME = 'operador_session';
 const MAX_AGE = OPERADOR_SESSION_MAX_AGE_SEC;
@@ -11,6 +12,8 @@ export interface OperadorSession {
   operador: string;
   nombrecompleto: string;
   rol?: RolOperador;
+  /** Versión de sesión; debe coincidir con operadores.session_version. */
+  session_version?: number;
 }
 
 function getSecret(): string {
@@ -26,8 +29,21 @@ function sign(value: string): string {
   return hmac.digest('hex');
 }
 
-export function createOperadorSessionCookie(payload: OperadorSession): { name: string; value: string; options: { httpOnly: true; path: string; maxAge: number; sameSite: 'lax'; secure?: boolean } } {
-  const data = JSON.stringify(payload);
+export function createOperadorSessionCookie(payload: OperadorSession): {
+  name: string;
+  value: string;
+  options: {
+    httpOnly: true;
+    path: string;
+    maxAge: number;
+    sameSite: 'lax';
+    secure?: boolean;
+  };
+} {
+  const data = JSON.stringify({
+    ...payload,
+    session_version: Number(payload.session_version ?? 0),
+  });
   const encoded = Buffer.from(data, 'utf8').toString('base64url');
   const signature = sign(encoded);
   const value = `${encoded}.${signature}`;
@@ -55,9 +71,54 @@ function verifyAndDecode(value: string): OperadorSession | null {
     if (parsed.rol && !['superadmin', 'admin', 'operador_sucursal'].includes(parsed.rol)) {
       parsed.rol = 'operador_sucursal';
     }
+    if (parsed.session_version != null) {
+      const v = Number(parsed.session_version);
+      parsed.session_version = Number.isFinite(v) ? Math.floor(v) : 0;
+    } else {
+      parsed.session_version = 0;
+    }
     return parsed;
   } catch {
     return null;
+  }
+}
+
+async function sessionVersionCoincide(session: OperadorSession): Promise<boolean> {
+  try {
+    const admin = await createAdminClient();
+    const { data, error } = await admin
+      .from('operadores')
+      .select('session_version')
+      .eq('idoperador', session.idoperador)
+      .maybeSingle();
+
+    if (error) {
+      // Migración aún no aplicada: no bloquear sesiones existentes.
+      if (String(error.message ?? '').includes('session_version')) {
+        return true;
+      }
+      console.warn('sessionVersionCoincide:', error.message);
+      return true;
+    }
+
+    const dbVersion = Number(
+      (data as { session_version?: number | null } | null)?.session_version ?? 0
+    );
+    const cookieVersion = Number(session.session_version ?? 0);
+    const dbOk = Number.isFinite(dbVersion) ? Math.floor(dbVersion) : 0;
+    const cookieOk = Number.isFinite(cookieVersion) ? Math.floor(cookieVersion) : 0;
+    if (dbOk !== cookieOk) {
+      console.warn('Sesión invalidada por session_version', {
+        idoperador: session.idoperador,
+        cookieOk,
+        dbOk,
+      });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('sessionVersionCoincide unexpected:', err);
+    return true;
   }
 }
 
@@ -66,7 +127,10 @@ export async function getOperadorSession(): Promise<OperadorSession | null> {
   const cookieStore = await cookies();
   const cookie = cookieStore.get(COOKIE_NAME)?.value;
   if (!cookie) return null;
-  return verifyAndDecode(cookie);
+  const parsed = verifyAndDecode(cookie);
+  if (!parsed) return null;
+  if (!(await sessionVersionCoincide(parsed))) return null;
+  return parsed;
 }
 
 /** Verifica el valor de la cookie (para middleware que recibe request). Solo usar en entorno Node (API/layout). */

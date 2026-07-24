@@ -6,7 +6,15 @@ import {
 import { AUTH_COOKIE_NAMES, CAMBIO_SUCURSAL_COOKIE } from '@/lib/auth/cookie-config';
 
 function clearAuthCookies(response: NextResponse) {
+  const secure = process.env.NODE_ENV === 'production';
   for (const name of AUTH_COOKIE_NAMES) {
+    response.cookies.set(name, '', {
+      httpOnly: true,
+      path: '/',
+      maxAge: 0,
+      sameSite: 'lax',
+      secure,
+    });
     response.cookies.delete(name);
   }
   return response;
@@ -50,9 +58,15 @@ export async function middleware(request: NextRequest) {
   }
 
   if (hasSession && isAuthRoute) {
+    // Tras sesión inválida el layout redirige con ?expirado=1 y limpia cookies;
+    // no rebotar a /dashboard si aún llegara una cookie vieja en el mismo request.
+    if (request.nextUrl.searchParams.get('expirado') === '1') {
+      return clearAuthCookies(NextResponse.next({ request }));
+    }
     if (sucursalId) {
       const url = request.nextUrl.clone();
       url.pathname = '/dashboard';
+      url.search = '';
       return NextResponse.redirect(url);
     }
     return NextResponse.next({ request });

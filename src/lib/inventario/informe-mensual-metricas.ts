@@ -21,11 +21,20 @@ export type MetricasVencimientosInformeMensual = {
 export type InformeMensualDetalleSucursal = {
   sucursal_id: number;
   nombrefantasia: string;
-  /** Productos distintos en inventarios cerrados con fecha fin en el mes. */
+  /**
+   * Avance del padrón del trimestre (vecesinventariado &gt; 0), mismo criterio que el dashboard.
+   * No usa el conteo de líneas en controles del mes (infla con auditoría / fuera de padrón).
+   */
   productos_inventariados: number;
   /** Base total de productos del trimestre al que pertenece el mes (base_productos). */
   total_base_trimestre: number;
-  /** productos_inventariados / total_base_trimestre (0 si no hay base). */
+  /**
+   * Igual a productos_inventariados (alias explícito para UI/leyenda).
+   */
+  inventariados_padron_trimestre: number;
+  /**
+   * Avance del padrón: inventariados_padron_trimestre / total_base_trimestre.
+   */
   porcentaje_inventariados_sobre_base: number;
   /** Productos distintos con diferencia en el mes (sin auditoría). */
   productos_con_diferencia: number;
@@ -236,7 +245,8 @@ export async function construirDetalleSucursalInformeMensual(
         : { total: 0, inventariados: 0, pendientes: 0, porcentaje: 0, trimestre: '', fecha_inicio: '', fecha_fin: '' };
 
       const totalBase = progreso.total;
-      const pctSobreBase = porcentajeDesdeRatio(r.productos_inventariados, totalBase);
+      const inventariadosPadron = progreso.inventariados;
+      const pctSobreBase = porcentajeDesdeRatio(inventariadosPadron, totalBase);
 
       const [productos_con_diferencia, productos_mal_contados, venc] = await Promise.all([
         contarProductosConDiferenciaInventarioTrimestre(
@@ -257,8 +267,11 @@ export async function construirDetalleSucursalInformeMensual(
       return {
         sucursal_id: r.sucursal_id,
         nombrefantasia: r.nombrefantasia,
-        productos_inventariados: r.productos_inventariados,
+        // Mismo criterio que el progreso del dashboard (padrón / base_productos).
+        // El conteo de líneas en controles cerrados del mes suele inflar (auditoría, fuera de padrón).
+        productos_inventariados: inventariadosPadron,
         total_base_trimestre: totalBase,
+        inventariados_padron_trimestre: inventariadosPadron,
         porcentaje_inventariados_sobre_base: pctSobreBase,
         productos_con_diferencia,
         productos_mal_contados,
@@ -280,6 +293,8 @@ export function totalesDetalleInformeMensual(
     (acc, f) => ({
       productos_inventariados: acc.productos_inventariados + f.productos_inventariados,
       total_base_trimestre: acc.total_base_trimestre + f.total_base_trimestre,
+      inventariados_padron_trimestre:
+        acc.inventariados_padron_trimestre + f.inventariados_padron_trimestre,
       porcentaje_inventariados_sobre_base: 0,
       productos_con_diferencia: acc.productos_con_diferencia + f.productos_con_diferencia,
       productos_mal_contados: acc.productos_mal_contados + f.productos_mal_contados,
@@ -294,6 +309,7 @@ export function totalesDetalleInformeMensual(
     {
       productos_inventariados: 0,
       total_base_trimestre: 0,
+      inventariados_padron_trimestre: 0,
       porcentaje_inventariados_sobre_base: 0,
       productos_con_diferencia: 0,
       productos_mal_contados: 0,
@@ -308,7 +324,7 @@ export function totalesDetalleInformeMensual(
   return {
     ...base,
     porcentaje_inventariados_sobre_base: porcentajeDesdeRatio(
-      base.productos_inventariados,
+      base.inventariados_padron_trimestre,
       base.total_base_trimestre
     ),
     inventario_lineas_con_diferencia: inventarioLineasConDiferencia,

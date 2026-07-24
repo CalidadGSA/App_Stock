@@ -129,7 +129,7 @@ export function detalleEstaInventariado(detalle: {
   return detalle.stock_real_cajas != null || detalle.stock_real_unidades != null;
 }
 
-/** Lista precargada: pendientes arriba (orden original), ya contados abajo. */
+/** Lista precargada: pendientes arriba (orden de armado), ya contados abajo. */
 export function ordenarDetallesListaPrecargada<
   T extends {
     fecha_registro: string;
@@ -143,6 +143,7 @@ export function ordenarDetallesListaPrecargada<
     if (aInventariado !== bInventariado) {
       return aInventariado ? 1 : -1;
     }
+    // Dentro del grupo, conservar el orden de armado (fecha_registro / inserción).
     return new Date(a.fecha_registro).getTime() - new Date(b.fecha_registro).getTime();
   });
 }
@@ -153,8 +154,10 @@ export function esInventarioListaPrecargada(
   categoriaMacro?: string | null,
   descripcion?: string | null
 ): boolean {
-  if (tipo === 'auditoria_integral') return true;
+  // Auditoría (reconteo de diferencias) y auditoría integral/sorpresa.
+  if (tipo === 'auditoria' || tipo === 'auditoria_integral') return true;
   if (esDescripcionAuditoriaIntegral(descripcion)) return true;
+  // Inventario diario guiado por categoría macro.
   return categoriaMacro != null && tipo === 'diario';
 }
 

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -118,7 +118,7 @@ export default function NuevoInventarioPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Nuevo inventario diario</h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Nuevo inventario diario</h1>
           <p className="text-sm text-gray-500">Creá el inventario diario y empezá a escanear productos</p>
         </div>
       </div>
