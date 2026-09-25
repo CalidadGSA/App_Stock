@@ -1,6 +1,24 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPadronPorProductos } from '@/lib/padron-final-db';
+import { getPreciosVentaPorProductos } from '@/lib/padron-productos-lookup';
+import { valorDiferencia } from '@/lib/inventario/diferencia-valorizada';
+import { getUnidadesPorCajaOnze } from '@/lib/legacy-db/onze-medicamentos';
 import { rangoFechasArgentinaIso, ymdDesdeIsoArgentina } from '@/lib/utils';
+import { normalizarTextoBusqueda } from '@/lib/text-normalize';
+import {
+  compararFilasDiferenciasResumen,
+  type OrdenColumnaDiferenciasResumen,
+  type OrdenDirDiferenciasResumen,
+} from '@/lib/inventario/diferencias-resumen-orden';
+
+export type {
+  OrdenColumnaDiferenciasResumen,
+  OrdenDirDiferenciasResumen,
+} from '@/lib/inventario/diferencias-resumen-orden';
+export {
+  parseOrdenColumnaDiferenciasResumen,
+  parseOrdenDirDiferenciasResumen,
+} from '@/lib/inventario/diferencias-resumen-orden';
 
 export interface DiferenciaResumenFila {
   detalle_id: string;
@@ -10,8 +28,18 @@ export interface DiferenciaResumenFila {
   descripcion: string;
   presentacion: string | null;
   laboratorio: string | null;
+  stockSistCajas: number;
+  stockSistUnidades: number;
+  stockRealCajas: number;
+  stockRealUnidades: number;
   diffCajas: number;
   diffUnidades: number;
+  /** Precio de venta al público (PVP) vigente del producto (`medicamentos.precio`), si está disponible. */
+  precio: number | null;
+  /** Monto = precio por caja × (diffCajas + diffUnidades / unidades por caja). */
+  monto: number | null;
+  /** Flag `controles_inventario_detalle.ajustado` (1 = ya ajustado en Plex/sistema). */
+  ajustado: boolean;
   operador: string;
   fecha_control: string;
   control_tipo: string | null;
@@ -74,8 +102,15 @@ export type CargarDiferenciasResumenOpts = {
   mesControl?: number;
   anioControl?: number;
   operador?: string;
-  /** Orden por fecha del control (defecto: más recientes primero). */
+  /**
+   * true (default): solo líneas con diferencia (comportamiento histórico).
+   * false: todas las líneas contadas del período (con y sin diferencia).
+   */
+  soloDiferencias?: boolean;
+  /** @deprecated Preferir ordenColumna/ordenDir. */
   ordenFecha?: 'asc' | 'desc';
+  ordenColumna?: OrdenColumnaDiferenciasResumen;
+  ordenDir?: OrdenDirDiferenciasResumen;
   page?: number;
   pageSize?: number;
   unpaginated?: boolean;
@@ -88,6 +123,12 @@ export type CargarDiferenciasResumenResult = {
   pageSize: number;
   cat_macros: string[];
   operadores: string[];
+  /** Suma de `monto` (precio * diffCajas) de todas las filas filtradas (no solo la página actual). */
+  montoTotal: number;
+  /** Solo los sobrantes (monto > 0). */
+  montoPositivo: number;
+  /** Solo los faltantes, en valor absoluto (monto < 0). */
+  montoNegativo: number;
 };
 
 export async function cargarDiferenciasResumenPeriodo(
@@ -107,11 +148,19 @@ export async function cargarDiferenciasResumenPeriodo(
     mesControl,
     anioControl,
     operador = '',
+    soloDiferencias = true,
     ordenFecha = 'desc',
+    ordenColumna,
+    ordenDir,
     page = 1,
     pageSize = 20,
     unpaginated = false,
   } = opts;
+
+  const colOrden: OrdenColumnaDiferenciasResumen =
+    ordenColumna ?? 'fecha_control';
+  const dirOrden: OrdenDirDiferenciasResumen =
+    ordenDir ?? (ordenFecha === 'asc' ? 'asc' : 'desc');
 
   if (!consolidado && (sucursalId == null || Number.isNaN(sucursalId))) {
     throw new Error('Sucursal requerida');
@@ -124,7 +173,7 @@ export async function cargarDiferenciasResumenPeriodo(
     : 'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_registro, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades, con_diferencias, ajustado, controles_inventario!inner(id, fecha_inicio, fecha_fin, sucursal_id, estado, origen, tipo, descripcion, usuario_id, operadores(nombrecompleto))';
 
   const tipoDb = String(tipoControl ?? '').trim();
-  const termBusqueda = busqueda?.trim() ?? '';
+  const termBusqueda = normalizarTextoBusqueda(busqueda).trim();
 
   const buildQuery = () => {
     let q = admin
@@ -132,8 +181,15 @@ export async function cargarDiferenciasResumenPeriodo(
       .select(selectSucursal)
       .eq('controles_inventario.estado', 'cerrado')
       .gte('controles_inventario.fecha_fin', desdeIso)
-      .lte('controles_inventario.fecha_fin', hastaIso)
-      .eq('con_diferencias', 1);
+      .lte('controles_inventario.fecha_fin', hastaIso);
+
+    if (soloDiferencias) {
+      q = q.eq('con_diferencias', 1);
+    } else if (!termBusqueda) {
+      // Solo líneas contadas. Si hay búsqueda textual, el `.or` de búsqueda
+      // no puede coexistir con otro `.or` en PostgREST; se filtra en memoria.
+      q = q.or('stock_real_cajas.not.is.null,stock_real_unidades.not.is.null');
+    }
 
     if (consolidado) {
       if (sucursalFiltro != null && sucursalFiltro > 0) {
@@ -181,18 +237,23 @@ export async function cargarDiferenciasResumenPeriodo(
     stock_real_cajas?: number | null;
     stock_real_unidades?: number | null;
     fecha_registro?: string | null;
+    ajustado?: number | boolean | null;
+    con_diferencias?: number | boolean | null;
   };
 
   const filas: DiferenciaResumenFila[] = [];
 
   for (const d of ((rawRows as Row[]) ?? [])) {
+    // Sin stock real no está contada (defensa extra al filtro SQL).
+    if (d.stock_real_cajas == null && d.stock_real_unidades == null) continue;
+
     const sistC = d.stock_sist_cajas ?? 0;
     const sistU = d.stock_sist_unidades ?? 0;
     const realC = d.stock_real_cajas ?? 0;
     const realU = d.stock_real_unidades ?? 0;
     const deltaC = realC - sistC;
     const deltaU = realU - sistU;
-    if (deltaC === 0 && deltaU === 0) continue;
+    if (soloDiferencias && deltaC === 0 && deltaU === 0) continue;
 
     const controlRaw = (d as { controles_inventario?: unknown }).controles_inventario;
     const control = (Array.isArray(controlRaw) ? controlRaw[0] : controlRaw) as
@@ -232,6 +293,8 @@ export async function cargarDiferenciasResumenPeriodo(
       ? String(control?.sucursales?.nombrefantasia ?? '').trim() || (sid ? `Sucursal ${sid}` : '')
       : undefined;
 
+    const ajustado = Number(d.ajustado ?? 0) === 1 || d.ajustado === true;
+
     filas.push({
       detalle_id: String(d.id),
       control_id: controlId,
@@ -240,8 +303,15 @@ export async function cargarDiferenciasResumenPeriodo(
       descripcion: d.descripcion,
       presentacion: d.presentacion ?? null,
       laboratorio: d.laboratorio ?? null,
+      stockSistCajas: sistC,
+      stockSistUnidades: sistU,
+      stockRealCajas: realC,
+      stockRealUnidades: realU,
       diffCajas: deltaC,
       diffUnidades: deltaU,
+      precio: null,
+      monto: null,
+      ajustado,
       operador,
       fecha_control: fechaControl,
       control_tipo: control?.tipo != null ? String(control.tipo) : null,
@@ -253,23 +323,29 @@ export async function cargarDiferenciasResumenPeriodo(
     });
   }
 
-  filas.sort((a, b) => {
-    const fc =
-      ordenFecha === 'asc'
-        ? a.fecha_control.localeCompare(b.fecha_control)
-        : b.fecha_control.localeCompare(a.fecha_control);
-    if (fc !== 0) return fc;
-    return a.descripcion.localeCompare(b.descripcion, 'es');
+  const idsUnicos = Array.from(new Set(filas.map((x) => x.producto_id_sistema)));
+  const [padron, precios, unidadesPorCaja] = await Promise.all([
+    getPadronPorProductos(idsUnicos),
+    getPreciosVentaPorProductos(admin, idsUnicos),
+    getUnidadesPorCajaOnze(idsUnicos),
+  ]);
+
+  const conMacro = filas.map((f) => {
+    const pid = String(f.producto_id_sistema);
+    const precio = precios.get(pid) ?? null;
+    return {
+      ...f,
+      cat_macro: padron.get(pid)?.cat_macro ?? null,
+      precio,
+      // Incluye las unidades sueltas como fracción de caja (fraccionados).
+      monto:
+        precio != null
+          ? valorDiferencia(f.diffCajas, f.diffUnidades, unidadesPorCaja.get(pid), precio)
+          : null,
+    };
   });
 
-  const padron = await getPadronPorProductos(
-    Array.from(new Set(filas.map((x) => x.producto_id_sistema)))
-  );
-
-  const conMacro = filas.map((f) => ({
-    ...f,
-    cat_macro: padron.get(String(f.producto_id_sistema))?.cat_macro ?? null,
-  }));
+  conMacro.sort((a, b) => compararFilasDiferenciasResumen(a, b, colOrden, dirOrden));
 
   const filtradasMacro = categoriaMacro
     ? conMacro.filter(
@@ -299,6 +375,14 @@ export async function cargarDiferenciasResumenPeriodo(
     : filtradasMacro;
 
   const total = filtradasOperador.length;
+  let montoPositivo = 0;
+  let montoNegativo = 0;
+  for (const r of filtradasOperador) {
+    const monto = r.monto ?? 0;
+    if (monto > 0) montoPositivo += monto;
+    else if (monto < 0) montoNegativo += -monto;
+  }
+  const montoTotal = montoPositivo - montoNegativo;
   const pageSafe = Math.max(1, page);
   const sizeSafe = unpaginated
     ? Math.min(10_000, Math.max(5, pageSize))
@@ -313,5 +397,8 @@ export async function cargarDiferenciasResumenPeriodo(
     pageSize: sizeSafe,
     cat_macros,
     operadores,
+    montoTotal,
+    montoPositivo,
+    montoNegativo,
   };
 }

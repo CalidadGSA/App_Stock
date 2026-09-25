@@ -6,6 +6,20 @@ const { getSupabaseAdmin } = require('../../lib/supabaseAdmin'); // Supabase (in
 const SYNC_LIMIT = parseInt(process.env.SYNC_LIMIT || '0', 10);
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_SUCURSALES || '5000', 10);
 
+/**
+ * Contraseña inicial para sucursales nuevas (no existe en legacy).
+ * Configurable con DEFAULT_SUCURSAL_PASSWORD. Las ya existentes conservan la suya.
+ */
+const DEFAULT_SUCURSAL_PASSWORD =
+  String(process.env.DEFAULT_SUCURSAL_PASSWORD ?? 'sucursal123').trim() || 'sucursal123';
+
+/** Normaliza strings legacy (espacios / null) para no romper orden alfabético ni datos. */
+function trimOrNull(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  return s.length ? s : null;
+}
+
 /* ======================================================
    🧠 ESTADO GLOBAL SYNC sucursales
 ====================================================== */
@@ -177,20 +191,25 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
         const sucursalIds = rows.map((r) => r.sucursal);
         const { data: existentes, error: fetchExistentesError } = await supabase
           .from('sucursales')
-          .select('sucursal')
+          .select('sucursal, contraseña')
           .in('sucursal', sucursalIds);
 
         if (fetchExistentesError) {
           throw fetchExistentesError;
         }
 
-        const existingSet = new Set(
-          (existentes ?? []).map((e) => Number(e.sucursal))
+        const passwordById = new Map(
+          (existentes ?? []).map((e) => [
+            Number(e.sucursal),
+            e.contraseña != null && String(e.contraseña).length > 0
+              ? String(e.contraseña)
+              : null,
+          ])
         );
 
         const batchToInsert = [];
         let processedInBatch = 0;
-        let skippedNew = 0;
+        let createdNew = 0;
         let lastSucursalInBatch = lastSucursal;
 
         for (const r of rows) {
@@ -204,35 +223,40 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
             break;
           }
 
-          if (!existingSet.has(Number(r.sucursal))) {
-            skippedNew++;
-            continue;
+          const id = Number(r.sucursal);
+          const existente = passwordById.has(id);
+          const contraseña =
+            (existente ? passwordById.get(id) : null) || DEFAULT_SUCURSAL_PASSWORD;
+
+          if (!existente) {
+            createdNew++;
           }
 
           batchToInsert.push({
             sucursal: r.sucursal,
-            nombrefantasia: r.nombrefantasia,
-            domicilio: r.domicilio,
-            telefono: r.telefono,
-            email: r.email,
-            _codpostal: r._codpostal,
+            nombrefantasia: trimOrNull(r.nombrefantasia),
+            domicilio: trimOrNull(r.domicilio),
+            telefono: trimOrNull(r.telefono),
+            email: trimOrNull(r.email),
+            _codpostal: trimOrNull(r._codpostal),
+            // Requerido por NOT NULL + UPSERT (Postgres valida el INSERT aunque haya conflicto).
+            // Existentes: se conserva la contraseña actual. Nuevas: default configurable.
+            contraseña,
+            activa: true,
           });
 
           processedInBatch++;
         }
 
-        if (skippedNew > 0) {
-          console.warn(
-            `⚠️ Lote #${batchNumber}: ${skippedNew} sucursal(es) nueva(s) omitida(s) (crear en Supabase con contraseña antes del sync)`
+        if (createdNew > 0) {
+          console.log(
+            `🆕 Lote #${batchNumber}: ${createdNew} sucursal(es) nueva(s) se crearán con contraseña por defecto (DEFAULT_SUCURSAL_PASSWORD)`
           );
         }
 
         if (!processedInBatch) {
           if (rows.length) {
             lastSucursal = lastSucursalInBatch;
-          }
-          if (skippedNew > 0 && skippedNew >= rows.length) {
-            continue;
           }
           break;
         }
@@ -249,7 +273,8 @@ async function syncLegacyToSupabase({ mode, limit: limitParam } = {}) {
         syncState.processed += processedInBatch;
 
         console.log(
-          `✅ Lote sucursales #${batchNumber} confirmado — procesados: ${syncState.processed}/${syncState.total}`
+          `✅ Lote sucursales #${batchNumber} confirmado — procesados: ${syncState.processed}/${syncState.total}` +
+            (createdNew ? ` (nuevas: ${createdNew})` : '')
         );
       } catch (err) {
         console.error('❌ Error en lote sucursales:', err);

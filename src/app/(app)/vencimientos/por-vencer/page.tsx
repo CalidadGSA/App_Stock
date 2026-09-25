@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -9,9 +9,12 @@ import { PageSpinner } from '@/components/ui/spinner';
 import {
   formatDate,
   formatDateTime,
+  formatDateForFilename,
+  formatMoneda,
   diasHastaVencimiento,
   colorVencimiento,
   estiloFilaProgresoVenta,
+  fechaHoyArgentinaYmd,
 } from '@/lib/utils';
 import {
   ArrowLeft,
@@ -19,6 +22,7 @@ import {
   ChevronRight,
   ChevronUp,
   Filter,
+  FileSpreadsheet,
   Trash2,
 } from 'lucide-react';
 import { clientHasPermission } from '@/lib/auth/permissions-client';
@@ -27,14 +31,12 @@ import { PorVencerFiltrosPanel } from '@/components/vencimientos/PorVencerFiltro
 import {
   PorVencerDatatableBar,
   PorVencerDatatableFooter,
-  type TamPaginaPorVencer,
 } from '@/components/vencimientos/PorVencerDatatableBar';
 import { VencimientosTablaContenedor } from '@/components/vencimientos/VencimientosTablaContenedor';
 import { TablaImpresionVencimientosCompacta } from '@/components/vencimientos/TablaImpresionVencimientosCompacta';
 import {
   MESES_CALENDARIO,
   opcionesAnioVencimiento,
-  pasaFiltroMesAnioYmd,
   validarAnioVencFiltro,
   validarMesVencFiltro,
 } from '@/lib/vencimientos-mes-anio-filtro';
@@ -44,18 +46,14 @@ import {
   VENCIMIENTOS_PRINT_AREA_ATTR,
 } from '@/components/vencimientos/ImprimirListadoVencimientos';
 import {
-  filtrarPorVencerPorPeriodo,
-  periodoCubiertoPorCache,
 } from '@/lib/vencimientos/por-vencer-filtro-periodo';
 import {
-  fusionarFlagsVentaPosteriorEnItems,
-  guardarFlagsVentaPosteriorSesion,
-  leerFlagsVentaPosteriorSesion,
-  marcarVentaPosteriorCheckSesion,
-  ventaPosteriorCheckHechoEnSesion,
-} from '@/lib/vencimientos/por-vencer-venta-posterior-cache';
+  detectarRangeKey,
+  etiquetaPeriodoParaRangeKey,
+  type RangePeriodoKey,
+} from '@/lib/vencimientos/por-vencer-periodo-meses';
 import type { VistaPorVencerList } from '@/lib/vencimientos-por-vencer-list';
-import { usePaginacionServidor, useTotalPaginas } from '@/components/list/datatable-pagination';
+import { usePaginacionServidor } from '@/components/list/datatable-pagination';
 import {
   DATATABLE_CARD_BODY_CLASS,
   DATATABLE_CARD_CLASS,
@@ -65,8 +63,6 @@ import {
   DATATABLE_STICKY_THEAD,
 } from '@/components/list/datatable-classes';
 import { tamPaginaToPageSizeParam } from '@/lib/api/pagination';
-
-const TAM_PAGINA_DEFAULT: TamPaginaPorVencer = 20;
 
 type SortKeyPorVencer =
   | 'producto'
@@ -110,12 +106,17 @@ interface PorVencerItem {
   fecha_registro?: string;
   cantidad: number;
   cantidad_vendida_acumulada?: number;
+  cantidad_original?: number;
+  cantidad_vendida_auto?: number;
+  ventas_auto_check_at?: string | null;
   vendido?: number;
   accion_observacion?: string | null;
-  venta_posterior_a_carga?: boolean;
+  tiene_ventas_detectadas?: boolean;
   cat_macro: string | null;
   categoria: string | null;
   descuento_aplicado?: number | null;
+  precio?: number | null;
+  monto?: number | null;
 }
 
 export default function PorVencerPage() {
@@ -125,8 +126,6 @@ export default function PorVencerPage() {
   const [itemsImpresion, setItemsImpresion] = useState<PorVencerItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [days, setDays] = useState(30);
-  const [daysMin, setDaysMin] = useState(0);
   const [rol, setRol] = useState<'superadmin' | 'admin' | 'operador_sucursal'>('operador_sucursal');
   const [permissions, setPermissions] = useState<string[]>([]);
   const [gruposExpandidos, setGruposExpandidos] = useState<Record<string, boolean>>({});
@@ -136,24 +135,14 @@ export default function PorVencerPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [totalFilas, setTotalFilas] = useState(0);
   const [totalLineas, setTotalLineas] = useState(0);
+  const [montoTotal, setMontoTotal] = useState(0);
   const [catMacrosDisponibles, setCatMacrosDisponibles] = useState<string[]>([]);
   const [categoriasDisponibles, setCategoriasDisponibles] = useState<string[]>([]);
   const [laboratoriosDisponibles, setLaboratoriosDisponibles] = useState<string[]>([]);
   const [busquedaAplicada, setBusquedaAplicada] = useState('');
   const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
-  const [ventaPosteriorCheckStatus, setVentaPosteriorCheckStatus] = useState<
-    'off' | 'full' | 'skipped_slow_db' | 'skipped_unavailable'
-  >('off');
-  const [rangeKey, setRangeKey] = useState<
-    'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
-  >('all');
-  /**
-   * Chequeo MySQL (onze_center) solo la primera vez por sesión del navegador.
-   * Filtros de periodo/vista reutilizan datos ya cargados cuando el rango es más acotado.
-   * «Actualizar» limpia cachés y vuelve a consultar todo (incl. venta posterior).
-   */
-  const ventaPosteriorCacheRef = useRef<Map<string, boolean>>(new Map());
-  const ventaPosteriorCheckHechoRef = useRef(false);
+  const [exportando, setExportando] = useState(false);
+  const [rangeKey, setRangeKey] = useState<RangePeriodoKey>('all');
   const cachePorVistaRef = useRef<
     Map<string, { days: number; daysMin: number; items: PorVencerItem[] }>
   >(new Map());
@@ -161,10 +150,6 @@ export default function PorVencerPage() {
   function parseVistaDesdeUrl(raw: string | null): VistaPorVencerList {
     if (raw === 'vendidos' || raw === 'vencidos' || raw === 'vendido_parcial') return raw;
     return 'por_vencer';
-  }
-
-  function aplicarFlagsVentaPosterior(lista: PorVencerItem[]): PorVencerItem[] {
-    return fusionarFlagsVentaPosteriorEnItems(lista, ventaPosteriorCacheRef.current);
   }
 
   function invalidarCachePorVencer() {
@@ -180,7 +165,7 @@ export default function PorVencerPage() {
   const catMacroFiltro = searchParams.get('cat_macro') ?? '';
   const categoriaFiltro = searchParams.get('categoria') ?? '';
   const laboratorioFiltro = searchParams.get('laboratorio') ?? '';
-  const soloVentaPosterior = searchParams.get('solo_venta_posterior') === '1';
+  const soloConVentas = searchParams.get('solo_con_ventas') === '1';
   const mesVencFiltro = parseInt(searchParams.get('mes_venc') ?? '', 10);
   const anioVencFiltro = parseInt(searchParams.get('anio_venc') ?? '', 10);
   const anioVencValido = validarAnioVencFiltro(
@@ -206,37 +191,21 @@ export default function PorVencerPage() {
     catMacroFiltro,
     categoriaFiltro,
     laboratorioFiltro,
-    soloVentaPosterior,
+    soloConVentas,
     mesVencValido,
     anioVencValido,
   ]);
-  const totalPaginas = useTotalPaginas(totalFilas, tamPagina);
 
-  const desdeHastaLabel = useMemo(() => {
-    switch (rangeKey) {
-      case 'all':
-        return 'todos';
-      case '30_only':
-        return 'solo a 30 días';
-      case '60_only':
-        return 'solo a 60 días';
-      case '90_only':
-        return 'solo a 90 días';
-      case '60_all':
-        return '60 días';
-      case '90_all':
-        return '90 días';
-      case '30_all':
-      default:
-        return '30 días';
-    }
-  }, [rangeKey]);
+  const desdeHastaLabel = useMemo(
+    () => etiquetaPeriodoParaRangeKey(rangeKey, vistaSelect === 'vencidos'),
+    [rangeKey, vistaSelect]
+  );
 
   const tituloPrincipal = useMemo(() => {
     const base = `Productos próximos a vencer (${desdeHastaLabel})`;
     if (vistaSelect === 'vendidos') return `${base} — solo liquidados`;
     if (vistaSelect === 'vendido_parcial') return `${base} — solo vendido parcial (no liquidado)`;
-    if (vistaSelect === 'vencidos') return `Productos vencidos (${desdeHastaLabel} hacia atrás)`;
+    if (vistaSelect === 'vencidos') return `Productos vencidos (${desdeHastaLabel})`;
     return base;
   }, [desdeHastaLabel, vistaSelect]);
 
@@ -247,7 +216,7 @@ export default function PorVencerPage() {
     if (catMacroFiltro) n += 1;
     if (categoriaFiltro) n += 1;
     if (laboratorioFiltro) n += 1;
-    if (soloVentaPosterior) n += 1;
+    if (soloConVentas) n += 1;
     if (mesVencValido) n += 1;
     if (anioVencValido) n += 1;
     return n;
@@ -257,7 +226,7 @@ export default function PorVencerPage() {
     catMacroFiltro,
     categoriaFiltro,
     laboratorioFiltro,
-    soloVentaPosterior,
+    soloConVentas,
     mesVencValido,
     anioVencValido,
   ]);
@@ -346,15 +315,10 @@ export default function PorVencerPage() {
     );
   }
 
-  function sincronizarRangeKey(daysParam: number, daysMinParam: number) {
-    if (daysParam === 365 && daysMinParam === 0) setRangeKey('all');
-    else if (daysParam === 30 && daysMinParam === 0) setRangeKey('30_all');
-    else if (daysParam === 30 && daysMinParam === 1) setRangeKey('30_only');
-    else if (daysParam === 60 && daysMinParam === 31) setRangeKey('60_only');
-    else if (daysParam === 60 && daysMinParam === 0) setRangeKey('60_all');
-    else if (daysParam === 90 && daysMinParam === 61) setRangeKey('90_only');
-    else if (daysParam === 90 && daysMinParam === 0) setRangeKey('90_all');
-    else setRangeKey('all');
+  function sincronizarRangeKey(daysParam: number, daysMinParam: number, vista: VistaPorVencerList) {
+    setRangeKey(
+      detectarRangeKey(fechaHoyArgentinaYmd(), daysParam, daysMinParam, vista === 'vencidos')
+    );
   }
 
   async function cargar(opciones?: { forzarApi?: boolean }) {
@@ -364,9 +328,7 @@ export default function PorVencerPage() {
       const daysParam = parseInt(searchParams.get('days') ?? '365', 10) || 365;
       const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
       const vista = parseVistaDesdeUrl(searchParams.get('vista'));
-      setDays(daysParam);
-      setDaysMin(daysMinParam);
-      sincronizarRangeKey(daysParam, daysMinParam);
+      sincronizarRangeKey(daysParam, daysMinParam, vista);
 
       if (opciones?.forzarApi) {
         invalidarCachePorVencer();
@@ -381,7 +343,7 @@ export default function PorVencerPage() {
       if (catMacroFiltro) params.set('cat_macro', catMacroFiltro);
       if (categoriaFiltro) params.set('categoria', categoriaFiltro);
       if (laboratorioFiltro) params.set('laboratorio', laboratorioFiltro);
-      if (soloVentaPosterior) params.set('solo_venta_posterior', '1');
+      if (soloConVentas) params.set('solo_con_ventas', '1');
       if (mesVencValido) params.set('mes_venc', String(mesVencValido));
       if (anioVencValido) params.set('anio_venc', String(anioVencValido));
       if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
@@ -390,56 +352,30 @@ export default function PorVencerPage() {
       params.set('page', String(paginaActual));
       params.set('pageSize', tamPaginaToPageSizeParam(tamPagina === 'all' ? 'all' : tamPagina));
 
-      const checkYaHecho =
-        ventaPosteriorCheckHechoRef.current || ventaPosteriorCheckHechoEnSesion();
-      const solicitarCheckVentaPosterior =
-        opciones?.forzarApi || (!checkYaHecho && !soloVentaPosterior);
-      if (solicitarCheckVentaPosterior) {
-        ventaPosteriorCheckHechoRef.current = true;
-        marcarVentaPosteriorCheckSesion(true);
-        params.set('check_venta_posterior', '1');
-      }
-
       const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`);
       const json = await res.json() as {
         data?: PorVencerItem[];
         total?: number;
         total_lineas?: number;
+        montoTotal?: number;
         cat_macros?: string[];
         categorias?: string[];
         laboratorios?: string[];
         error?: string;
-        venta_posterior_check?: 'off' | 'full' | 'skipped_slow_db' | 'skipped_unavailable';
       };
       if (!res.ok) {
         setError(json.error ?? 'Error al cargar productos por vencer');
         setItems([]);
         setTotalFilas(0);
         setTotalLineas(0);
+        setMontoTotal(0);
         return;
       }
 
-      const rawList = json.data ?? [];
-      if (solicitarCheckVentaPosterior) {
-        for (const i of rawList) {
-          ventaPosteriorCacheRef.current.set(i.id, !!i.venta_posterior_a_carga);
-        }
-        guardarFlagsVentaPosteriorSesion(ventaPosteriorCacheRef.current);
-        if (json.venta_posterior_check) {
-          setVentaPosteriorCheckStatus(json.venta_posterior_check);
-        }
-      } else if (json.venta_posterior_check === 'off') {
-        for (const i of rawList) {
-          if (!ventaPosteriorCacheRef.current.has(i.id) && i.venta_posterior_a_carga) {
-            ventaPosteriorCacheRef.current.set(i.id, true);
-          }
-        }
-        guardarFlagsVentaPosteriorSesion(ventaPosteriorCacheRef.current);
-      }
-
-      setItems(aplicarFlagsVentaPosterior(rawList));
+      setItems(json.data ?? []);
       setTotalFilas(json.total ?? 0);
       setTotalLineas(json.total_lineas ?? json.total ?? 0);
+      setMontoTotal(json.montoTotal ?? 0);
       setCatMacrosDisponibles(json.cat_macros ?? []);
       setCategoriasDisponibles(json.categorias ?? []);
       setLaboratoriosDisponibles(json.laboratorios ?? []);
@@ -449,15 +385,15 @@ export default function PorVencerPage() {
       setItems([]);
       setTotalFilas(0);
       setTotalLineas(0);
+      setMontoTotal(0);
     } finally {
       setLoading(false);
     }
   }
 
-  const prepararImpresion = useCallback(async () => {
+  const fetchTodosFiltrados = useCallback(async (): Promise<PorVencerItem[]> => {
     if (tamPagina === 'all' && items.length >= totalLineas && totalLineas > 0) {
-      setItemsImpresion(null);
-      return;
+      return items;
     }
     const daysParam = parseInt(searchParams.get('days') ?? '365', 10) || 365;
     const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
@@ -469,7 +405,7 @@ export default function PorVencerPage() {
     if (catMacroFiltro) params.set('cat_macro', catMacroFiltro);
     if (categoriaFiltro) params.set('categoria', categoriaFiltro);
     if (laboratorioFiltro) params.set('laboratorio', laboratorioFiltro);
-    if (soloVentaPosterior) params.set('solo_venta_posterior', '1');
+    if (soloConVentas) params.set('solo_con_ventas', '1');
     if (mesVencValido) params.set('mes_venc', String(mesVencValido));
     if (anioVencValido) params.set('anio_venc', String(anioVencValido));
     if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
@@ -477,26 +413,101 @@ export default function PorVencerPage() {
     params.set('sortDir', sortDir);
     params.set('page', '1');
     params.set('pageSize', 'all');
-    params.set('check_venta_posterior', '0');
     const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`);
     const json = (await res.json()) as { data?: PorVencerItem[]; error?: string };
-    if (!res.ok) throw new Error(json.error ?? 'Error al preparar impresión');
-    setItemsImpresion(aplicarFlagsVentaPosterior(json.data ?? []));
+    if (!res.ok) throw new Error(json.error ?? 'Error al cargar listado completo');
+    return json.data ?? [];
   }, [
     tamPagina,
-    items.length,
+    items,
     totalLineas,
     searchParams,
     catMacroFiltro,
     categoriaFiltro,
     laboratorioFiltro,
-    soloVentaPosterior,
+    soloConVentas,
     mesVencValido,
     anioVencValido,
     busquedaAplicada,
     sortKey,
     sortDir,
   ]);
+
+  const prepararImpresion = useCallback(async () => {
+    const todos = await fetchTodosFiltrados();
+    if (tamPagina === 'all' && items.length >= totalLineas && totalLineas > 0) {
+      setItemsImpresion(null);
+      return;
+    }
+    setItemsImpresion(todos);
+  }, [fetchTodosFiltrados, tamPagina, items.length, totalLineas]);
+
+  function valorCsv(value: unknown) {
+    if (value == null) return '';
+    const s = String(value);
+    if (/[",;\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  async function exportarExcelFiltrado() {
+    if (totalLineas === 0) return;
+    setExportando(true);
+    setError('');
+    try {
+      const exportItems = await fetchTodosFiltrados();
+      const headers = [
+        'Producto',
+        'Presentacion',
+        'Laboratorio',
+        'Codigo barras',
+        'Cat. padron',
+        'Categoria',
+        'Carga',
+        'Vencimiento',
+        'Dias',
+        'Restante',
+        'Vendido',
+        'Monto',
+        'Descuento',
+      ];
+      const rows = exportItems.map((r) => {
+        const dias = diasHastaVencimiento(r.fecha_vencimiento);
+        return [
+          r.descripcion,
+          r.presentacion ?? '',
+          r.laboratorio ?? '',
+          r.codigo_barras,
+          r.cat_macro ?? '',
+          r.categoria ?? '',
+          formatDateTime(r.fecha_registro),
+          formatDate(r.fecha_vencimiento),
+          dias,
+          Number(r.cantidad ?? 0).toFixed(0),
+          Number(r.cantidad_vendida_acumulada ?? r.vendido ?? 0).toFixed(0),
+          r.monto != null ? Number(r.monto).toFixed(2) : '',
+          typeof r.descuento_aplicado === 'number' ? `-${Math.abs(r.descuento_aplicado)}%` : '',
+        ];
+      });
+      const csv = [headers, ...rows]
+        .map((row) => row.map((cell) => valorCsv(cell)).join(';'))
+        .join('\n');
+      const blob = new Blob([`\uFEFF${csv}`], {
+        type: 'text/csv;charset=utf-8;',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `por_vencer_${formatDateForFilename(fechaHoyArgentinaYmd())}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al exportar');
+    } finally {
+      setExportando(false);
+    }
+  }
 
   const claveCargaDatos = [
     searchParams.get('days') ?? '365',
@@ -505,7 +516,7 @@ export default function PorVencerPage() {
     catMacroFiltro,
     categoriaFiltro,
     laboratorioFiltro,
-    soloVentaPosterior ? '1' : '0',
+    soloConVentas ? '1' : '0',
     mesVencValido ?? '',
     anioVencValido ?? '',
     busquedaAplicada,
@@ -518,13 +529,6 @@ export default function PorVencerPage() {
   useEffect(() => {
     setItemsImpresion(null);
   }, [claveCargaDatos]);
-
-  useEffect(() => {
-    if (ventaPosteriorCheckHechoEnSesion()) {
-      ventaPosteriorCheckHechoRef.current = true;
-      ventaPosteriorCacheRef.current = leerFlagsVentaPosteriorSesion();
-    }
-  }, []);
 
   useEffect(() => {
     const currentDays = searchParams.get('days');
@@ -571,6 +575,7 @@ export default function PorVencerPage() {
       setError(`Ingresá una cantidad válida entre 1 y ${max}.`);
       return;
     }
+    setError('');
     try {
       const params = new URLSearchParams({
         id,
@@ -579,12 +584,15 @@ export default function PorVencerPage() {
       const res = await fetch(`/api/vencimientos/por-vencer?${params.toString()}`, {
         method: 'DELETE',
       });
-      const json = (await res.json().catch(() => ({}))) as { error?: string; cantidad_restante?: number };
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        cantidad_restante?: number;
+      };
       if (!res.ok) {
-        setError(json.error ?? 'Error al eliminar el registro');
+        setError(json.error ?? 'Error al marcar como vendido');
         return;
       }
-      const restante = Number(json.cantidad_restante ?? 0);
+      const restante = Number(json.cantidad_restante ?? max - cantidad);
       invalidarCachePorVencer();
       setItems((prev) =>
         prev.map((x) =>
@@ -600,7 +608,7 @@ export default function PorVencerPage() {
         )
       );
     } catch {
-      setError('Error al eliminar el registro');
+      setError('Error al marcar como vendido');
     }
   }
 
@@ -623,11 +631,7 @@ export default function PorVencerPage() {
     if (ingresado == null) return;
     const nuevaVendida = parseInt(ingresado, 10);
     if (!Number.isFinite(nuevaVendida) || nuevaVendida < 0 || nuevaVendida > totalLinea) {
-      setError(`Ingresá un entero entre 0 y ${totalLinea}.`);
-      return;
-    }
-    if (nuevaVendida === vendida) {
-      setError('La cantidad ingresada es igual a la vendida actual.');
+      setError(`Ingresá una cantidad válida entre 0 y ${totalLinea}.`);
       return;
     }
     setError('');
@@ -786,23 +790,23 @@ export default function PorVencerPage() {
         </div>
       </div>
 
-      {(ventaPosteriorCheckStatus === 'skipped_slow_db' ||
-        ventaPosteriorCheckStatus === 'skipped_unavailable') && (
-        <div className="shrink-0 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200 print:hidden">
-          {ventaPosteriorCheckStatus === 'skipped_slow_db'
-            ? 'La base onze_center respondió lento. Se omitió la verificación de ventas posteriores para cargar el listado más rápido.'
-            : 'No se pudo consultar onze_center a tiempo. Se omitió la verificación de ventas posteriores.'}{' '}
-          Usá «Actualizar» para reintentar.
-        </div>
-      )}
-
       <Card
         className={DATATABLE_CARD_CLASS}
         {...{ [VENCIMIENTOS_PRINT_AREA_ATTR]: '' }}
       >
         <CardHeader className="shrink-0 py-3 print:hidden">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
+            <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-4">
+              <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
+              {!loading && !error && totalLineas > 0 ? (
+                <p className="text-sm text-gray-700 dark:text-gray-300">
+                  Monto restante:{' '}
+                  <span className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+                    {formatMoneda(montoTotal)}
+                  </span>
+                </p>
+              ) : null}
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
@@ -817,8 +821,18 @@ export default function PorVencerPage() {
                   </span>
                 ) : null}
               </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void exportarExcelFiltrado()}
+                disabled={loading || exportando || totalLineas === 0}
+                loading={exportando}
+              >
+                <FileSpreadsheet className="mr-1 h-4 w-4" />
+                Exportar Excel
+              </Button>
               <BotonImprimirListadoVencimientos
-                disabled={loading || totalLineas === 0}
+                disabled={loading || exportando || totalLineas === 0}
                 onPreparePrint={prepararImpresion}
               />
             </div>
@@ -827,7 +841,7 @@ export default function PorVencerPage() {
         <CardContent className={DATATABLE_CARD_BODY_CLASS}>
           <EncabezadoImpresionListadoVencimientos
             titulo={tituloPrincipal}
-            detalle={`Periodo: ${desdeHastaLabel}${catMacroFiltro ? ` · Macro: ${catMacroFiltro}` : ''}${categoriaFiltro ? ` · Categoría: ${categoriaFiltro}` : ''}${laboratorioFiltro ? ` · Laboratorio: ${laboratorioFiltro}` : ''}`}
+            detalle={`Periodo: ${desdeHastaLabel}${catMacroFiltro ? ` · Macro: ${catMacroFiltro}` : ''}${categoriaFiltro ? ` · Categoría: ${categoriaFiltro}` : ''}${laboratorioFiltro ? ` · Laboratorio: ${laboratorioFiltro}` : ''} · Monto restante: ${formatMoneda(montoTotal)}`}
             cantidadRegistros={totalLineas}
           />
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -839,7 +853,7 @@ export default function PorVencerPage() {
               catMacroFiltro={catMacroFiltro}
               categoriaFiltro={categoriaFiltro}
               laboratorioFiltro={laboratorioFiltro}
-              soloVentaPosterior={soloVentaPosterior}
+              soloConVentas={soloConVentas}
               mesVencValido={mesVencValido}
               anioVencValido={anioVencValido}
               mesesVencOpts={mesesVencOpts}
@@ -849,15 +863,12 @@ export default function PorVencerPage() {
               laboratoriosDisponibles={laboratoriosDisponibles}
               loading={loading}
               onActualizar={() => {
-                ventaPosteriorCheckHechoRef.current = false;
-                ventaPosteriorCacheRef.current.clear();
-                marcarVentaPosteriorCheckSesion(false);
                 invalidarCachePorVencer();
                 void cargar({ forzarApi: true });
               }}
             />
           {loading ? (
-            <div className="flex flex-1 items-center justify-center py-6">
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 py-6">
               <PageSpinner />
             </div>
           ) : error ? (
@@ -921,6 +932,9 @@ export default function PorVencerPage() {
                     {encabezadoSort('vencimiento', 'Vencimiento')}
                     {encabezadoSort('restante', 'Rest.', { align: 'right' })}
                     {encabezadoSort('vendido', 'Vend.', { align: 'right' })}
+                    <th className="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
+                      Monto
+                    </th>
                     <th className="hidden px-3 py-2 text-right font-medium text-gray-600 xl:table-cell dark:text-gray-300">
                       Desc.
                     </th>
@@ -962,11 +976,6 @@ export default function PorVencerPage() {
                             <p className="mt-0.5 font-mono text-sm text-gray-900 dark:text-gray-300">
                               {r.codigo_barras}
                             </p>
-                            {r.venta_posterior_a_carga ? (
-                              <p className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-                                Venta posterior a la carga
-                              </p>
-                            ) : null}
                           </td>
                           <td className="hidden px-3 py-2 align-top text-xs text-gray-700 lg:table-cell dark:text-gray-300">
                             {r.categoria ?? '-'}
@@ -990,6 +999,12 @@ export default function PorVencerPage() {
                           </td>
                           <td className="px-4 py-2 align-top text-right text-xs text-gray-800 dark:text-gray-200">
                             {vendHist.toFixed(0)}
+                          </td>
+                          <td
+                            className="px-3 py-2 align-top text-right text-xs tabular-nums text-gray-800 dark:text-gray-200"
+                            title={r.precio != null ? `PVP: ${formatMoneda(r.precio)}` : 'PVP no disponible'}
+                          >
+                            {r.monto != null ? formatMoneda(r.monto) : '—'}
                           </td>
                           <td className="hidden px-3 py-2 align-top text-right text-xs xl:table-cell">
                             {typeof r.descuento_aplicado === 'number' ? (
@@ -1064,6 +1079,8 @@ export default function PorVencerPage() {
                     const exp = gruposExpandidos[key] ?? false;
                     const restG = grp.reduce((s, x) => s + (Number(x.cantidad) || 0), 0);
                     const vendG = grp.reduce((s, x) => s + (Number(x.cantidad_vendida_acumulada) || 0), 0);
+                    const montoG = grp.reduce((s, x) => s + (Number(x.monto) || 0), 0);
+                    const tieneMontoG = grp.some((x) => x.monto != null);
                     const liquidadoG = restG <= 0;
                     const primero = grp[0]!;
                     const dias = diasHastaVencimiento(primero.fecha_vencimiento);
@@ -1097,11 +1114,6 @@ export default function PorVencerPage() {
                             <p className="mt-0.5 font-mono text-sm text-gray-900 dark:text-gray-300">
                               {primero.codigo_barras}
                             </p>
-                            {grp.some((x) => x.venta_posterior_a_carga) ? (
-                              <p className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-                                Venta posterior a la carga
-                              </p>
-                            ) : null}
                           </td>
                           <td className="hidden px-3 py-2 align-top text-xs text-gray-700 lg:table-cell dark:text-gray-300">
                             {primero.categoria ?? '-'}
@@ -1122,6 +1134,9 @@ export default function PorVencerPage() {
                           </td>
                           <td className="px-3 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">
                             {vendG.toFixed(0)}
+                          </td>
+                          <td className="px-3 py-2 align-top text-right text-xs font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+                            {tieneMontoG ? formatMoneda(montoG) : '—'}
                           </td>
                           <td className="hidden px-3 py-2 align-top text-right text-xs xl:table-cell">
                             {descTodosIguales && typeof desc0 === 'number' ? (
@@ -1181,6 +1196,12 @@ export default function PorVencerPage() {
                                   </td>
                                   <td className="px-3 py-2 align-top text-right text-xs">{rest.toFixed(0)}</td>
                                   <td className="px-3 py-2 align-top text-right text-xs">{vh.toFixed(0)}</td>
+                                  <td
+                                    className="px-3 py-2 align-top text-right text-xs tabular-nums"
+                                    title={r.precio != null ? `PVP: ${formatMoneda(r.precio)}` : 'PVP no disponible'}
+                                  >
+                                    {r.monto != null ? formatMoneda(r.monto) : '—'}
+                                  </td>
                                   <td className="hidden px-3 py-2 align-top text-right text-xs xl:table-cell">
                                     {typeof r.descuento_aplicado === 'number' ? (
                                       <span className="text-emerald-700 dark:text-emerald-300">
@@ -1244,11 +1265,6 @@ export default function PorVencerPage() {
                                         <Trash2 className="h-4 w-4" />
                                       </Button>
                                     </div>
-                                    {r.venta_posterior_a_carga ? (
-                                      <p className="mt-1.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
-                                        Venta posterior a la carga
-                                      </p>
-                                    ) : null}
                                   </td>
                                 </tr>
                               );

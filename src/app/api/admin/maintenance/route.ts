@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/server';
-import { getAppMaintenanceStatus } from '@/lib/maintenance';
+import { getAppMaintenanceStatus, setAppMaintenanceActive } from '@/lib/maintenance';
 import { requirePermission } from '@/lib/auth/rbac';
-
-const MAINTENANCE_ROW_ID = 1;
 
 export async function GET() {
   const guard = await requirePermission('admin.maintenance');
@@ -33,23 +30,12 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'is_active debe ser 0 o 1' }, { status: 400 });
   }
 
-  const admin = await createAdminClient();
-  const now = new Date().toISOString();
-  const { error } = await admin
-    .from('modo_mantenimiento')
-    .upsert(
-      {
-        id: MAINTENANCE_ROW_ID,
-        is_active: body.is_active,
-        updated_at: now,
-      },
-      { onConflict: 'id' }
-    );
+  const { error } = await setAppMaintenanceActive(body.is_active);
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error }, { status: 500 });
   }
 
-  const status = await getAppMaintenanceStatus();
+  const status = await getAppMaintenanceStatus({ fresh: true });
   return NextResponse.json({ maintenance: status.isActive, updated_at: status.updatedAt });
 }

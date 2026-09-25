@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -11,25 +11,28 @@ import autoTable from 'jspdf-autotable';
 import {
   formatDate,
   formatDateTime,
+  formatMoneda,
   diasHastaVencimiento,
   colorVencimiento,
   estiloFilaProgresoVenta,
+  fechaHoyArgentinaYmd,
+  formatDateForFilename,
 } from '@/lib/utils';
-import { ArrowLeft } from 'lucide-react';
+import {
+  detectarRangeKey,
+  etiquetaPeriodoParaRangeKey,
+  type RangePeriodoKey,
+} from '@/lib/vencimientos/por-vencer-periodo-meses';
+import { ArrowLeft, Filter } from 'lucide-react';
 import { clientHasPermission } from '@/lib/auth/permissions-client';
 import {
   MESES_CALENDARIO,
   opcionesAnioVencimiento,
-  pasaFiltroMesAnioYmd,
   validarAnioVencFiltro,
   validarMesVencFiltro,
 } from '@/lib/vencimientos-mes-anio-filtro';
-import { VencimientosTablaContenedor } from '@/components/vencimientos/VencimientosTablaContenedor';
 import ConsolidadoListMobile from '@/components/vencimientos/ConsolidadoListMobile';
-import {
-  FiltroVencimientoMesAnio,
-  VENCIMIENTOS_FILTROS_GRID_CLASS,
-} from '@/components/vencimientos/FiltroVencimientoMesAnio';
+import { PorVencerConsolidadoFiltrosPanel } from '@/components/vencimientos/PorVencerConsolidadoFiltrosPanel';
 import {
   DATATABLE_CARD_BODY_CLASS,
   DATATABLE_CARD_CLASS,
@@ -39,7 +42,6 @@ import {
 import { DatatableListSection } from '@/components/list/DatatableListSection';
 import {
   usePaginacionServidor,
-  useTotalPaginas,
 } from '@/components/list/datatable-pagination';
 import { tamPaginaToPageSizeParam } from '@/lib/api/pagination';
 
@@ -62,6 +64,8 @@ interface ConsolidadoItem {
   cat_macro: string | null;
   categoria: string | null;
   descuento_aplicado?: number | null;
+  precio?: number | null;
+  monto?: number | null;
 }
 
 export default function PorVencerConsolidadoPage() {
@@ -75,6 +79,7 @@ export default function PorVencerConsolidadoPage() {
     cajasVendidasHist: 0,
     cajasMovimientoTotal: 0,
     lineasLiquidados: 0,
+    montoTotal: 0,
   });
   const [sucursales, setSucursales] = useState<Array<{ sucursal: number; nombrefantasia: string }>>([]);
   const [catMacros, setCatMacros] = useState<string[]>([]);
@@ -83,9 +88,8 @@ export default function PorVencerConsolidadoPage() {
   const [error, setError] = useState('');
   const [autorizado, setAutorizado] = useState<boolean | null>(null);
   const [busquedaAplicada, setBusquedaAplicada] = useState('');
-  const [rangeKey, setRangeKey] = useState<
-    'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
-  >('all');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
+  const [rangeKey, setRangeKey] = useState<RangePeriodoKey>('all');
 
   const sucursalFiltro = searchParams.get('sucursal') ?? '';
   const catMacroFiltro = searchParams.get('cat_macro') ?? '';
@@ -123,36 +127,36 @@ export default function PorVencerConsolidadoPage() {
   const mesesVencOpts = MESES_CALENDARIO;
   const aniosVencOpts = useMemo(() => opcionesAnioVencimiento(3, 5), []);
 
-  const desdeHastaLabel = useMemo(() => {
-    switch (rangeKey) {
-      case 'all':
-        return 'todos';
-      case '30_only':
-        return 'solo a 30 días';
-      case '60_only':
-        return 'solo a 60 días';
-      case '90_only':
-        return 'solo a 90 días';
-      case '60_all':
-        return '60 días';
-      case '90_all':
-        return '90 días';
-      case '30_all':
-      default:
-        return '30 días';
-    }
-  }, [rangeKey]);
+  const desdeHastaLabel = useMemo(
+    () => etiquetaPeriodoParaRangeKey(rangeKey, vistaSelect === 'vencidos'),
+    [rangeKey, vistaSelect]
+  );
 
-  const totalPaginas = useTotalPaginas(total, tamPagina);
 
   const totalesConsolidado = totalesApi;
 
+  const filtrosActivos = useMemo(() => {
+    let n = 0;
+    if (vistaSelect !== 'por_vencer') n += 1;
+    if (rangeKey !== 'all') n += 1;
+    if (sucursalFiltro) n += 1;
+    if (catMacroFiltro) n += 1;
+    if (categoriaFiltro) n += 1;
+    if (mesVencValido) n += 1;
+    if (anioVencValido) n += 1;
+    return n;
+  }, [
+    vistaSelect,
+    rangeKey,
+    sucursalFiltro,
+    catMacroFiltro,
+    categoriaFiltro,
+    mesVencValido,
+    anioVencValido,
+  ]);
+
   function nombreArchivoBase() {
-    const fecha = new Date();
-    const y = fecha.getFullYear();
-    const m = String(fecha.getMonth() + 1).padStart(2, '0');
-    const d = String(fecha.getDate()).padStart(2, '0');
-    return `consolidado_por_vencer_${y}${m}${d}`;
+    return `consolidado_por_vencer_${formatDateForFilename(fechaHoyArgentinaYmd())}`;
   }
 
   function valorCsv(value: unknown) {
@@ -200,6 +204,7 @@ export default function PorVencerConsolidadoPage() {
       'Dias',
       'Restante',
       'Vendido',
+      'Monto',
       'Descuento',
     ];
     const rows = exportItems.map((r) => {
@@ -217,6 +222,7 @@ export default function PorVencerConsolidadoPage() {
         dias,
         Number(r.cantidad ?? 0).toFixed(0),
         Number(r.cantidad_vendida_acumulada ?? 0).toFixed(0),
+        r.monto != null ? Number(r.monto).toFixed(2) : '',
         typeof r.descuento_aplicado === 'number' ? `-${Math.abs(r.descuento_aplicado)}%` : '',
       ];
     });
@@ -254,6 +260,7 @@ export default function PorVencerConsolidadoPage() {
         'Venc.',
         'Rest.',
         'Vendido',
+        'Monto',
         'Desc.',
       ]],
       body: exportItems.map((r) => [
@@ -264,20 +271,11 @@ export default function PorVencerConsolidadoPage() {
         formatDate(r.fecha_vencimiento),
         Number(r.cantidad ?? 0).toFixed(0),
         Number(r.cantidad_vendida_acumulada ?? 0).toFixed(0),
+        r.monto != null ? formatMoneda(r.monto) : '—',
         typeof r.descuento_aplicado === 'number' ? `-${Math.abs(r.descuento_aplicado)}%` : '—',
       ]),
     });
     doc.save(`${nombreArchivoBase()}.pdf`);
-  }
-
-  function buildParams(overrides: Record<string, string>) {
-    const p = new URLSearchParams(searchParams.toString());
-    p.set('consolidado', '1');
-    for (const [k, v] of Object.entries(overrides)) {
-      if (v === '') p.delete(k);
-      else p.set(k, v);
-    }
-    return p;
   }
 
   async function cargar() {
@@ -286,14 +284,14 @@ export default function PorVencerConsolidadoPage() {
     try {
       const daysParam = parseInt(searchParams.get('days') ?? '365', 10) || 365;
       const daysMinParam = parseInt(searchParams.get('daysMin') ?? '0', 10) || 0;
-      if (daysParam === 365 && daysMinParam === 0) setRangeKey('all');
-      else if (daysParam === 30 && daysMinParam === 0) setRangeKey('30_all');
-      else if (daysParam === 30 && daysMinParam === 1) setRangeKey('30_only');
-      else if (daysParam === 60 && daysMinParam === 31) setRangeKey('60_only');
-      else if (daysParam === 60 && daysMinParam === 0) setRangeKey('60_all');
-      else if (daysParam === 90 && daysMinParam === 61) setRangeKey('90_only');
-      else if (daysParam === 90 && daysMinParam === 0) setRangeKey('90_all');
-      else setRangeKey('all');
+      setRangeKey(
+        detectarRangeKey(
+          fechaHoyArgentinaYmd(),
+          daysParam,
+          daysMinParam,
+          vistaSelect === 'vencidos'
+        )
+      );
 
       const params = new URLSearchParams();
       params.set('days', String(daysParam));
@@ -314,6 +312,7 @@ export default function PorVencerConsolidadoPage() {
       const json = await res.json() as {
         data?: ConsolidadoItem[];
         total?: number;
+        montoTotal?: number;
         cat_macros?: string[];
         categorias?: string[];
         sucursales?: Array<{ sucursal: number; nombrefantasia: string }>;
@@ -328,7 +327,21 @@ export default function PorVencerConsolidadoPage() {
       }
       setItems(json.data ?? []);
       setTotal(json.total ?? 0);
-      if (json.totales) setTotalesApi(json.totales);
+      if (json.totales) {
+        setTotalesApi({
+          lineas: json.totales.lineas ?? 0,
+          cajasRestantes: json.totales.cajasRestantes ?? 0,
+          cajasVendidasHist: json.totales.cajasVendidasHist ?? 0,
+          cajasMovimientoTotal: json.totales.cajasMovimientoTotal ?? 0,
+          lineasLiquidados: json.totales.lineasLiquidados ?? 0,
+          montoTotal: json.totales.montoTotal ?? json.montoTotal ?? 0,
+        });
+      } else {
+        setTotalesApi((prev) => ({
+          ...prev,
+          montoTotal: json.montoTotal ?? 0,
+        }));
+      }
       setCatMacros(json.cat_macros ?? []);
       setCategorias(json.categorias ?? []);
       setSucursales(json.sucursales ?? []);
@@ -409,234 +422,100 @@ export default function PorVencerConsolidadoPage() {
         </Link>
       </div>
 
-      <Card className="shrink-0 print:hidden">
-        <CardHeader>
-          <div className="flex flex-col gap-3">
-            <div>
-              <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Filtros</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Listado multi-sucursal: no consulta ventas posteriores a la carga (solo la pantalla por sucursal lo hace).
-                {vistaSelect === 'por_vencer' &&
-                  ' Todas las sucursales · Excluye liquidados · Totales según filtros y búsqueda.'}
-                {vistaSelect === 'vendidos' && 'Solo liquidados en el rango de vencimientos · Todas las sucursales.'}
-                {vistaSelect === 'vendido_parcial' &&
-                  'Restante en control, al menos 1 unidad vendida registrada y sin liquidar (vendido=0) · Todas las sucursales.'}
-                {vistaSelect === 'vencidos' &&
-                  'Vencidos sin liquidar (fecha < hoy, restante > 0) en el periodo · Todas las sucursales.'}
-              </p>
-            </div>
-            <div className={VENCIMIENTOS_FILTROS_GRID_CLASS}>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Vista</label>
-                <select
-                  value={vistaSelect}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    const p = buildParams({});
-                    if (next === 'por_vencer') p.delete('vista');
-                    else p.set('vista', next);
-                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
-                  }}
-                  className="w-full min-w-0 sm:min-w-[160px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="por_vencer">Por vencer</option>
-                  <option value="vendido_parcial">Solo vendido parcial</option>
-                  <option value="vendidos">Solo vendidos (liquidados)</option>
-                  <option value="vencidos">Solo vencidos</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Periodo</label>
-                <select
-                  value={rangeKey}
-                  onChange={(e) => {
-                    const nextKey = e.target.value as typeof rangeKey;
-                    let nextDays = 30;
-                    let nextDaysMin = 0;
-                    if (nextKey === 'all') {
-                      nextDays = 365;
-                      nextDaysMin = 0;
-                    }
-                    if (nextKey === '60_all') {
-                      nextDays = 60;
-                      nextDaysMin = 0;
-                    }
-                    if (nextKey === '90_all') {
-                      nextDays = 90;
-                      nextDaysMin = 0;
-                    }
-                    if (nextKey === '60_only') {
-                      nextDays = 60;
-                      nextDaysMin = 31;
-                    }
-                    if (nextKey === '30_only') {
-                      nextDays = 30;
-                      nextDaysMin = 1;
-                    }
-                    if (nextKey === '90_only') {
-                      nextDays = 90;
-                      nextDaysMin = 61;
-                    }
-                    const p = buildParams({
-                      days: String(nextDays),
-                      daysMin: String(nextDaysMin),
-                    });
-                    setRangeKey(nextKey);
-                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
-                  }}
-                  className="w-full min-w-0 sm:min-w-[120px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="all">Todos</option>
-                  <option value="30_all">Todos hasta 30 días</option>
-                  <option value="60_all">Todos hasta 60 días</option>
-                  <option value="90_all">Todos hasta 90 días</option>
-                  <option value="30_only">Solo a 30 días</option>
-                  <option value="60_only">Solo a 60 días</option>
-                  <option value="90_only">Solo a 90 días</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Sucursal</label>
-                <select
-                  value={sucursalFiltro}
-                  onChange={(e) => {
-                    const p = buildParams({
-                      sucursal: e.target.value,
-                      categoria: '',
-                    });
-                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
-                  }}
-                  className="w-full min-w-0 sm:min-w-[200px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="">Todas</option>
-                  {sucursales.map((s) => (
-                    <option key={s.sucursal} value={String(s.sucursal)}>
-                      {s.nombrefantasia?.trim() || `Sucursal ${s.sucursal}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Macro (padrón)
-                </label>
-                <select
-                  value={catMacroFiltro}
-                  onChange={(e) => {
-                    const p = buildParams({
-                      cat_macro: e.target.value,
-                      categoria: '',
-                    });
-                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
-                  }}
-                  className="w-full min-w-0 sm:min-w-[180px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="">Todas</option>
-                  {catMacros.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Categoría</label>
-                <select
-                  value={categoriaFiltro}
-                  onChange={(e) => {
-                    const p = buildParams({ categoria: e.target.value });
-                    router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
-                  }}
-                  className="w-full min-w-0 sm:min-w-[220px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-                >
-                  <option value="">Todas</option>
-                  {categorias.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <FiltroVencimientoMesAnio
-                mesVencValido={mesVencValido}
-                anioVencValido={anioVencValido}
-                mesesVencOpts={mesesVencOpts}
-                aniosVencOpts={aniosVencOpts}
-                onMesChange={(v) => {
-                  const p = buildParams({});
-                  if (v) p.set('mes_venc', v);
-                  else p.delete('mes_venc');
-                  router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
-                }}
-                onAnioChange={(v) => {
-                  router.push(
-                    `/vencimientos/por-vencer/consolidado?${buildParams({ anio_venc: v }).toString()}`
-                  );
-                }}
-                selectClassName="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100 dark:focus:border-blue-400 dark:focus:ring-blue-400/20"
-              />
-              <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-3 xl:col-span-2 2xl:col-span-3">
-                <Button size="sm" variant="secondary" onClick={cargar} disabled={loading}>
-                  Actualizar
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={exportarExcelFiltrado}
-                  disabled={loading || total === 0}
-                >
-                  Exportar CSV
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={exportarPdfFiltrado}
-                  disabled={loading || total === 0}
-                >
-                  Exportar PDF
-                </Button>
-              </div>
-            </div>
-          </div>
-        </CardHeader>
-      </Card>
-
       <Card className={DATATABLE_CARD_CLASS}>
-        <CardHeader className="shrink-0 py-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
-            {!loading && !error && total > 0 ? (
-              <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-gray-700 dark:text-gray-300">
-                <span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">
-                    {totalesConsolidado.lineas}
-                  </span>{' '}
-                  líneas
-                </span>
-                <span>
-                  Restantes:{' '}
-                  <span className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
-                    {totalesConsolidado.cajasRestantes.toFixed(0)}
-                  </span>{' '}
-                  cajas
-                </span>
-                <span>
-                  Vendidas (hist.):{' '}
-                  <span className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
-                    {totalesConsolidado.cajasVendidasHist.toFixed(0)}
-                  </span>{' '}
-                  cajas
-                </span>
-                <span className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
-                  Mov. total aprox.: {totalesConsolidado.cajasMovimientoTotal.toFixed(0)} · Liquidados:{' '}
-                  {totalesConsolidado.lineasLiquidados}
-                </span>
-              </div>
-            ) : null}
+        <CardHeader className="shrink-0 py-3 print:hidden">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:gap-5">
+              <h2 className="font-semibold text-gray-900 dark:text-gray-100">Listado</h2>
+              {!loading && !error && total > 0 ? (
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-gray-700 dark:text-gray-300">
+                  <span>
+                    <span className="font-medium text-gray-900 dark:text-gray-100">
+                      {totalesConsolidado.lineas}
+                    </span>{' '}
+                    líneas
+                  </span>
+                  <span>
+                    Restantes:{' '}
+                    <span className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+                      {totalesConsolidado.cajasRestantes.toFixed(0)}
+                    </span>{' '}
+                    cajas
+                  </span>
+                  <span>
+                    Vendidas (hist.):{' '}
+                    <span className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+                      {totalesConsolidado.cajasVendidasHist.toFixed(0)}
+                    </span>{' '}
+                    cajas
+                  </span>
+                  <span>
+                    Monto restante:{' '}
+                    <span className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+                      {formatMoneda(totalesConsolidado.montoTotal)}
+                    </span>
+                  </span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
+                    Mov. total aprox.: {totalesConsolidado.cajasMovimientoTotal.toFixed(0)} ·
+                    Liquidados: {totalesConsolidado.lineasLiquidados}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant={filtrosAbiertos ? 'secondary' : 'outline'}
+                onClick={() => setFiltrosAbiertos((v) => !v)}
+              >
+                <Filter className="mr-1 h-4 w-4" />
+                Filtros
+                {filtrosActivos > 0 ? (
+                  <span className="ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-semibold text-white">
+                    {filtrosActivos}
+                  </span>
+                ) : null}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={exportarExcelFiltrado}
+                disabled={loading || total === 0}
+              >
+                Exportar CSV
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={exportarPdfFiltrado}
+                disabled={loading || total === 0}
+              >
+                Exportar PDF
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className={DATATABLE_CARD_BODY_CLASS}>
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+            <PorVencerConsolidadoFiltrosPanel
+              abierto={filtrosAbiertos}
+              onCerrar={() => setFiltrosAbiertos(false)}
+              vistaSelect={vistaSelect}
+              rangeKey={rangeKey}
+              onRangeKeyChange={setRangeKey}
+              sucursalFiltro={sucursalFiltro}
+              catMacroFiltro={catMacroFiltro}
+              categoriaFiltro={categoriaFiltro}
+              mesVencValido={mesVencValido}
+              anioVencValido={anioVencValido}
+              mesesVencOpts={mesesVencOpts}
+              aniosVencOpts={aniosVencOpts}
+              sucursales={sucursales}
+              catMacrosDisponibles={catMacros}
+              categoriasDisponibles={categorias}
+              loading={loading}
+              onActualizar={() => void cargar()}
+            />
           <DatatableListSection
             busquedaTexto={busquedaAplicada}
             onBusquedaChange={(v) => setBusquedaAplicada(v.trim())}
@@ -687,6 +566,9 @@ export default function PorVencerConsolidadoPage() {
                     </th>
                     <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
                       Vendido
+                    </th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
+                      Monto
                     </th>
                     <th className="px-4 py-2 text-right font-medium text-gray-600 dark:text-gray-300">
                       Desc.
@@ -751,6 +633,12 @@ export default function PorVencerConsolidadoPage() {
                         </td>
                         <td className="px-4 py-2 align-top text-right text-xs text-gray-800 dark:text-gray-200">
                           {Number(r.cantidad_vendida_acumulada ?? 0).toFixed(0)}
+                        </td>
+                        <td
+                          className="px-4 py-2 align-top text-right text-xs tabular-nums text-gray-800 dark:text-gray-200"
+                          title={r.precio != null ? `PVP: ${formatMoneda(r.precio)}` : 'PVP no disponible'}
+                        >
+                          {r.monto != null ? formatMoneda(r.monto) : '—'}
                         </td>
                         <td className="px-4 py-2 align-top text-right text-xs">
                           {typeof r.descuento_aplicado === 'number' ? (

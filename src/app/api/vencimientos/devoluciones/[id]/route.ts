@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 export async function GET(
   _request: NextRequest,
@@ -12,8 +12,7 @@ export async function GET(
     return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
   }
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) {
     return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
   }
@@ -35,7 +34,7 @@ export async function GET(
     return NextResponse.json({ error: 'Devolución no encontrada' }, { status: 404 });
   }
 
-  if (String((cab as any).sucursal_id) !== String(sucursalId)) {
+  if (String((cab as { sucursal_id?: number }).sucursal_id) !== String(sucursalId)) {
     return NextResponse.json({ error: 'Sin acceso a esta devolución' }, { status: 403 });
   }
 

@@ -1,12 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPadronPorProductos } from '@/lib/padron-final-db';
 import {
-  cargarIdSubrubroPorProducto,
-  cargarMedicamentoMetaPorProducto,
-  cargarNombresPsicofarmacos,
   metaMedicamentoPorProducto,
   padronParaProducto,
 } from '@/lib/vencimientos-drogueria-lab';
+import {
+  cargarIdSubrubroPorProducto,
+  cargarMedicamentoMetaPorProducto,
+  cargarNombresPsicofarmacos,
+} from '@/lib/vencimientos-drogueria-lab-server';
 import {
   entraEnListaParaDevolverConMacro,
   macroParaReglaDevolucion,
@@ -80,7 +82,7 @@ async function cargarDetallesCandidatos(
   return rows;
 }
 
-/** Misma elegibilidad que GET /api/vencimientos/para-devolver (sin chequeo venta posterior). */
+/** Misma elegibilidad que GET /api/vencimientos/para-devolver. */
 export async function listarDetallesParaDevolverPorSucursal(
   admin: SupabaseClient,
   sucursalId: number,
@@ -128,7 +130,7 @@ export async function listarDetallesParaDevolverPorSucursal(
     medicamentoMetaPorProducto = new Map();
   }
   try {
-    nombrePsicoPorId = await cargarNombresPsicofarmacos(admin);
+    nombrePsicoPorId = await cargarNombresPsicofarmacos();
   } catch {
     nombrePsicoPorId = new Map();
   }

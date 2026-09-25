@@ -1,8 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { costosMedicamentosPorCodplex } from '@/lib/inventario/informe-mensual-metricas';
-import { rangoMesCalendarioYm } from '@/lib/inventario/informe-mensual-metricas';
-import { esSucursalVisibleEnLogin } from '@/lib/sucursales/login-sucursales';
-import { rangoFechasArgentinaIso } from '@/lib/utils';
+import {
+  cargarControlesCerradosDelMes,
+  recorrerDetallesConDiferencia,
+} from '@/lib/inventario/detalle-diferencias-mes';
+import { valorDiferencia } from '@/lib/inventario/diferencia-valorizada';
+import { getUnidadesPorCajaOnze } from '@/lib/legacy-db/onze-medicamentos';
 
 export type DiferenciasValorAgregado = {
   /** Suma de diferencias en valor cuando la diferencia en unidades es &gt; 0. */
@@ -14,18 +17,11 @@ export type DiferenciasValorAgregado = {
   lineas_con_diferencia: number;
 };
 
-const CHUNK = 1000;
-
 function vacio(): DiferenciasValorAgregado {
   return { valor_positivo: 0, valor_negativo: 0, valor_neto: 0, lineas_con_diferencia: 0 };
 }
 
-function acumularValor(
-  bucket: DiferenciasValorAgregado,
-  deltaUnidades: number,
-  costo: number
-) {
-  const valor = deltaUnidades * costo;
+function acumularValor(bucket: DiferenciasValorAgregado, valor: number) {
   if (!Number.isFinite(valor) || valor === 0) return;
   bucket.lineas_con_diferencia += 1;
   if (valor > 0) {
@@ -63,68 +59,67 @@ export function sumarDiferenciasValor(
  * en controles **cerrados** cuya `fecha_fin` cae en el mes calendario seleccionado
  * (mismo criterio que el KPI de líneas con diferencia del informe mensual).
  *
- * Valor línea = columna `diferencia` (stock_real − stock_sistema) × costo (medicamentos).
+ * Valor línea = (diferencia en cajas + diferencia en unidades / unidades por caja) × costo.
+ * Las unidades sueltas se convierten a cajas con `medicamentos.Unidades` para no valorizar
+ * un comprimido como si fuera una caja entera.
  */
 export async function cargarDiferenciasValorInventarioPorSucursal(
   admin: SupabaseClient,
   year: number,
   month1_12: number
 ): Promise<Map<number, DiferenciasValorAgregado>> {
-  const { fecha_inicio, fecha_fin } = rangoMesCalendarioYm(year, month1_12);
-  const { desdeIso, hastaIso } = rangoFechasArgentinaIso(fecha_inicio, fecha_fin);
-
   const porSucursal = new Map<number, DiferenciasValorAgregado>();
-  let offset = 0;
 
-  while (true) {
-    const { data, error } = await admin
-      .from('controles_inventario_detalle')
-      .select(
-        'producto_id_sistema, diferencia, controles_inventario!inner(sucursal_id, estado, fecha_fin)'
-      )
-      .eq('controles_inventario.estado', 'cerrado')
-      .eq('con_diferencias', 1)
-      .gte('controles_inventario.fecha_fin', desdeIso)
-      .lte('controles_inventario.fecha_fin', hastaIso)
-      .order('id', { ascending: true })
-      .range(offset, offset + CHUNK - 1);
+  const controles = await cargarControlesCerradosDelMes(admin, year, month1_12);
+  if (controles.length === 0) return porSucursal;
+  const sucursalPorControl = new Map(controles.map((c) => [c.id, c.sucursal_id]));
 
-    if (error) {
-      console.error('cargarDiferenciasValorInventarioPorSucursal:', error.message);
-      break;
-    }
+  type Fila = {
+    control_id: string;
+    producto_id_sistema?: string;
+    stock_sist_cajas?: number | string | null;
+    stock_sist_unidades?: number | string | null;
+    stock_real_cajas?: number | string | null;
+    stock_real_unidades?: number | string | null;
+  };
 
-    const batch = data ?? [];
-    if (batch.length === 0) break;
+  await recorrerDetallesConDiferencia<Fila>(
+    admin,
+    controles.map((c) => c.id),
+    'control_id, producto_id_sistema, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades',
+    async (batch) => {
+      const productoIds = batch
+        .map((r) => String(r.producto_id_sistema ?? '').trim())
+        .filter(Boolean);
+      const [costos, unidadesPorCaja] = await Promise.all([
+        costosMedicamentosPorCodplex(admin, productoIds),
+        getUnidadesPorCajaOnze(productoIds),
+      ]);
 
-    const productoIds = batch
-      .map((r) => String((r as { producto_id_sistema?: string }).producto_id_sistema ?? '').trim())
-      .filter(Boolean);
-    const costos = await costosMedicamentosPorCodplex(admin, productoIds);
+      for (const r of batch) {
+        const sid = sucursalPorControl.get(r.control_id);
+        if (sid == null) continue;
 
-    for (const row of batch) {
-      const r = row as {
-        producto_id_sistema?: string;
-        diferencia?: number | string | null;
-        controles_inventario?: { sucursal_id?: number } | null;
-      };
-      const sid = Number(r.controles_inventario?.sucursal_id);
-      if (!Number.isFinite(sid) || !esSucursalVisibleEnLogin(sid)) continue;
+        const diffCajas = Number(r.stock_real_cajas ?? 0) - Number(r.stock_sist_cajas ?? 0);
+        const diffUnidades =
+          Number(r.stock_real_unidades ?? 0) - Number(r.stock_sist_unidades ?? 0);
+        if (diffCajas === 0 && diffUnidades === 0) continue;
 
-      const delta = Number(r.diferencia ?? 0);
-      if (!Number.isFinite(delta) || delta === 0) continue;
+        const pid = String(r.producto_id_sistema ?? '').trim();
+        const valor = valorDiferencia(
+          diffCajas,
+          diffUnidades,
+          unidadesPorCaja.get(pid),
+          costos.get(pid) ?? 0
+        );
 
-      const pid = String(r.producto_id_sistema ?? '').trim();
-      const costo = costos.get(pid) ?? 0;
-
-      const prev = porSucursal.get(sid) ?? vacio();
-      acumularValor(prev, delta, costo);
-      porSucursal.set(sid, prev);
-    }
-
-    if (batch.length < CHUNK) break;
-    offset += CHUNK;
-  }
+        const prev = porSucursal.get(sid) ?? vacio();
+        acumularValor(prev, valor);
+        porSucursal.set(sid, prev);
+      }
+    },
+    'cargarDiferenciasValorInventarioPorSucursal'
+  );
 
   return porSucursal;
 }

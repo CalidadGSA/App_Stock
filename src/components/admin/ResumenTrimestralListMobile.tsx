@@ -4,10 +4,14 @@ import { ListStatPill } from '@/components/list/ListStatPill';
 import type { ResumenTrimestralSucursalRow } from '@/app/api/admin/resumen-trimestral/route';
 import { formatPorcentaje, porcentajeDesdeRatio } from '@/lib/utils';
 
+function textoConPorcentaje(numerador: number, denominador: number): string {
+  if (denominador <= 0) return String(numerador);
+  const pct = formatPorcentaje(porcentajeDesdeRatio(numerador, denominador));
+  return `${numerador} (${pct}%)`;
+}
+
 function textoConDiferenciaInventariados(conDif: number, inventariados: number): string {
-  if (inventariados <= 0) return String(conDif);
-  const pct = formatPorcentaje(porcentajeDesdeRatio(conDif, inventariados));
-  return `${conDif} (${pct}%)`;
+  return textoConPorcentaje(conDif, inventariados);
 }
 
 export default function ResumenTrimestralListMobile({
@@ -61,7 +65,10 @@ export default function ResumenTrimestralListMobile({
                   />
                   <ListStatPill
                     label="Mal contados"
-                    value={String(row.productos_mal_contados)}
+                    value={textoConPorcentaje(
+                      row.productos_mal_contados,
+                      row.productos_con_diferencia
+                    )}
                     emphasize
                     valueClassName={
                       row.productos_mal_contados > 0

@@ -65,9 +65,12 @@ export async function GET(request: NextRequest) {
         return { ...a, origen: null as string | null };
       }
 
+      type AjusteDetalleEstado = {
+        controles_inventario_detalle?: { estado?: string | null } | null;
+      };
       const estados = new Set<string>();
-      for (const d of detalles as any[]) {
-        const estado = d.controles_inventario_detalle?.estado as string | undefined;
+      for (const d of detalles as AjusteDetalleEstado[]) {
+        const estado = d.controles_inventario_detalle?.estado;
         if (estado) estados.add(estado);
       }
 

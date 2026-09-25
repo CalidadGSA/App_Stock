@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
+
+/** Cabecera de devolución tal como la devuelve PostgREST (con joins). */
+type DevolucionCabeceraJoin = {
+  id?: string;
+  fecha?: string;
+  sucursal_id?: number;
+  usuario_id?: number;
+  sucursales?: { nombrefantasia?: string | null } | null;
+  operadores?: { nombrecompleto?: string | null } | null;
+};
 
 type DevolucionRow = {
   id: string;
@@ -63,8 +73,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
   }
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) {
     return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
   }
@@ -99,22 +108,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const rows = (data ?? []) as any[];
+    const rows = (data ?? []) as Array<{
+      categoria_macro?: string | null;
+      devoluciones_vencimientos?: DevolucionCabeceraJoin | null;
+    }>;
     const mapa = new Map<string, DevolucionRow>();
 
     for (const r of rows) {
       const cab = r.devoluciones_vencimientos;
-      if (!cab) continue;
-      const id = cab.id as string;
+      if (!cab?.id) continue;
+      const id = cab.id;
       if (!mapa.has(id)) {
         mapa.set(id, {
           id,
-          fecha: cab.fecha as string,
-          sucursal_id: cab.sucursal_id as number,
-          usuario_id: cab.usuario_id as number,
+          fecha: String(cab.fecha ?? ''),
+          sucursal_id: Number(cab.sucursal_id ?? 0),
+          usuario_id: Number(cab.usuario_id ?? 0),
           sucursales: cab.sucursales ?? null,
           operadores: cab.operadores ?? null,
-          categoria_macro: (r.categoria_macro as string | null) ?? null,
+          categoria_macro: r.categoria_macro ?? null,
         });
       }
     }
@@ -149,15 +161,15 @@ export async function GET(request: NextRequest) {
   }
 
   const items: DevolucionRow[] =
-    (data ?? []).map((r: any) => ({
-      id: r.id as string,
-      fecha: r.fecha as string,
-      sucursal_id: r.sucursal_id as number,
-      usuario_id: r.usuario_id as number,
-      sucursales: (r.sucursales as any) ?? null,
-      operadores: (r.operadores as any) ?? null,
+    ((data ?? []) as DevolucionCabeceraJoin[]).map((r) => ({
+      id: String(r.id ?? ''),
+      fecha: String(r.fecha ?? ''),
+      sucursal_id: Number(r.sucursal_id ?? 0),
+      usuario_id: Number(r.usuario_id ?? 0),
+      sucursales: r.sucursales ?? null,
+      operadores: r.operadores ?? null,
       categoria_macro: null, // solo se completa cuando se filtra por categoría
-    })) ?? [];
+    }));
 
   const enriched = await adjuntarResumenObservaciones(admin, items);
   return NextResponse.json({

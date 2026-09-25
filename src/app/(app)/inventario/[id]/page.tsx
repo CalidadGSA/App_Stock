@@ -155,7 +155,6 @@ export default function InventarioDetailPage() {
       ubicacion?: string | null;
     }[]
   >([]);
-  const [buscandoEnMedicamentos, setBuscandoEnMedicamentos] = useState(false);
   const [esDispositivoTactil, setEsDispositivoTactil] = useState(false);
   const [refrigeradoByBarcode, setRefrigeradoByBarcode] = useState<Record<string, boolean>>({});
   const [editandoCard, setEditandoCard] = useState(false);
@@ -606,7 +605,7 @@ export default function InventarioDetailPage() {
     return () => {
       stopCardCamera();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   useEffect(() => {
@@ -620,6 +619,24 @@ export default function InventarioDetailPage() {
       media.removeEventListener?.('change', apply);
     };
   }, []);
+
+  /**
+   * Handlers que usa la captura global de teclado. Van por ref para que el listener no
+   * dependa de funciones que se redefinen en cada render: se registra una sola vez por
+   * producto escaneado y siempre llama a la última versión.
+   */
+  const handlersTecladoRef = useRef({
+    handleScan,
+    handleGuardarLinea,
+    flushPendingManualStockInput,
+  });
+  useEffect(() => {
+    handlersTecladoRef.current = {
+      handleScan,
+      handleGuardarLinea,
+      flushPendingManualStockInput,
+    };
+  });
 
   useEffect(() => {
     if (!productoEscaneado) return;
@@ -715,13 +732,13 @@ export default function InventarioDetailPage() {
           inputUnidadesRef.current?.blur();
         }
         if (barcode) {
-          void handleScan(barcode);
+          void handlersTecladoRef.current.handleScan(barcode);
         }
         return;
       }
 
       if (isEnter && !scannerEnInputRef.current) {
-        flushPendingManualStockInput();
+        handlersTecladoRef.current.flushPendingManualStockInput();
         resetScannerInputCapture();
         setEditandoCard(false);
         const cajasStr = (inputCajasRef.current?.value ?? stockRealCajas).trim();
@@ -729,7 +746,7 @@ export default function InventarioDetailPage() {
         inputCajasRef.current?.blur();
         inputUnidadesRef.current?.blur();
         if ((cajasStr !== '' || uniStr !== '') && !guardando) {
-          void handleGuardarLinea();
+          void handlersTecladoRef.current.handleGuardarLinea();
         }
         return;
       }
@@ -940,7 +957,6 @@ export default function InventarioDetailPage() {
       }
 
       // En inventarios ocasionales / auditoría: buscar directamente en medicamentos.
-      setBuscandoEnMedicamentos(true);
       setResultadosBusqueda([]);
       try {
         const params = new URLSearchParams({ q: query });
@@ -976,7 +992,6 @@ export default function InventarioDetailPage() {
         return false;
       } finally {
         if (isStale()) return false;
-        setBuscandoEnMedicamentos(false);
       }
 
       setBuscandoProducto(false);
@@ -2164,7 +2179,6 @@ export default function InventarioDetailPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {detallesFiltrados.map(det => {
-                    const dif = det.diferencia;
                     const sistCajas = det.stock_sist_cajas ?? 0;
                     const sistUnidades = det.stock_sist_unidades ?? 0;
                     const realCajas = det.stock_real_cajas ?? 0;

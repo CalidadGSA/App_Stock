@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import AppSidebar from '@/components/AppSidebar';
 import AuthSessionRedirect from '@/components/AuthSessionRedirect';
+import PresenceHeartbeat from '@/components/PresenceHeartbeat';
 import { AppNotificationProvider } from '@/components/notifications/AppNotificationProvider';
 import type { RolOperador } from '@/lib/auth/roles';
 import { shouldHideAppNav } from '@/lib/navigation/app-nav';
@@ -33,6 +34,7 @@ export default function AppShell({
   return (
     <AppNotificationProvider>
       <AuthSessionRedirect />
+      <PresenceHeartbeat />
       <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-gray-50 dark:bg-gray-950">
         <Navbar
           nombreUsuario={nombreUsuario}

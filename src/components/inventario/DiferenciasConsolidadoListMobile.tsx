@@ -1,5 +1,6 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
 import { ListStatPill } from '@/components/list/ListStatPill';
 import { formatDateTime } from '@/lib/utils';
 import { etiquetaTipoControlInventario } from '@/lib/inventario/tipo-control';
@@ -14,6 +15,7 @@ export interface DiferenciaConsolidadoMobile {
   codigo_barras: string;
   diffCajas: number;
   diffUnidades: number;
+  ajustado?: boolean;
   operador: string;
   fecha_control: string;
   control_tipo: string | null;
@@ -41,9 +43,16 @@ export default function DiferenciasConsolidadoListMobile({
           key={`${r.detalle_id}-${r.control_id}`}
           className="border-l-4 border-amber-500/80 bg-white px-2 py-2 dark:bg-slate-900"
         >
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
-            {r.sucursal_nombre?.trim() || 'Sin sucursal'}
-          </p>
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
+              {r.sucursal_nombre?.trim() || 'Sin sucursal'}
+            </p>
+            {r.ajustado ? (
+              <Badge variant="outline">Ajustado</Badge>
+            ) : (
+              <Badge variant="warning">Pendiente</Badge>
+            )}
+          </div>
           <h3 className="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{r.descripcion}</h3>
           <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
             {[r.presentacion, r.laboratorio].filter(Boolean).join(' · ') || '—'}

@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { Pool } from 'pg';
 
 let pool: Pool | null = null;
@@ -20,9 +21,45 @@ export function isPadronDatabaseConfigured(): boolean {
   return !!(host && database && user && password);
 }
 
-function getSslConfig() {
+let sslWarned = false;
+
+/**
+ * TLS hacia el Postgres del padrón.
+ *  - PADRON_DB_SSL=disable → sin TLS.
+ *  - PADRON_DB_SSL_CA (PEM inline o ruta a .crt, p. ej. el CA de DigitalOcean) → verifica el certificado.
+ *  - PADRON_DB_SSL_REJECT_UNAUTHORIZED=1 → verifica contra las CAs del sistema.
+ *  - Sin nada de eso: cifra pero no verifica (compatibilidad con el deploy actual); se avisa por log.
+ */
+function getSslConfig(): { rejectUnauthorized: boolean; ca?: string } | undefined {
   const sslMode = (process.env.PADRON_DB_SSL ?? 'require').toLowerCase();
   if (sslMode === 'disable' || sslMode === 'false' || sslMode === 'off') return undefined;
+
+  const caRaw = String(process.env.PADRON_DB_SSL_CA ?? '').trim();
+  if (caRaw) {
+    try {
+      const ca = caRaw.includes('-----BEGIN')
+        ? caRaw.replace(/\\n/g, '\n')
+        : readFileSync(caRaw, 'utf8');
+      return { rejectUnauthorized: true, ca };
+    } catch (e) {
+      // Un CA mal escrito o ausente (p. ej. la ruta del server en una máquina de desarrollo)
+      // no debe dejar sin padrón a toda la app: se avisa fuerte y se sigue cifrando sin verificar.
+      console.error(
+        `[padron] No se pudo leer PADRON_DB_SSL_CA (${caRaw}): ${
+          e instanceof Error ? e.message : String(e)
+        }. Se conecta cifrado pero SIN verificar el certificado.`
+      );
+    }
+  }
+  if (process.env.PADRON_DB_SSL_REJECT_UNAUTHORIZED === '1') {
+    return { rejectUnauthorized: true };
+  }
+  if (!sslWarned) {
+    sslWarned = true;
+    console.warn(
+      '[padron] TLS sin verificar certificado (rejectUnauthorized=false). Configurá PADRON_DB_SSL_CA para verificarlo.'
+    );
+  }
   return { rejectUnauthorized: false };
 }
 
@@ -67,7 +104,12 @@ function quoteIdent(id: string): string {
   return `"${id.replace(/"/g, '""')}"`;
 }
 
+/** El esquema de padron_final no cambia en caliente: no hace falta ir a information_schema en cada llamada. */
+const COLUMNS_CACHE_TTL_MS = 10 * 60 * 1000;
+let columnsCache: { map: Map<string, string>; expiresAt: number } | null = null;
+
 async function getPadronColumnsMap(p: Pool): Promise<Map<string, string>> {
+  if (columnsCache && columnsCache.expiresAt > Date.now()) return columnsCache.map;
   const cols = await p.query<{ column_name: string }>(
     `
       select column_name
@@ -80,6 +122,7 @@ async function getPadronColumnsMap(p: Pool): Promise<Map<string, string>> {
   for (const c of cols.rows) {
     map.set(String(c.column_name).toLowerCase(), String(c.column_name));
   }
+  if (map.size > 0) columnsCache = { map, expiresAt: Date.now() + COLUMNS_CACHE_TTL_MS };
   return map;
 }
 
@@ -132,11 +175,16 @@ async function queryPadronPerfumeriaRows() {
   return rows.rows;
 }
 
+export type PadronProductoCampos = {
+  cat_macro: string | null;
+  categoria: string | null;
+  subrubro: string | null;
+  /** Clasificación operativa Marrone (ej. PSICOTROPICOS, MEDICAMENTOS, PERFUMERIA). */
+  proveedormarrone: string | null;
+};
+
 export async function getPadronPorProductos(productoIds: string[]) {
-  const empty = new Map<
-    string,
-    { cat_macro: string | null; categoria: string | null; subrubro: string | null }
-  >();
+  const empty = new Map<string, PadronProductoCampos>();
   if (!isPadronDatabaseConfigured()) return empty;
 
   const ids = Array.from(
@@ -164,6 +212,11 @@ export async function getPadronPorProductos(productoIds: string[]) {
   const categoriaCol = pickCol(['categoria', 'categorianombre', 'categoria_nombre']);
   const catMacroCol = pickCol(['cat_macro', 'catmacro', 'categoria_macro']);
   const subrubroCol = pickCol(['subrubronombre', 'subrubro', 'sub_rubro']);
+  const proveedorMarroneCol = pickCol([
+    'proveedormarrone',
+    'proveedor_marrone',
+    'proveedorMarrone',
+  ]);
   if (!idCol || !categoriaCol) {
     throw new Error('padron_final no tiene columnas de idproducto/categoria esperadas');
   }
@@ -173,7 +226,12 @@ export async function getPadronPorProductos(productoIds: string[]) {
       ${quoteIdent(idCol)}::text as producto_id,
       ${catMacroCol ? `${quoteIdent(catMacroCol)}::text` : `null::text`} as cat_macro,
       ${quoteIdent(categoriaCol)}::text as categoria,
-      ${subrubroCol ? `${quoteIdent(subrubroCol)}::text` : `null::text`} as subrubro
+      ${subrubroCol ? `${quoteIdent(subrubroCol)}::text` : `null::text`} as subrubro,
+      ${
+        proveedorMarroneCol
+          ? `${quoteIdent(proveedorMarroneCol)}::text`
+          : `null::text`
+      } as proveedormarrone
     from "padron_final"
     where ${quoteIdent(idCol)}::text = any($1::text[])
   `;
@@ -183,9 +241,10 @@ export async function getPadronPorProductos(productoIds: string[]) {
     cat_macro: string | null;
     categoria: string | null;
     subrubro: string | null;
+    proveedormarrone: string | null;
   }>(sql, [ids]);
 
-  const map = new Map<string, { cat_macro: string | null; categoria: string | null; subrubro: string | null }>();
+  const map = new Map<string, PadronProductoCampos>();
   for (const r of rows.rows) {
     const id = String(r.producto_id ?? '').trim();
     if (!id || map.has(id)) continue;
@@ -193,6 +252,7 @@ export async function getPadronPorProductos(productoIds: string[]) {
       cat_macro: r.cat_macro ? String(r.cat_macro).trim() : null,
       categoria: r.categoria ? String(r.categoria).trim() : null,
       subrubro: r.subrubro ? String(r.subrubro).trim() : null,
+      proveedormarrone: r.proveedormarrone ? String(r.proveedormarrone).trim() : null,
     });
   }
   return map;

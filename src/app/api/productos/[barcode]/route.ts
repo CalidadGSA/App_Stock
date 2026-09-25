@@ -15,8 +15,9 @@ import {
 import { createAdminClient } from '@/lib/supabase/server';
 import { esSesionDrogueria } from '@/lib/sucursales/sesion-drogueria';
 import { enriquecerFichaConUbicacionDrogueria } from '@/lib/inventario/base-productos-drogueria';
-import { cookies } from 'next/headers';
+import { getProductoIdPorCodebarOnze } from '@/lib/legacy-db/onze-medicamentos';
 import { NextRequest, NextResponse } from 'next/server';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 export async function GET(
   request: NextRequest,
@@ -74,16 +75,9 @@ export async function GET(
   let ficha = await getProductoPadronByBarcode(barcode);
 
   if (!ficha) {
-    const { data: mapRow } = await admin
-      .from('productoscodebars')
-      .select('idproducto')
-      .eq('codebar', barcode)
-      .order('idproducto', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (mapRow && typeof mapRow.idproducto === 'number') {
-      ficha = await getProductoPadronById(mapRow.idproducto);
+    const idPorCodebar = await getProductoIdPorCodebarOnze(barcode);
+    if (idPorCodebar != null) {
+      ficha = await getProductoPadronById(idPorCodebar);
     }
   }
 
@@ -91,8 +85,7 @@ export async function GET(
     return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
   }
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
 
   const stockRes = await resolverStockLegacy(
     sucursalId,
@@ -101,10 +94,23 @@ export async function GET(
   );
 
   if (!stockRes.ok) {
+    const msgPorReason: Record<typeof stockRes.reason, string> = {
+      no_sucursal:
+        'No hay sucursal en la sesión. Cerrá sesión y volvé a ingresar eligiendo sucursal.',
+      bad_ids: 'Id de producto o sucursal inválido para consultar stock.',
+      unconfigured:
+        'MySQL Onze no está configurado en este entorno (faltan ONZE_DB_HOST / USER / PASSWORD / NAME).',
+      timeout:
+        'Timeout consultando stock en MySQL Onze. Revisá que el servidor de la app pueda llegar a ONZE_DB_HOST.',
+      unavailable:
+        'No se pudo conectar a MySQL Onze desde este servidor. En local suele ser la LAN (192.168.x); en producción ONZE_DB_HOST tiene que ser alcanzable desde el host del deploy.',
+      error: 'Error inesperado consultando stock del sistema.',
+    };
     return NextResponse.json(
       {
-        error:
-          'No se pudo consultar el stock del sistema en este momento. Volvé a intentar para evitar contar con datos incorrectos.',
+        error: msgPorReason[stockRes.reason],
+        reason: stockRes.reason,
+        ...(stockRes.detail ? { detail: stockRes.detail } : {}),
       },
       { status: 503 }
     );

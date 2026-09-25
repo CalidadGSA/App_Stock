@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  ClipboardList,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
@@ -23,11 +24,15 @@ import type {
 } from '@/app/api/admin/informe-mensual/route';
 import InformeMensualSucursalListMobile from '@/components/admin/InformeMensualSucursalListMobile';
 import {
+  CollapsibleFiltrosPanel,
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
+import {
   MESES_CALENDARIO,
   calendarioActualArgentina,
   clampYmNoFuturo,
 } from '@/lib/vencimientos-mes-anio-filtro';
-import { formatPorcentaje, porcentajeDesdeRatio } from '@/lib/utils';
+import { formatPorcentaje, porcentajeDesdeRatio, formatYmForFilename } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { PageSpinner } from '@/components/ui/spinner';
@@ -101,6 +106,7 @@ type SortKeyTablaSucursal = keyof Pick<
   | 'productos_vencidos_mes'
   | 'vencidos_costo'
   | 'unidades_vencidos_vendidas'
+  | 'vales'
 >;
 
 type SortDir = 'asc' | 'desc';
@@ -241,7 +247,7 @@ function agregarBajasDetalle(
   filas: InformeBajasStockDetalleRow[],
   opts?: { sucursalId?: number; ym?: string }
 ): InformeBajasStockTotales {
-  let acc = { ...BAJAS_CERO };
+  const acc = { ...BAJAS_CERO };
   for (const r of filas) {
     if (opts?.sucursalId != null && r.sucursal_id !== opts.sucursalId) continue;
     if (opts?.ym != null && r.ym !== opts.ym) continue;
@@ -288,6 +294,7 @@ export default function InformeMensualPage() {
   const [error, setError] = useState('');
   const [sortKeyTabla, setSortKeyTabla] = useState<SortKeyTablaSucursal>('nombrefantasia');
   const [sortDirTabla, setSortDirTabla] = useState<SortDir>('asc');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
 
   function alternarOrdenTabla(key: SortKeyTablaSucursal) {
     if (sortKeyTabla === key) {
@@ -362,7 +369,7 @@ export default function InformeMensualPage() {
   }, [payload?.seleccionMes?.filasSucursal, sortKeyTabla, sortDirTabla]);
 
   const nombreArchivoBase = payload?.mesSeleccionado
-    ? `informe-mensual-sucursales-${payload.mesSeleccionado}`
+    ? `informe-mensual-sucursales-${formatYmForFilename(payload.mesSeleccionado)}`
     : 'informe-mensual-sucursales';
 
   const exportarExcelTabla = useCallback(() => {
@@ -379,12 +386,11 @@ export default function InformeMensualPage() {
       'Vencidos mes',
       'Costo venc.',
       'Vendidos',
+      'Vales',
     ];
     const rows = filasSucursalOrdenadas.map((r) => [
       r.nombrefantasia,
-      r.total_base_trimestre > 0
-        ? `${r.inventariados_padron_trimestre}/${r.total_base_trimestre} (${formatPorcentaje(r.porcentaje_inventariados_sobre_base)}%)`
-        : String(r.inventariados_padron_trimestre),
+      r.productos_inventariados,
       r.productos_con_diferencia,
       r.productos_mal_contados,
       r.productos_cargados_vencimientos,
@@ -392,12 +398,11 @@ export default function InformeMensualPage() {
       r.productos_vencidos_mes,
       r.vencidos_costo,
       Number(r.unidades_vencidos_vendidas),
+      r.vales,
     ]);
     const totalRow = [
       'Totales',
-      sel.totales.total_base_trimestre > 0
-        ? `${sel.totales.inventariados_padron_trimestre}/${sel.totales.total_base_trimestre} (${formatPorcentaje(sel.totales.porcentaje_inventariados_sobre_base)}%)`
-        : String(sel.totales.inventariados_padron_trimestre),
+      sel.totales.productos_inventariados,
       sel.totales.productos_con_diferencia,
       sel.totales.productos_mal_contados,
       sel.totales.productos_cargados_vencimientos,
@@ -405,6 +410,7 @@ export default function InformeMensualPage() {
       sel.totales.productos_vencidos_mes,
       sel.totales.vencidos_costo,
       Number(sel.totales.unidades_vencidos_vendidas),
+      sel.totales.vales,
     ];
 
     const csv = [headers, ...rows, totalRow]
@@ -442,13 +448,11 @@ export default function InformeMensualPage() {
       headStyles: { fillColor: [37, 99, 235] },
       footStyles: { fillColor: [226, 232, 240], textColor: [15, 23, 42], fontStyle: 'bold' },
       head: [
-        ['Sucursal', 'Invent.', 'Con dif.', 'Mal cont.', 'Venc.carg.', 'P.vencer', 'Vencidos', 'Costo', 'Vend.'],
+        ['Sucursal', 'Invent.', 'Con dif.', 'Mal cont.', 'Venc.carg.', 'P.vencer', 'Vencidos', 'Costo', 'Vend.', 'Vales'],
       ],
       body: filasSucursalOrdenadas.map((r) => [
         r.nombrefantasia,
-        r.total_base_trimestre > 0
-          ? `${r.inventariados_padron_trimestre}/${r.total_base_trimestre} (${formatPorcentaje(r.porcentaje_inventariados_sobre_base)}%)`
-          : String(r.inventariados_padron_trimestre),
+        String(r.productos_inventariados),
         String(r.productos_con_diferencia),
         String(r.productos_mal_contados),
         String(r.productos_cargados_vencimientos),
@@ -456,13 +460,12 @@ export default function InformeMensualPage() {
         String(r.productos_vencidos_mes),
         fmtMoneda(r.vencidos_costo),
         fmtV(Number(r.unidades_vencidos_vendidas)),
+        String(r.vales),
       ]),
       foot: [
         [
           'Totales',
-          sel.totales.total_base_trimestre > 0
-            ? `${sel.totales.inventariados_padron_trimestre}/${sel.totales.total_base_trimestre} (${formatPorcentaje(sel.totales.porcentaje_inventariados_sobre_base)}%)`
-            : String(sel.totales.inventariados_padron_trimestre),
+          String(sel.totales.productos_inventariados),
           String(sel.totales.productos_con_diferencia),
           String(sel.totales.productos_mal_contados),
           String(sel.totales.productos_cargados_vencimientos),
@@ -470,6 +473,7 @@ export default function InformeMensualPage() {
           String(sel.totales.productos_vencidos_mes),
           fmtMoneda(sel.totales.vencidos_costo),
           fmtV(Number(sel.totales.unidades_vencidos_vendidas)),
+          String(sel.totales.vales),
         ],
       ],
       showFoot: 'lastPage',
@@ -488,6 +492,21 @@ export default function InformeMensualPage() {
       difInventario: t.totales.inventario_lineas_con_diferencia,
     }));
   }, [payload]);
+
+  const serieVales = useMemo(() => {
+    if (!payload?.trends?.length) return [];
+    return payload.trends.map((t) => ({
+      mesEtiqueta: formatoMesCorto(t.mes),
+      mes: t.mes,
+      vales: t.totales.vales ?? 0,
+      pendientes: t.totales.vales_pendientes ?? 0,
+    }));
+  }, [payload]);
+
+  const hayVales = useMemo(
+    () => serieVales.some((p) => p.vales > 0),
+    [serieVales]
+  );
 
   const serieDifValorTendencia = useMemo(() => {
     if (!payload?.trends?.length) return [];
@@ -635,43 +654,38 @@ export default function InformeMensualPage() {
   }
 
   function celdaInventariadosMes(row: InformeMensualDetalleSucursal) {
-    if (row.total_base_trimestre <= 0) {
-      return <span className="tabular-nums">{row.inventariados_padron_trimestre}</span>;
-    }
-    return (
-      <span className="inline-flex flex-col items-end leading-tight tabular-nums">
-        <span>
-          {row.inventariados_padron_trimestre}/{row.total_base_trimestre}
-        </span>
-        <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">
-          ({formatPorcentaje(row.porcentaje_inventariados_sobre_base)}%)
-        </span>
-      </span>
-    );
+    return celdaConPorcentaje(row.productos_inventariados, row.total_base_trimestre);
   }
 
-  function celdaDiferencia(conDif: number, inventariados: number) {
-    if (inventariados <= 0) {
-      return <span className="tabular-nums">{conDif}</span>;
+  /** Numerador + (pct%) respecto del denominador; mismo patrón que «Con dif.». */
+  function celdaConPorcentaje(numerador: number, denominador: number) {
+    if (denominador <= 0) {
+      return <span className="tabular-nums">{numerador}</span>;
     }
-    const pct = formatPorcentaje(porcentajeDesdeRatio(conDif, inventariados));
+    const pct = formatPorcentaje(porcentajeDesdeRatio(numerador, denominador));
     return (
       <span className="inline-flex flex-col items-end leading-tight tabular-nums">
-        <span>{conDif}</span>
+        <span>{numerador}</span>
         <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">({pct}%)</span>
       </span>
     );
   }
 
+  function celdaDiferencia(conDif: number, inventariados: number) {
+    return celdaConPorcentaje(conDif, inventariados);
+  }
+
   const difLineasMes = payload?.seleccionMes.totales.inventario_lineas_con_diferencia ?? 0;
   const inventariadosTotalMes = payload?.seleccionMes.totales.productos_inventariados ?? 0;
+  const baseTotalMes = payload?.seleccionMes.totales.total_base_trimestre ?? 0;
+  const conDifTotalMes = payload?.seleccionMes.totales.productos_con_diferencia ?? 0;
 
   if (!mes && !loading) {
     return <PageSpinner />;
   }
 
   return (
-    <div className="flex flex-col gap-6 pb-10">
+    <div className="relative flex flex-col gap-6 pb-10">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <button
@@ -693,6 +707,18 @@ export default function InformeMensualPage() {
           </div>
         </div>
 
+        <FiltrosToggleButton
+          abierto={filtrosAbiertos}
+          onClick={() => setFiltrosAbiertos((v) => !v)}
+          activos={(mes ? 1 : 0) + (mesesTrend !== '6' ? 1 : 0)}
+        />
+      </div>
+
+      <CollapsibleFiltrosPanel
+        abierto={filtrosAbiertos}
+        onCerrar={() => setFiltrosAbiertos(false)}
+        descripcion="Mes del informe y ventana de tendencia."
+      >
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
             <label htmlFor="mes-inf" className="text-xs font-medium text-gray-700 dark:text-gray-300">
@@ -727,7 +753,7 @@ export default function InformeMensualPage() {
             </select>
           </div>
         </div>
-      </div>
+      </CollapsibleFiltrosPanel>
 
       {loading && <PageSpinner />}
 
@@ -779,15 +805,12 @@ export default function InformeMensualPage() {
               </CardHeader>
               <CardContent>
                 <p className="text-2xl font-bold tabular-nums text-gray-900 dark:text-gray-50">
-                  {(
-                    payload.seleccionMes.totales.inventariados_padron_trimestre ??
-                    inventariadosTotalMes
-                  ).toLocaleString('es-AR')}
+                  {inventariadosTotalMes.toLocaleString('es-AR')}
                   <span className="mx-1.5 font-semibold text-gray-400 dark:text-gray-500">/</span>
                   {difLineasMes.toLocaleString('es-AR')}
                 </p>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Avance padrón trim. / líneas con diferencia (mes)
+                  Inventariados (mes) / líneas con diferencia (mes)
                 </p>
               </CardContent>
             </Card>
@@ -896,6 +919,72 @@ export default function InformeMensualPage() {
               </ResponsiveContainer>
             </CardContent>
           </Card>
+
+          {hayVales && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <ClipboardList
+                    className="h-5 w-5 text-indigo-600 dark:text-indigo-400"
+                    aria-hidden
+                  />
+                  <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                    Vales generados — tendencia{' '}
+                    <span className="font-normal text-gray-500 dark:text-gray-400">
+                      ({formatoMesCorto(serieVales[0]?.mes ?? '')} →{' '}
+                      {formatoMesCorto(serieVales[serieVales.length - 1]?.mes ?? '')})
+                    </span>
+                  </h3>
+                </div>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Comprobantes con productos pendientes de entrega, toda la cadena. La línea
+                  punteada son los que todavía tienen algo sin entregar.
+                </p>
+              </CardHeader>
+              <CardContent className="h-[300px] w-full pt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={serieVales} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      className="stroke-gray-200 dark:stroke-gray-700"
+                    />
+                    <XAxis dataKey="mesEtiqueta" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: 8 }}
+                      formatter={(value, name) => {
+                        const n = typeof value === 'number' ? value : Number(value ?? 0);
+                        return [
+                          n.toLocaleString('es-AR'),
+                          name === 'vales' ? 'Vales generados' : 'Con algo sin entregar',
+                        ];
+                      }}
+                    />
+                    <Legend
+                      formatter={(value: string) =>
+                        value === 'vales' ? 'Vales generados' : 'Con algo sin entregar'
+                      }
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="vales"
+                      stroke="#4f46e5"
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="pendientes"
+                      stroke="#d97706"
+                      strokeWidth={2}
+                      strokeDasharray="4 3"
+                      dot={{ r: 2 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>
@@ -1524,7 +1613,7 @@ export default function InformeMensualPage() {
                       <thead>
                         <tr className="border-b border-gray-100 bg-gray-50/80 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-800 dark:bg-gray-900/50 dark:text-gray-400 lg:text-xs">
                           {encabezadoOrdenableTabla('nombrefantasia', 'Sucursal')}
-                          {encabezadoOrdenableTabla('productos_inventariados', 'Avance trim.', 'right')}
+                          {encabezadoOrdenableTabla('productos_inventariados', 'Invent. mes', 'right')}
                           {encabezadoOrdenableTabla('productos_con_diferencia', 'Con dif.', 'right')}
                           {encabezadoOrdenableTabla('productos_mal_contados', 'Mal contados', 'right')}
                           {encabezadoOrdenableTabla(
@@ -1540,6 +1629,7 @@ export default function InformeMensualPage() {
                             'Vendidos',
                             'right'
                           )}
+                          {encabezadoOrdenableTabla('vales', 'Vales', 'right')}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -1581,7 +1671,10 @@ export default function InformeMensualPage() {
                                     : 'text-gray-500'
                                 }
                               >
-                                {row.productos_mal_contados}
+                                {celdaConPorcentaje(
+                                  row.productos_mal_contados,
+                                  row.productos_con_diferencia
+                                )}
                               </span>
                             </td>
                             <td className="px-2 py-2.5 text-right align-top tabular-nums text-gray-700 dark:text-gray-200">
@@ -1634,31 +1727,32 @@ export default function InformeMensualPage() {
                                 })}
                               </span>
                             </td>
+                            <td
+                              className="px-2 py-2.5 text-right align-top tabular-nums text-gray-700 dark:text-gray-200"
+                              title={
+                                row.vales_pendientes > 0
+                                  ? `${row.vales_pendientes} sin entregar del todo`
+                                  : undefined
+                              }
+                            >
+                              {row.vales.toLocaleString('es-AR')}
+                              {row.vales_pendientes > 0 ? (
+                                <span className="ml-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                                  ({row.vales_pendientes})
+                                </span>
+                              ) : null}
+                            </td>
                           </tr>
                         ))}
                         <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold dark:border-gray-600 dark:bg-gray-900/60 lg:text-sm">
                           <td className="px-2 py-2 text-gray-900 dark:text-gray-100">Totales</td>
                           <td className="px-2 py-2 text-right">
-                            {payload.seleccionMes.totales.total_base_trimestre > 0 ? (
-                              <span className="inline-flex flex-col items-end leading-tight tabular-nums">
-                                <span>
-                                  {payload.seleccionMes.totales.inventariados_padron_trimestre}/
-                                  {payload.seleccionMes.totales.total_base_trimestre}
-                                </span>
-                                <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">
-                                  (
-                                  {formatPorcentaje(
-                                    payload.seleccionMes.totales
-                                      .porcentaje_inventariados_sobre_base
-                                  )}
-                                  %)
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="tabular-nums">
-                                {payload.seleccionMes.totales.inventariados_padron_trimestre}
-                              </span>
-                            )}
+                            <span className="tabular-nums">
+                              {celdaConPorcentaje(
+                                payload.seleccionMes.totales.productos_inventariados,
+                                baseTotalMes
+                              )}
+                            </span>
                           </td>
                           <td className="px-2 py-2 text-right">
                             {celdaDiferencia(
@@ -1674,7 +1768,10 @@ export default function InformeMensualPage() {
                                   : ''
                               }
                             >
-                              {payload.seleccionMes.totales.productos_mal_contados}
+                              {celdaConPorcentaje(
+                                payload.seleccionMes.totales.productos_mal_contados,
+                                conDifTotalMes
+                              )}
                             </span>
                           </td>
                           <td className="px-2 py-2 text-right tabular-nums">
@@ -1696,6 +1793,14 @@ export default function InformeMensualPage() {
                               minimumFractionDigits: 0,
                               maximumFractionDigits: 2,
                             })}
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums">
+                            {payload.seleccionMes.totales.vales.toLocaleString('es-AR')}
+                            {payload.seleccionMes.totales.vales_pendientes > 0 ? (
+                              <span className="ml-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                                ({payload.seleccionMes.totales.vales_pendientes})
+                              </span>
+                            ) : null}
                           </td>
                         </tr>
                       </tbody>

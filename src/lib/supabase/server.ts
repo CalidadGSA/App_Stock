@@ -26,11 +26,21 @@ export async function createClient() {
   );
 }
 
+type AdminClient = import('@supabase/supabase-js').SupabaseClient;
+
+// Singleton: el cliente service_role es stateless (sin sesión de usuario), así que
+// crear uno por llamada (~80 call sites, varios por request) solo suma overhead.
+declare const globalThis: { __supabaseAdminClient?: AdminClient };
+
 /** Cliente con service_role: bypassa RLS, solo usar en server-side. */
-export async function createAdminClient() {
+export async function createAdminClient(): Promise<AdminClient> {
+  if (globalThis.__supabaseAdminClient) return globalThis.__supabaseAdminClient;
   const { createClient } = await import('@supabase/supabase-js');
-  return createClient(
+  const client = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
   );
+  globalThis.__supabaseAdminClient = client;
+  return client;
 }

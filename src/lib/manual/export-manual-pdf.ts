@@ -150,7 +150,7 @@ function renderBlock(doc: jsPDF, block: ManualBlock, y: number): number {
       doc.setFontSize(11);
       doc.setTextColor(30, 64, 175);
       doc.text(titleLines, MARGIN_X + pad, cy + 4);
-      let innerY = cy + 4 + titleLines.length * 5;
+      const innerY = cy + 4 + titleLines.length * 5;
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(51, 65, 85);
       doc.text(textLines, MARGIN_X + pad, innerY);

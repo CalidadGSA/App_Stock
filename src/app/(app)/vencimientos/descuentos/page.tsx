@@ -96,21 +96,6 @@ export default function DescuentosConfigPage() {
     return map;
   }, [data.opciones_padron]);
 
-  const subrubros = useMemo(
-    () =>
-      Array.from(agrupadoPadron.entries())
-        .map(([value, v]) => ({ value, label: v.label }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    [agrupadoPadron]
-  );
-
-  const categoriasPorSubrubro = useMemo(() => {
-    if (!subrubroSel) return [];
-    const group = agrupadoPadron.get(subrubroSel);
-    if (!group) return [];
-    return Array.from(group.categorias).sort((a, b) => a.localeCompare(b));
-  }, [agrupadoPadron, subrubroSel]);
-
   const categoriasGlobales = useMemo(
     () =>
       Array.from(new Set(data.opciones_padron.map((x) => String(x.categoria ?? '').trim()).filter(Boolean))).sort(

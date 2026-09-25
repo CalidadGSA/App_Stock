@@ -1,6 +1,13 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { requirePermission } from '@/lib/auth/rbac';
-import { fechaHoyArgentinaYmd, porcentajeDesdeRatio } from '@/lib/utils';
+import { fechaHoyArgentinaYmd, porcentajeDesdeRatio, ymdAddDays } from '@/lib/utils';
+import { queryValesPorSucursal, VALES_VACIO } from '@/lib/legacy-db/mysql-kpis-mensuales';
+import {
+  cargarProductosConDiferenciaPorSucursal,
+  cargarProgresoBasePorSucursal,
+  totalesProgresoMacro,
+} from '@/lib/inventario/agregados-informes';
+import { leerVueltasPsicos } from '@/lib/inventario/generar-base/cantidad-inventario';
 import { contarLineasMalContadasAuditoriaPeriodo } from '@/lib/inventario/productos-mal-contados-auditoria';
 import {
   contarProductosCargadosVencimientosTrimestre,
@@ -30,6 +37,7 @@ import {
   filtrarSucursalesVisiblesLogin,
   filtroSucursalesExcluidasLogin,
 } from '@/lib/sucursales/login-sucursales';
+import { mapWithConcurrency } from '@/lib/map-with-concurrency';
 import { NextRequest, NextResponse } from 'next/server';
 
 export interface ResumenTrimestralSucursalRow {
@@ -57,6 +65,10 @@ export interface ResumenTrimestralSucursalRow {
   productos_cargados_vencimientos: number;
   /** @deprecated Mantener compatibilidad; usar productos_vencidos_trimestre. */
   vencidos_cargados_unidades: number;
+  /** Vales (comprobantes con productos pendientes de entrega) generados en el trimestre. */
+  vales: number;
+  /** De esos vales, los que todavía tienen algún producto sin entregar. */
+  vales_pendientes: number;
 }
 
 export interface ResumenTrimestralSeleccion {
@@ -68,8 +80,47 @@ export interface ResumenTrimestralSeleccion {
   etiqueta: string;
 }
 
+export const maxDuration = 120;
+
+/**
+ * Cuántas sucursales se procesan en paralelo.
+ *
+ * Con los agregados de la migración 030 lo que queda por sucursal son consultas livianas y 6 en
+ * paralelo no da problemas (medido). Sin la migración, las dos consultas pesadas compiten entre
+ * sí y a partir de 3 empiezan a chocar contra el statement timeout de Postgres.
+ */
+const RESUMEN_SUCURSAL_CONCURRENCY = 3;
+const RESUMEN_SUCURSAL_CONCURRENCY_AGREGADOS = 6;
+
+async function safeNumber(fn: () => Promise<number>, label: string): Promise<number> {
+  try {
+    return await fn();
+  } catch (e) {
+    console.error(`[resumen-trimestral] ${label}:`, e instanceof Error ? e.message : e);
+    return 0;
+  }
+}
+
 /** GET /api/admin/resumen-trimestral?anio=2026&cuatrimestre=1 */
 export async function GET(request: NextRequest) {
+  try {
+    return await getResumenTrimestral(request);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[resumen-trimestral] fatal:', msg);
+    return NextResponse.json(
+      {
+        error: /statement timeout|canceling statement|57014/i.test(msg)
+          ? 'La consulta del resumen trimestral tardó demasiado (timeout de Postgres). Probá de nuevo.'
+          : 'Error al cargar el resumen trimestral.',
+        detalle: msg,
+      },
+      { status: 500 }
+    );
+  }
+}
+
+async function getResumenTrimestral(request: NextRequest) {
   const guard = await requirePermission('admin.resumen_trimestral');
   if (!guard.ok) return guard.response;
 
@@ -134,13 +185,44 @@ export async function GET(request: NextRequest) {
     }>
   );
 
+  const sucursalIds = sucursales.map((s) => Number(s.sucursal));
+
+  // Agregados de Postgres: una llamada para todas las sucursales en vez de una por sucursal.
+  // Si la migración 030 no está aplicada, vuelven null y se usa el camino de siempre.
+  const vueltasPsicos = await leerVueltasPsicos(admin, sucursalIds);
+  const [progresoPorSucursal, difPorSucursal] = await Promise.all([
+    cargarProgresoBasePorSucursal(admin, periodo!.trimestre, vueltasPsicos),
+    cargarProductosConDiferenciaPorSucursal(admin, periodo!.fecha_inicio, periodo!.fecha_fin),
+  ]);
+
+  // Una sola consulta a Onze para todas las sucursales del trimestre.
+  const valesRes = await queryValesPorSucursal(
+    sucursales.map((s) => Number(s.sucursal)),
+    periodo!.fecha_inicio,
+    ymdAddDays(periodo!.fecha_fin, 1)
+  );
+  if (!valesRes.ok) console.warn('[resumen-trimestral] vales:', valesRes.error);
+  const valesPorSucursal = valesRes.ok ? valesRes.data : new Map<number, typeof VALES_VACIO>();
+
   const filas: ResumenTrimestralSucursalRow[] = (
-    await Promise.all(
-      sucursales.map(async (s) => {
+    await mapWithConcurrency(
+      sucursales,
+      progresoPorSucursal && difPorSucursal
+        ? RESUMEN_SUCURSAL_CONCURRENCY_AGREGADOS
+        : RESUMEN_SUCURSAL_CONCURRENCY,
+      async (s) => {
         const sucId = Number(s.sucursal);
 
-        const progreso =
-          anioParam != null && cuatrimestreParam != null
+        const porMacroAgregado = progresoPorSucursal?.get(sucId);
+        const progreso = porMacroAgregado
+          ? {
+              ...totalesProgresoMacro(porMacroAgregado),
+              trimestre: periodo!.trimestre,
+              fecha_inicio: periodo!.fecha_inicio,
+              fecha_fin: periodo!.fecha_fin,
+              por_macro: porMacroAgregado,
+            }
+          : anioParam != null && cuatrimestreParam != null
             ? await obtenerProgresoPorTrimestreLabel(
                 admin,
                 sucId,
@@ -152,24 +234,41 @@ export async function GET(request: NextRequest) {
 
         const [productosDif, productosMalContados, metricasVenc, productosCargadosVenc, ventanas] =
           await Promise.all([
-            contarProductosConDiferenciaInventarioTrimestre(
-              admin,
-              sucId,
-              periodo!.fecha_inicio,
-              periodo!.fecha_fin
+            difPorSucursal
+              ? Promise.resolve(difPorSucursal.get(sucId) ?? 0)
+              : safeNumber(
+                  () =>
+                    contarProductosConDiferenciaInventarioTrimestre(
+                      admin,
+                      sucId,
+                      periodo!.fecha_inicio,
+                      periodo!.fecha_fin
+                    ),
+                  `dif suc=${sucId}`
+                ),
+            safeNumber(
+              () =>
+                contarLineasMalContadasAuditoriaPeriodo(
+                  admin,
+                  periodo!.fecha_inicio,
+                  periodo!.fecha_fin,
+                  sucId
+                ),
+              `malContados suc=${sucId}`
             ),
-            contarLineasMalContadasAuditoriaPeriodo(
-              admin,
-              periodo!.fecha_inicio,
-              periodo!.fecha_fin,
-              sucId
-            ),
-            obtenerMetricasVencidosStock(admin, sucId, hoyVen),
-            contarProductosCargadosVencimientosTrimestre(
-              admin,
-              sucId,
-              periodo!.fecha_inicio,
-              periodo!.fecha_fin
+            obtenerMetricasVencidosStock(admin, sucId, hoyVen).catch((e) => {
+              console.error(`[resumen-trimestral] vencidos suc=${sucId}:`, e);
+              return { productos_con_saldo: 0, unidades_vendidas: 0 };
+            }),
+            safeNumber(
+              () =>
+                contarProductosCargadosVencimientosTrimestre(
+                  admin,
+                  sucId,
+                  periodo!.fecha_inicio,
+                  periodo!.fecha_fin
+                ),
+              `cargadosVenc suc=${sucId}`
             ),
             contarVentanasPorVencerEnTrimestre(
               admin,
@@ -178,7 +277,15 @@ export async function GET(request: NextRequest) {
               // la función devuelve 0 (no tiene sentido “próximos 30 días”).
               hoyVen,
               periodo!.fecha_fin
-            ),
+            ).catch((e) => {
+              console.error(`[resumen-trimestral] porVencer suc=${sucId}:`, e);
+              return {
+                total_trimestre: 0,
+                por_vencer_primeros_30: 0,
+                por_vencer_31_a_60: 0,
+                por_vencer_61_a_90: 0,
+              };
+            }),
           ]);
 
         return {
@@ -201,8 +308,10 @@ export async function GET(request: NextRequest) {
           unidades_vencidos_vendidas: metricasVenc.unidades_vendidas,
           productos_cargados_vencimientos: productosCargadosVenc,
           vencidos_cargados_unidades: metricasVenc.productos_con_saldo,
+          vales: (valesPorSucursal.get(sucId) ?? VALES_VACIO).vales,
+          vales_pendientes: (valesPorSucursal.get(sucId) ?? VALES_VACIO).vales_pendientes,
         };
-      })
+      }
     )
   ).filter((f) => esSucursalVisibleEnLogin(f.sucursal_id));
 
@@ -225,6 +334,8 @@ export async function GET(request: NextRequest) {
         acc.unidades_vencidos_vendidas + f.unidades_vencidos_vendidas,
       productos_cargados_vencimientos:
         acc.productos_cargados_vencimientos + f.productos_cargados_vencimientos,
+      vales: acc.vales + f.vales,
+      vales_pendientes: acc.vales_pendientes + f.vales_pendientes,
     }),
     {
       inventariados: 0,
@@ -239,28 +350,40 @@ export async function GET(request: NextRequest) {
       productos_vencidos_trimestre: 0,
       unidades_vencidos_vendidas: 0,
       productos_cargados_vencimientos: 0,
+      vales: 0,
+      vales_pendientes: 0,
     }
   );
 
   const porcentajeGlobal = porcentajeDesdeRatio(totales.inventariados, totales.total);
 
-  const [metricasVencidosGlobal, inventariadosAuditoriaGlobal, diferenciasAuditoriaGlobal, malContadosGlobal] =
+  // Mal contados: usar suma por sucursal (ya calculada). El conteo global
+  // sin filtro re-escanea todo el trimestre y suma ~10–70s de latencia.
+  const malContadosGlobal = totales.productos_mal_contados;
+
+  const [metricasVencidosGlobal, inventariadosAuditoriaGlobal, diferenciasAuditoriaGlobal] =
     await Promise.all([
-      obtenerMetricasVencidosStockGlobal(admin, hoyVen),
-      contarProductosInventariadosAuditoriaTrimestreGlobal(
-        admin,
-        seleccion.fecha_inicio,
-        seleccion.fecha_fin
+      obtenerMetricasVencidosStockGlobal(admin, hoyVen).catch((e) => {
+        console.error('[resumen-trimestral] vencidosGlobal:', e);
+        return { productos_con_saldo: 0, unidades_vendidas: 0 };
+      }),
+      safeNumber(
+        () =>
+          contarProductosInventariadosAuditoriaTrimestreGlobal(
+            admin,
+            seleccion.fecha_inicio,
+            seleccion.fecha_fin
+          ),
+        'invAudGlobal'
       ),
-      contarProductosConDiferenciaAuditoriaTrimestreGlobal(
-        admin,
-        seleccion.fecha_inicio,
-        seleccion.fecha_fin
-      ),
-      contarLineasMalContadasAuditoriaPeriodo(
-        admin,
-        seleccion.fecha_inicio,
-        seleccion.fecha_fin
+      safeNumber(
+        () =>
+          contarProductosConDiferenciaAuditoriaTrimestreGlobal(
+            admin,
+            seleccion.fecha_inicio,
+            seleccion.fecha_fin
+          ),
+        'difAudGlobal'
       ),
     ]);
 

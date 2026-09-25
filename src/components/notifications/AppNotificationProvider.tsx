@@ -10,13 +10,19 @@ import {
   type ReactNode,
 } from 'react';
 import type { AppNotification, AppNotifyInput, AppNotificationVariant } from './app-notification-types';
-import type { AppConfirmOptions, PendingAppConfirm } from './app-confirm-types';
+import type {
+  AppConfirmChoice,
+  AppConfirmChoiceOptions,
+  AppConfirmOptions,
+  PendingAppConfirm,
+} from './app-confirm-types';
 import { AppNotificationHost } from './AppNotificationHost';
 import { AppConfirmDialog } from './AppConfirmDialog';
 
 type NotifyFn = (input: AppNotifyInput) => string;
 
 type ConfirmFn = (options: AppConfirmOptions | string) => Promise<boolean>;
+type ConfirmChoiceFn = (options: AppConfirmChoiceOptions) => Promise<AppConfirmChoice>;
 
 type AppNotifyApi = {
   notify: NotifyFn;
@@ -26,6 +32,8 @@ type AppNotifyApi = {
   info: (message: string, title?: string) => string;
   dismiss: (id: string) => void;
   confirm: ConfirmFn;
+  /** Confirmación con 3 acciones: cancelar / confirmar / alternativa. */
+  confirmChoice: ConfirmChoiceFn;
 };
 
 const DEFAULT_DURATION: Record<AppNotificationVariant, number> = {
@@ -87,6 +95,7 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
     return new Promise<boolean>((resolve) => {
       setPendingConfirm({
         id: makeId(),
+        mode: 'boolean',
         title: opts.title,
         message: opts.message,
         confirmLabel: opts.confirmLabel,
@@ -97,9 +106,32 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const answerConfirm = useCallback((value: boolean) => {
+  const confirmChoice = useCallback<ConfirmChoiceFn>((options) => {
+    return new Promise<AppConfirmChoice>((resolve) => {
+      setPendingConfirm({
+        id: makeId(),
+        mode: 'choice',
+        title: options.title,
+        message: options.message,
+        confirmLabel: options.confirmLabel,
+        cancelLabel: options.cancelLabel,
+        altConfirmLabel: options.altConfirmLabel,
+        variant: options.variant,
+        resolve,
+      });
+    });
+  }, []);
+
+  const answerConfirm = useCallback((value: boolean | AppConfirmChoice) => {
     setPendingConfirm((current) => {
-      if (current) current.resolve(value);
+      if (!current) return null;
+      if (current.mode === 'choice') {
+        const choice: AppConfirmChoice =
+          value === true ? 'confirm' : value === false ? 'cancel' : value;
+        current.resolve(choice);
+      } else {
+        current.resolve(value === true || value === 'confirm');
+      }
       return null;
     });
   }, []);
@@ -113,8 +145,9 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
       info: (message, title) => notify({ variant: 'info', message, title }),
       dismiss,
       confirm,
+      confirmChoice,
     }),
-    [notify, dismiss, confirm]
+    [notify, dismiss, confirm, confirmChoice]
   );
 
   return (

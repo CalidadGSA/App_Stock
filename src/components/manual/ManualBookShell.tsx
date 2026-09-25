@@ -13,14 +13,12 @@ interface ManualBookShellProps {
   pages: ManualPageDef[];
   cover: ManualCoverMeta;
   pdfFileName: string;
-  pdfPreviewTitle: string;
 }
 
 export default function ManualBookShell({
   pages,
   cover,
   pdfFileName,
-  pdfPreviewTitle,
 }: ManualBookShellProps) {
   const notify = useAppNotify();
   const [viewportWidth, setViewportWidth] = useState(

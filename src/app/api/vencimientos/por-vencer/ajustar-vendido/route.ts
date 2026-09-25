@@ -2,15 +2,14 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { ajustarCantidadVendidaDetalle } from '@/lib/vencimientos/ajustar-cantidad-vendida';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 /** POST { detalle_id, cantidad_vendida_total } — corrige unidades vendidas registradas por error. */
 export async function POST(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
-  const cookieStore = await cookies();
-  const sucursalCookie = cookieStore.get('sucursal_id')?.value;
+  const sucursalCookie = await getSucursalIdSesion();
   if (!sucursalCookie) {
     return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
   }

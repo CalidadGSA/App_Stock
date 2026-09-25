@@ -118,6 +118,18 @@ export function esTipoAuditoria(tipo: TipoControlInventario) {
   return tipo === 'auditoria';
 }
 
+/**
+ * Controles de sucursal cuyas diferencias ajustadas alimentan la auditoría de stock.
+ * Excluye auditorías / ocasionales de auditoría.
+ */
+export function esTipoOrigenDiferenciasParaAuditoria(tipo: TipoControlInventario) {
+  return (
+    tipo !== 'auditoria' &&
+    tipo !== 'auditoria_integral' &&
+    tipo !== 'ocasional_auditoria'
+  );
+}
+
 export function esTipoDiario(tipo: TipoControlInventario) {
   return tipo === 'diario';
 }

@@ -1,5 +1,9 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
+import {
+  getCategoriaPorSubrubroOnze,
+  getNombresCategoriasOnze,
+} from '@/lib/legacy-db/onze-catalogos';
 import { requirePermission } from '@/lib/auth/rbac';
 import {
   type CategoriaMacro,
@@ -13,9 +17,10 @@ import {
 } from '@/lib/inventario/tipo-control';
 import { esProductoControlado } from '@/lib/medicamentos/clasificacion-controlados';
 import { getPadronPorProductos } from '@/lib/padron-final-db';
+import { getFichasMedicamento } from '@/lib/legacy-db/onze-medicamentos';
 import { macroDesdePadron, padronParaProducto } from '@/lib/vencimientos-drogueria-lab';
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 const DETALLE_SELECT_AUDITORIA =
   'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, stock_sistema, stock_sist_cajas, stock_sist_unidades, diferencia, estado, auditado, ajustado, con_diferencias, fecha_registro';
@@ -23,7 +28,6 @@ const DETALLE_SELECT_AUDITORIA =
 const LIMITE_AUDITORIA_PSICO = 30;
 const LIMITE_AUDITORIA_OTRAS = 50;
 const CHUNK_DETALLES = 1000;
-const CHUNK_CODPLEX = 400;
 
 function clavesProductoId(id: string | number | null | undefined): string[] {
   const s = String(id ?? '').trim();
@@ -65,21 +69,23 @@ function normalizarEstadoDetalle(estado: string | null | undefined): string {
     .toLowerCase();
 }
 
+function fechaDetalleMs(detalle: { fecha_registro?: string | null }): number {
+  const ms = Date.parse(String(detalle.fecha_registro ?? ''));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 function detalleElegibleParaAuditoria(detalle: DetalleConDiferencia): boolean {
   const estado = normalizarEstadoDetalle(detalle.estado);
   if (Number(detalle.auditado ?? 0) === 1) return false;
+  if (estado === 'descartado') return false;
   if (estado === 'ajustado_auditoria') return false;
-  if (estado === 'sin diferencias') return false;
+  if (estado === 'sin diferencias' || estado === 'sin_diferencias') return false;
 
-  const ajustadoSucursal =
-    Number(detalle.ajustado ?? 0) === 1 || estado === 'ajustado_sucursal';
-  if (!ajustadoSucursal) return false;
+  // Solo la diferencia exportada a Plex. `ajustado = 1` también se usa al quitar
+  // repetidos (estado = descartado) y esas líneas no deben ir a auditoría.
+  if (estado !== 'ajustado_sucursal') return false;
 
-  return (
-    Number(detalle.con_diferencias ?? 0) === 1 ||
-    estado === 'con diferencia' ||
-    estado === 'ajustado_sucursal'
-  );
+  return Number(detalle.con_diferencias ?? 0) === 1;
 }
 
 async function cargarPsicotropicosIds(
@@ -88,45 +94,45 @@ async function cargarPsicotropicosIds(
 ): Promise<Set<string>> {
   const psicotropicosIds = new Set<string>();
   const unicos = Array.from(new Set(codplexIds.map((id) => idProductoCanonico(id)).filter(Boolean)));
-  for (let i = 0; i < unicos.length; i += CHUNK_CODPLEX) {
-    const lote = unicos.slice(i, i + CHUNK_CODPLEX);
-    const { data: meds, error: medsError } = await admin
-      .from('medicamentos')
-      .select('codplex, idpsicofarmaco')
-      .in('codplex', lote);
-
-    if (medsError) throw medsError;
-
-    for (const m of meds ?? []) {
-      const codplex = (m as { codplex?: string | number | null }).codplex;
-      const idpsicofarmaco = (m as { idpsicofarmaco?: string | null }).idpsicofarmaco;
-      if (codplex == null || !esProductoControlado(idpsicofarmaco)) continue;
-      for (const k of clavesProductoId(codplex)) psicotropicosIds.add(k);
-    }
+  const { fichas } = await getFichasMedicamento(admin, unicos);
+  for (const [codplex, f] of fichas) {
+    if (!esProductoControlado(f.idpsicofarmaco)) continue;
+    for (const k of clavesProductoId(codplex)) psicotropicosIds.add(k);
   }
   return psicotropicosIds;
 }
+
+/**
+ * Máximo de uuids por `.in('control_id', …)`: van en la URL de PostgREST y con ~350
+ * controles cerrados la request falla («fetch failed») y la auditoría quedaba vacía.
+ */
+const CHUNK_CONTROLES_IN = 100;
 
 async function cargarDetallesCerradosParaAuditoria(
   admin: Awaited<ReturnType<typeof createAdminClient>>,
   idsCerrados: string[]
 ): Promise<DetalleConDiferencia[]> {
   const acumulado: DetalleConDiferencia[] = [];
-  let offset = 0;
-  while (true) {
-    const { data, error } = await admin
-      .from('controles_inventario_detalle')
-      .select(DETALLE_SELECT_AUDITORIA)
-      .in('control_id', idsCerrados)
-      .order('fecha_registro', { ascending: true })
-      .range(offset, offset + CHUNK_DETALLES - 1);
+  for (let i = 0; i < idsCerrados.length; i += CHUNK_CONTROLES_IN) {
+    const loteIds = idsCerrados.slice(i, i + CHUNK_CONTROLES_IN);
+    let offset = 0;
+    while (true) {
+      const { data, error } = await admin
+        .from('controles_inventario_detalle')
+        .select(DETALLE_SELECT_AUDITORIA)
+        .in('control_id', loteIds)
+        .order('fecha_registro', { ascending: true })
+        .range(offset, offset + CHUNK_DETALLES - 1);
 
-    if (error) throw error;
-    const batch = (data ?? []) as DetalleConDiferencia[];
-    acumulado.push(...batch);
-    if (batch.length < CHUNK_DETALLES) break;
-    offset += CHUNK_DETALLES;
+      if (error) throw error;
+      const batch = (data ?? []) as DetalleConDiferencia[];
+      acumulado.push(...batch);
+      if (batch.length < CHUNK_DETALLES) break;
+      offset += CHUNK_DETALLES;
+    }
   }
+  // El orden global por fecha_registro se pierde al lotear: restaurarlo (la deduplicación depende de él).
+  acumulado.sort((a, b) => fechaDetalleMs(a) - fechaDetalleMs(b));
   return acumulado;
 }
 
@@ -170,8 +176,7 @@ export async function POST(request: Request) {
   const guard = await requirePermission('inventario.auditoria');
   if (!guard.ok) return guard.response;
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   const admin = await createAdminClient();
@@ -306,6 +311,8 @@ export async function POST(request: Request) {
         detallesConDif = await cargarDetallesCerradosParaAuditoria(admin, idsCerrados);
       } catch (difError) {
         const msg = difError instanceof Error ? difError.message : 'Error al buscar diferencias';
+        // No dejar una auditoría vacía creada.
+        await admin.from('controles_inventario').delete().eq('id', controlId);
         return NextResponse.json(
           { error: `Error al buscar diferencias para auditoría: ${msg}` },
           { status: 500 }
@@ -313,14 +320,52 @@ export async function POST(request: Request) {
       }
 
       if (detallesConDif.length > 0) {
-        // Deduplicar por producto conservando la diferencia más antigua (orden asc).
+        // Última diferencia (por fecha_registro) todavía pendiente (con_diferencias=1 y sin
+        // ajustar) por producto. Si existe una más nueva que la línea "ajustado_sucursal" que
+        // habilitaría la auditoría, significa que la sucursal ya tiene ese producto en danza
+        // sin terminar de resolver: no corresponde traerlo a auditar todavía (traería un
+        // producto que en los hechos la sucursal aún no ajustó).
+        const ultimaPendienteMsPorProducto = new Map<string, number>();
+        // Si alguna línea de origen ya fue enviada a auditoría, no reabrir el
+        // producto por otra diferencia duplicada (exportada o descartada).
+        const productosYaAuditados = new Set<string>();
+        for (const d of detallesConDif) {
+          const productoId = idProductoCanonico(d.producto_id_sistema);
+          if (!productoId) continue;
+          if (Number(d.auditado ?? 0) === 1) {
+            productosYaAuditados.add(productoId);
+          }
+          const pendiente = Number(d.con_diferencias ?? 0) === 1 && Number(d.ajustado ?? 0) !== 1;
+          if (!pendiente) continue;
+          const ms = fechaDetalleMs(d);
+          if (ms <= 0) continue;
+          const actual = ultimaPendienteMsPorProducto.get(productoId) ?? -Infinity;
+          if (ms > actual) ultimaPendienteMsPorProducto.set(productoId, ms);
+        }
+
+        // Una sola línea por producto: la ajustada más reciente (la que queda
+        // después de "quitar repetidos"; las viejas van como descartado).
         const porProducto = new Map<string, DetalleConDiferencia>();
         for (const detalle of detallesConDif) {
           if (!detalleElegibleParaAuditoria(detalle)) continue;
 
           const productoId = idProductoCanonico(detalle.producto_id_sistema);
-          if (!productoId || porProducto.has(productoId)) continue;
-          porProducto.set(productoId, detalle);
+          if (!productoId || productosYaAuditados.has(productoId)) continue;
+
+          const msCandidata = fechaDetalleMs(detalle);
+          const msPendienteMasNueva = ultimaPendienteMsPorProducto.get(productoId);
+          if (
+            msPendienteMasNueva != null &&
+            msCandidata > 0 &&
+            msPendienteMasNueva > msCandidata
+          ) {
+            continue;
+          }
+
+          const actual = porProducto.get(productoId);
+          if (!actual || msCandidata > fechaDetalleMs(actual)) {
+            porProducto.set(productoId, detalle);
+          }
         }
 
         const productosUnicos = Array.from(porProducto.values());
@@ -354,25 +399,10 @@ export async function POST(request: Request) {
           const unicosMeds = Array.from(
             new Set(codplexIds.map((id) => idProductoCanonico(id)).filter(Boolean))
           );
-          for (let i = 0; i < unicosMeds.length; i += CHUNK_CODPLEX) {
-            const lote = unicosMeds.slice(i, i + CHUNK_CODPLEX);
-            const { data: medsSub, error: subError } = await admin
-              .from('medicamentos')
-              .select('codplex, idsubrubro')
-              .in('codplex', lote);
-            if (subError) {
-              return NextResponse.json(
-                { error: `Error al consultar subrubros de productos: ${subError.message}` },
-                { status: 500 }
-              );
-            }
-            for (const m of medsSub ?? []) {
-              const codplex = (m as { codplex?: string | number | null }).codplex;
-              const idsubrubroRaw = (m as { idsubrubro?: number | null }).idsubrubro;
-              if (codplex == null) continue;
-              for (const k of clavesProductoId(codplex)) {
-                subrubroPorCodplex.set(k, idsubrubroRaw ?? null);
-              }
+          const { fichas: fichasSub } = await getFichasMedicamento(admin, unicosMeds);
+          for (const [codplex, f] of fichasSub) {
+            for (const k of clavesProductoId(codplex)) {
+              subrubroPorCodplex.set(k, f.idsubrubro);
             }
           }
         }
@@ -386,54 +416,26 @@ export async function POST(request: Request) {
           )
         );
         if (subrubrosIds.length > 0) {
-          const { data: subrubros, error: subrubrosError } = await admin
-            .from('subrubros')
-            .select('idsubrubro, idcategoria')
-            .in('idsubrubro', subrubrosIds);
-
-          if (subrubrosError) {
-            return NextResponse.json(
-              { error: `Error al consultar subrubros: ${subrubrosError.message}` },
-              { status: 500 }
-            );
-          }
+          const idCategoriaPorSubrubro = await getCategoriaPorSubrubroOnze();
+          const subrubros = subrubrosIds.map((idsubrubro) => ({
+            idsubrubro,
+            idcategoria: idCategoriaPorSubrubro.get(idsubrubro) ?? null,
+          }));
 
           const idsCategoria = Array.from(
             new Set(
-              (subrubros ?? [])
-                .map((s) => (s as { idcategoria?: number | null }).idcategoria)
+              subrubros
+                .map((s) => s.idcategoria)
                 .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
             )
           );
 
-          const nombreCategoriaPorId = new Map<number, string>();
-          if (idsCategoria.length > 0) {
-            const { data: categorias, error: categoriasError } = await admin
-              .from('categorias')
-              .select('idcategoria, nombre')
-              .in('idcategoria', idsCategoria);
+          const nombreCategoriaPorId =
+            idsCategoria.length > 0 ? await getNombresCategoriasOnze() : new Map<number, string>();
 
-            if (categoriasError) {
-              return NextResponse.json(
-                { error: `Error al consultar categorías: ${categoriasError.message}` },
-                { status: 500 }
-              );
-            }
-
-            for (const c of categorias ?? []) {
-              const id = (c as { idcategoria?: number }).idcategoria;
-              const nombre = String((c as { nombre?: string | null }).nombre ?? '').trim();
-              if (typeof id === 'number') {
-                nombreCategoriaPorId.set(id, nombre);
-              }
-            }
-          }
-
-          for (const s of subrubros ?? []) {
-            const idSub = (s as { idsubrubro?: number }).idsubrubro;
-            const idCat = (s as { idcategoria?: number | null }).idcategoria;
-            if (typeof idSub === 'number' && typeof idCat === 'number') {
-              categoriaPorSubrubro.set(idSub, nombreCategoriaPorId.get(idCat) ?? '');
+          for (const s of subrubros) {
+            if (typeof s.idcategoria === 'number') {
+              categoriaPorSubrubro.set(s.idsubrubro, nombreCategoriaPorId.get(s.idcategoria) ?? '');
             }
           }
         }

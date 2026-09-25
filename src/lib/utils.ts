@@ -117,17 +117,54 @@ function dateCalendarioArgentina(parts: { y: number; mo: number; d: number }): D
   return new Date(Date.UTC(parts.y, parts.mo - 1, parts.d, 12, 0, 0));
 }
 
+/** Armado fijo DD/MM/AAAA (no depende del locale del runtime). */
+function formatPartsDmy(y: number, mo: number, d: number): string {
+  return `${String(d).padStart(2, '0')}/${String(mo).padStart(2, '0')}/${y}`;
+}
+
+function partsFechaArgentina(date: Date): { y: number; mo: number; d: number; h: number; mi: number } | null {
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIME_ZONE_AR,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  const y = Number(get('year'));
+  const mo = Number(get('month'));
+  const d = Number(get('day'));
+  const h = Number(get('hour'));
+  const mi = Number(get('minute'));
+  if (![y, mo, d, h, mi].every((n) => Number.isFinite(n))) return null;
+  return { y, mo, d, h, mi };
+}
+
+/** Fecha visible en UI: siempre DD/MM/AAAA. */
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—';
-  const ymd = parseYmdCalendario(dateStr);
-  const ref = ymd ? dateCalendarioArgentina(ymd) : new Date(dateStr);
-  if (Number.isNaN(ref.getTime())) return '—';
-  return ref.toLocaleDateString('es-AR', {
-    timeZone: TIME_ZONE_AR,
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
+  const ymd = parseYmdCalendario(String(dateStr).slice(0, 10));
+  if (ymd) return formatPartsDmy(ymd.y, ymd.mo, ymd.d);
+  const parts = partsFechaArgentina(new Date(dateStr));
+  if (!parts) return '—';
+  return formatPartsDmy(parts.y, parts.mo, parts.d);
+}
+
+/** Fecha DD/MM/AAAA para nombres de archivos exportables (acepta YYYY-MM-DD o ISO). */
+export function formatDateForFilename(dateStr: string | null | undefined): string {
+  const s = formatDate(dateStr);
+  return s === '—' ? 'sin-fecha' : s;
+}
+
+/** Mes YYYY-MM → MM/AAAA para nombres de archivo. */
+export function formatYmForFilename(ym: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym ?? '').trim());
+  if (!m) return String(ym ?? '').trim() || 'sin-mes';
+  return `${m[2]}/${m[1]}`;
 }
 
 /** Rango legible para períodos trimestrales: "Del 1 de abril al 30 de junio de 2026". */
@@ -152,22 +189,34 @@ export function formatRangoFechasLargo(
   return `Del ${ini} de ${a.y} al ${fin} de ${b.y}`;
 }
 
+/** Fecha+hora visible en UI: siempre DD/MM/AAAA HH:mm (24h, zona Argentina). */
 export function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleString('es-AR', {
-    timeZone: TIME_ZONE_AR,
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
+  const parts = partsFechaArgentina(new Date(dateStr));
+  if (!parts) return '—';
+  return `${formatPartsDmy(parts.y, parts.mo, parts.d)} ${String(parts.h).padStart(2, '0')}:${String(parts.mi).padStart(2, '0')}`;
+}
+
+/** Ahora mismo en Argentina, mismo formato que formatDateTime. */
+export function formatNowDateTime(): string {
+  return formatDateTime(new Date().toISOString());
+}
+
+/** Formatea un monto en pesos argentinos, ej. "$ 12.345". */
+export function formatMoneda(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return n.toLocaleString('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
   });
 }
 
 export function diasHastaVencimiento(fechaVenc: string): number {
-  const hoy = new Date();
-  const hoyUTC = Date.UTC(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  // "Hoy" en calendario Argentina (igual que el servidor), no en la TZ local del runtime.
+  const [hy, hm, hd] = fechaHoyArgentinaYmd().split('-').map((n) => parseInt(n, 10));
+  const hoyUTC = Date.UTC(hy, hm - 1, hd);
   const [y, m, d] = String(fechaVenc).split('-').map((n) => parseInt(n, 10));
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return 0;
   const vencUTC = Date.UTC(y, m - 1, d);

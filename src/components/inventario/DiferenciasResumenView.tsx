@@ -1,15 +1,23 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { PageSpinner } from '@/components/ui/spinner';
+import { Badge } from '@/components/ui/badge';
 import Link from 'next/link';
-import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, ExternalLink } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { fechaHoyArgentinaYmd, ymdAddDays, formatDateTime } from '@/lib/utils';
+import {
+  fechaHoyArgentinaYmd,
+  ymdAddDays,
+  formatDate,
+  formatDateForFilename,
+  formatDateTime,
+  formatNowDateTime,
+  formatMoneda,
+} from '@/lib/utils';
 import { clientHasPermission } from '@/lib/auth/permissions-client';
 import {
   ORIGENES_DIFERENCIA_FILTRO,
@@ -17,6 +25,12 @@ import {
   TIPOS_INVENTARIO_FILTRO,
   TIPOS_INVENTARIO_SUCURSAL_FILTRO,
 } from '@/lib/inventario/diferencias-consolidado-tipos';
+import {
+  parseOrdenColumnaDiferenciasResumen,
+  parseOrdenDirDiferenciasResumen,
+  type OrdenColumnaDiferenciasResumen,
+  type OrdenDirDiferenciasResumen,
+} from '@/lib/inventario/diferencias-resumen-orden';
 import { etiquetaTipoControlInventario } from '@/lib/inventario/tipo-control';
 import type { TipoControlInventario } from '@/lib/inventario/tipo-control';
 import DiferenciasResumenListMobile from '@/components/inventario/DiferenciasResumenListMobile';
@@ -29,9 +43,12 @@ import {
 import { DatatableListSection } from '@/components/list/DatatableListSection';
 import {
   usePaginacionServidor,
-  useTotalPaginas,
 } from '@/components/list/datatable-pagination';
 import { tamPaginaToPageSizeParam } from '@/lib/api/pagination';
+import {
+  CollapsibleFiltrosPanel,
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
 
 export type DiferenciasResumenVariant = 'sucursal' | 'auditoria';
 
@@ -53,9 +70,9 @@ const CONFIG: Record<
     apiPath: '/api/inventario/diferencias-resumen',
     basePath: '/inventario/diferencias-resumen',
     title: 'Resumen de productos con diferencia',
-    periodoLabel: 'Diferencias por control (últimos 60 días)',
+    periodoLabel: 'Diferencias por control',
     periodoHint:
-      'Solo controles de sucursal (inventario diario, ocasional, etc.). Las diferencias de auditoría no se incluyen.',
+      '',
     emptyMessage: 'No hay productos con diferencias de sucursal en el período seleccionado.',
     pdfTitle: 'Reporte de diferencias de inventario (sucursal)',
     pdfFooter: 'GestionStock - Diferencias sucursal',
@@ -93,8 +110,15 @@ interface ResumenRow {
   control_tipo: string | null;
   control_descripcion: string | null;
   control_origen?: string | null;
+  stockSistCajas?: number;
+  stockSistUnidades?: number;
+  stockRealCajas?: number;
+  stockRealUnidades?: number;
   diffCajas: number;
   diffUnidades: number;
+  precio?: number | null;
+  monto?: number | null;
+  ajustado?: boolean;
 }
 
 export default function DiferenciasResumenView({
@@ -107,6 +131,9 @@ export default function DiferenciasResumenView({
   const router = useRouter();
   const [items, setItems] = useState<ResumenRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [montoTotal, setMontoTotal] = useState(0);
+  const [montoPositivo, setMontoPositivo] = useState(0);
+  const [montoNegativo, setMontoNegativo] = useState(0);
   const [operadoresOpciones, setOperadoresOpciones] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -117,10 +144,19 @@ export default function DiferenciasResumenView({
   const [categoriaMacro, setCategoriaMacro] = useState('');
   const [busquedaAplicada, setBusquedaAplicada] = useState('');
   const [puedeConsolidado, setPuedeConsolidado] = useState(false);
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
 
   const origenFiltro = searchParams.get('origen') ?? '';
   const tipoFiltro = searchParams.get('tipo') ?? '';
   const operadorFiltro = searchParams.get('operador') ?? '';
+  /** Por defecto solo diferencias; `solo_diferencias=0` muestra todas las líneas contadas. */
+  const soloDiferencias = searchParams.get('solo_diferencias') !== '0';
+  const sortBy = parseOrdenColumnaDiferenciasResumen(
+    searchParams.get('sortBy') ?? 'fecha_control'
+  );
+  const sortDir = parseOrdenDirDiferenciasResumen(
+    searchParams.get('sortDir') ?? (variant === 'auditoria' ? 'asc' : 'desc')
+  );
   const {
     paginaActual,
     setPaginaActual,
@@ -134,8 +170,18 @@ export default function DiferenciasResumenView({
     origenFiltro,
     tipoFiltro,
     operadorFiltro,
+    soloDiferencias,
+    sortBy,
+    sortDir,
   ]);
-  const totalPaginas = useTotalPaginas(total, tamPagina);
+  const tituloVista = soloDiferencias
+    ? cfg.title
+    : variant === 'auditoria'
+      ? 'Líneas contadas en auditoría'
+      : 'Resumen de productos inventariados';
+  const emptyMessage = soloDiferencias
+    ? cfg.emptyMessage
+    : 'No hay líneas contadas en el período seleccionado.';
   const tiposOpciones =
     variant === 'auditoria'
       ? TIPOS_INVENTARIO_AUDITORIA_FILTRO
@@ -201,6 +247,9 @@ export default function DiferenciasResumenView({
         if (variant === 'sucursal' && origenFiltro) params.set('origen', origenFiltro);
         if (tipoFiltro) params.set('tipo', tipoFiltro);
         if (operadorFiltro) params.set('operador', operadorFiltro);
+        if (!soloDiferencias) params.set('solo_diferencias', '0');
+        params.set('sortBy', sortBy);
+        params.set('sortDir', sortDir);
         params.set('page', String(paginaActual));
         params.set('pageSize', tamPaginaToPageSizeParam(tamPagina === 'all' ? 'all' : tamPagina));
 
@@ -209,20 +258,30 @@ export default function DiferenciasResumenView({
           data?: ResumenRow[];
           total?: number;
           operadores?: string[];
+          montoTotal?: number;
+          montoPositivo?: number;
+          montoNegativo?: number;
           error?: string;
         };
         if (!res.ok) {
           setError(json.error ?? 'Error al cargar diferencias');
           setItems([]);
           setTotal(0);
+          setMontoTotal(0);
+          setMontoPositivo(0);
+          setMontoNegativo(0);
           return;
         }
         setItems(json.data ?? []);
         setTotal(json.total ?? 0);
+        setMontoTotal(json.montoTotal ?? 0);
+        setMontoPositivo(json.montoPositivo ?? 0);
+        setMontoNegativo(json.montoNegativo ?? 0);
         setOperadoresOpciones(json.operadores ?? []);
       } catch {
         setError('Error al cargar diferencias');
         setItems([]);
+        setMontoTotal(0);
       } finally {
         setLoading(false);
       }
@@ -234,12 +293,51 @@ export default function DiferenciasResumenView({
     busquedaAplicada,
     router,
     variant,
+    cfg.apiPath,
+    cfg.basePath,
     origenFiltro,
     tipoFiltro,
     operadorFiltro,
+    soloDiferencias,
+    sortBy,
+    sortDir,
     paginaActual,
     tamPagina,
   ]);
+
+  function alternarOrden(col: OrdenColumnaDiferenciasResumen) {
+    const nextDir: OrdenDirDiferenciasResumen =
+      sortBy === col ? (sortDir === 'asc' ? 'desc' : 'asc') : col === 'fecha_control' && variant !== 'auditoria' ? 'desc' : 'asc';
+    const qs = buildQs({ sortBy: col, sortDir: nextDir });
+    router.push(`${cfg.basePath}?${qs.toString()}`);
+  }
+
+  function encabezadoOrdenable(
+    col: OrdenColumnaDiferenciasResumen,
+    label: string,
+    align: 'left' | 'center' = 'center'
+  ) {
+    const activo = sortBy === col;
+    const Icon = activo ? (sortDir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
+    return (
+      <th
+        className={`px-4 py-2 font-medium text-gray-600 ${
+          align === 'left' ? 'text-left' : 'text-center'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => alternarOrden(col)}
+          className={`inline-flex items-center gap-0.5 hover:text-gray-900 ${
+            align === 'center' ? 'justify-center' : ''
+          } ${activo ? 'text-gray-900' : ''}`}
+        >
+          <span>{label}</span>
+          <Icon className={`h-3.5 w-3.5 shrink-0 ${activo ? 'opacity-100' : 'opacity-40'}`} />
+        </button>
+      </th>
+    );
+  }
 
   function aplicarFechas() {
     if (!desdeInput || !hastaInput) {
@@ -270,32 +368,55 @@ export default function DiferenciasResumenView({
     if (variant === 'sucursal' && origenFiltro) params.set('origen', origenFiltro);
     if (tipoFiltro) params.set('tipo', tipoFiltro);
     if (operadorFiltro) params.set('operador', operadorFiltro);
+    if (!soloDiferencias) params.set('solo_diferencias', '0');
+    params.set('sortBy', sortBy);
+    params.set('sortDir', sortDir);
 
     let filasExport = items;
+    let montoTotalExport = montoTotal;
+    let montoPositivoExport = montoPositivo;
+    let montoNegativoExport = montoNegativo;
     try {
       const res = await fetch(`${cfg.apiPath}?${params.toString()}`);
-      const json = (await res.json()) as { data?: ResumenRow[] };
+      const json = (await res.json()) as {
+        data?: ResumenRow[];
+        montoTotal?: number;
+        montoPositivo?: number;
+        montoNegativo?: number;
+      };
       if (res.ok && json.data) filasExport = json.data;
+      if (res.ok && json.montoTotal != null) montoTotalExport = json.montoTotal;
+      if (res.ok && json.montoPositivo != null) montoPositivoExport = json.montoPositivo;
+      if (res.ok && json.montoNegativo != null) montoNegativoExport = json.montoNegativo;
     } catch {
       /* usa página actual si falla */
     }
 
     const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const fechaGen = new Date().toLocaleString('es-AR', {
-      timeZone: 'America/Argentina/Buenos_Aires',
-    });
+    const fechaGen = formatNowDateTime();
     const categoriaLabel = categoriaMacro || 'Todas';
 
     doc.setFontSize(14);
     doc.text(cfg.pdfTitle, 40, 38);
     doc.setFontSize(10);
-    doc.text(`Periodo: ${desdeActual || '-'} a ${hastaActual || '-'}`, 40, 56);
+    doc.text(
+      `Periodo: ${formatDate(desdeActual)} a ${formatDate(hastaActual)}`,
+      40,
+      56
+    );
     doc.text(`Categoria macro: ${categoriaLabel}`, 40, 70);
     doc.text(`Generado: ${fechaGen}`, 40, 84);
     doc.text(`Registros: ${filasExport.length}`, 40, 98);
+    doc.text(
+      `Monto total de diferencias: -${formatMoneda(montoNegativoExport)} / +${formatMoneda(
+        montoPositivoExport
+      )} / ${formatMoneda(montoTotalExport)}`,
+      40,
+      112
+    );
 
     autoTable(doc, {
-      startY: 112,
+      startY: 126,
       styles: { fontSize: 8, cellPadding: 4 },
       headStyles: { fillColor: [243, 244, 246], textColor: [31, 41, 55] },
       head: [[
@@ -307,8 +428,14 @@ export default function DiferenciasResumenView({
         'Control',
         'Operador',
         'Fecha control',
+        'Stock sist. (cajas)',
+        'Stock sist. (unid.)',
+        'Stock real (cajas)',
+        'Stock real (unid.)',
         'Diferencia (cajas)',
         'Diferencia (unid.)',
+        'Monto',
+        'Ajuste',
       ]],
       body: filasExport.map((r) => [
         r.producto_id_sistema,
@@ -319,8 +446,14 @@ export default function DiferenciasResumenView({
         r.control_descripcion || r.control_tipo || r.control_id,
         r.operador || '-',
         r.fecha_control ? formatDateTime(r.fecha_control) : '-',
+        String(r.stockSistCajas ?? 0),
+        String(r.stockSistUnidades ?? 0),
+        String(r.stockRealCajas ?? 0),
+        String(r.stockRealUnidades ?? 0),
         r.diffCajas.toFixed(0),
         r.diffUnidades.toFixed(0),
+        r.monto != null ? formatMoneda(r.monto) : '-',
+        r.ajustado ? 'Ajustado' : 'Pendiente',
       ]),
       didDrawPage: () => {
         const pageSize = doc.internal.pageSize;
@@ -329,8 +462,8 @@ export default function DiferenciasResumenView({
       },
     });
 
-    const safeDesde = (desdeActual || 'sin-desde').replace(/[^\d-]/g, '');
-    const safeHasta = (hastaActual || 'sin-hasta').replace(/[^\d-]/g, '');
+    const safeDesde = formatDateForFilename(desdeActual || null);
+    const safeHasta = formatDateForFilename(hastaActual || null);
     doc.save(`${cfg.pdfFilePrefix}_${safeDesde}_${safeHasta}.pdf`);
   }
 
@@ -346,7 +479,7 @@ export default function DiferenciasResumenView({
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <h1 className="text-xl font-bold text-gray-900">{cfg.title}</h1>
+          <h1 className="text-xl font-bold text-gray-900">{tituloVista}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
           {puedeConsolidado ? (
@@ -373,15 +506,71 @@ export default function DiferenciasResumenView({
       </div>
 
       <Card className={DATATABLE_CARD_CLASS}>
-        <CardHeader>
-          <div className="flex flex-col gap-2 text-sm text-gray-700">
-            <div className="flex flex-col gap-1">
+        <CardHeader className="shrink-0 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex flex-col gap-1 text-sm text-gray-700">
               <p className="font-medium">{cfg.periodoLabel}</p>
               <p className="text-xs text-gray-500">
-                {cfg.periodoHint} Desde: {desdeActual || '-'} hasta: {hastaActual || '-'}
+                {cfg.periodoHint} Desde: {formatDate(desdeActual)} hasta:{' '}
+                {formatDate(hastaActual)}
               </p>
+              {!loading && total > 0 ? (
+                <p className="text-xs font-medium">
+                  Monto total de diferencias:{' '}
+                  <span className="text-red-600" title="Faltantes">
+                    −{formatMoneda(montoNegativo)}
+                  </span>
+                  <span className="mx-1 text-gray-400">/</span>
+                  <span className="text-green-600" title="Sobrantes">
+                    +{formatMoneda(montoPositivo)}
+                  </span>
+                  <span className="mx-1 text-gray-400">/</span>
+                  <span
+                    className={
+                      montoTotal < 0
+                        ? 'text-red-600'
+                        : montoTotal > 0
+                          ? 'text-green-600'
+                          : 'text-gray-700'
+                    }
+                    title="Neto"
+                  >
+                    {formatMoneda(montoTotal)}
+                  </span>
+                </p>
+              ) : null}
             </div>
-            <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <FiltrosToggleButton
+                abierto={filtrosAbiertos}
+                onClick={() => setFiltrosAbiertos((v) => !v)}
+                activos={
+                  (categoriaMacro ? 1 : 0) +
+                  (variant === 'sucursal' && origenFiltro ? 1 : 0) +
+                  (tipoFiltro ? 1 : 0) +
+                  (operadorFiltro ? 1 : 0) +
+                  (!soloDiferencias ? 1 : 0)
+                }
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={loading || total === 0}
+                onClick={exportarPdf}
+              >
+                Exportar PDF
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className={DATATABLE_CARD_BODY_CLASS}>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          <CollapsibleFiltrosPanel
+            abierto={filtrosAbiertos}
+            onCerrar={() => setFiltrosAbiertos(false)}
+            descripcion={cfg.periodoHint}
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:flex xl:flex-wrap xl:items-end">
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-gray-700">Desde</label>
                 <input
@@ -400,9 +589,11 @@ export default function DiferenciasResumenView({
                   className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </div>
-              <Button size="sm" variant="secondary" onClick={aplicarFechas} disabled={loading}>
-                Aplicar fechas
-              </Button>
+              <div className="flex items-end">
+                <Button size="sm" variant="secondary" onClick={aplicarFechas} disabled={loading}>
+                  Aplicar fechas
+                </Button>
+              </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-gray-700">Categoría macro</label>
                 <select
@@ -451,6 +642,23 @@ export default function DiferenciasResumenView({
                 </select>
               </div>
               <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-gray-700">Líneas</label>
+                <select
+                  value={soloDiferencias ? '1' : '0'}
+                  onChange={(e) =>
+                    router.push(
+                      `${cfg.basePath}?${buildQs({
+                        solo_diferencias: e.target.value === '1' ? '' : '0',
+                      }).toString()}`
+                    )
+                  }
+                  className="h-8 min-w-[180px] rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  <option value="1">Solo con diferencias</option>
+                  <option value="0">Todas (contadas)</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-gray-700">Operador</label>
                 <select
                   value={operadorFiltro}
@@ -467,19 +675,8 @@ export default function DiferenciasResumenView({
                   ))}
                 </select>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={loading || total === 0}
-                onClick={exportarPdf}
-              >
-                Exportar PDF
-              </Button>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent className={DATATABLE_CARD_BODY_CLASS}>
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          </CollapsibleFiltrosPanel>
           <DatatableListSection
             busquedaTexto={busquedaAplicada}
             onBusquedaChange={(v) => setBusquedaAplicada(v.trim())}
@@ -493,25 +690,23 @@ export default function DiferenciasResumenView({
             loading={loading}
             error={error || null}
             empty={!loading && !error && total === 0}
-            emptyMessage={cfg.emptyMessage}
+            emptyMessage={emptyMessage}
             mobile={<DiferenciasResumenListMobile items={items} />}
             table={
               <table className="w-full text-sm">
                 <thead className={DATATABLE_STICKY_THEAD}>
                   <tr>
-                    <th className="px-4 py-2 text-left font-medium text-gray-600">Producto</th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">
-                      Código barras
-                    </th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">Origen</th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">Tipo</th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">
-                      Diferencia (cajas / unid.)
-                    </th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">
-                      Fecha control
-                    </th>
-                    <th className="px-4 py-2 text-center font-medium text-gray-600">Operador</th>
+                    {encabezadoOrdenable('descripcion', 'Producto', 'left')}
+                    {encabezadoOrdenable('codigo_barras', 'Código barras')}
+                    {encabezadoOrdenable('control_origen', 'Origen')}
+                    {encabezadoOrdenable('control_tipo', 'Tipo')}
+                    {encabezadoOrdenable('stock_sist', 'Stock sist. (cajas / unid.)')}
+                    {encabezadoOrdenable('stock_real', 'Stock real (cajas / unid.)')}
+                    {encabezadoOrdenable('diferencia', 'Diferencia (cajas / unid.)')}
+                    {encabezadoOrdenable('monto', 'Monto')}
+                    {encabezadoOrdenable('ajustado', 'Ajuste')}
+                    {encabezadoOrdenable('fecha_control', 'Fecha control')}
+                    {encabezadoOrdenable('operador', 'Operador')}
                     <th className="px-4 py-2 text-center font-medium text-gray-600">Control</th>
                   </tr>
                 </thead>
@@ -542,10 +737,37 @@ export default function DiferenciasResumenView({
                             ? etiquetaTipoControlInventario(r.control_tipo as TipoControlInventario)
                             : '—'}
                         </td>
+                        <td className="px-4 py-2 align-middle text-center text-xs tabular-nums text-gray-800">
+                          {r.stockSistCajas ?? 0} / {r.stockSistUnidades ?? 0}
+                        </td>
+                        <td className="px-4 py-2 align-middle text-center text-xs tabular-nums text-gray-800">
+                          {r.stockRealCajas ?? 0} / {r.stockRealUnidades ?? 0}
+                        </td>
                         <td className="px-4 py-2 align-middle text-center text-xs text-gray-800">
                           {r.diffCajas > 0 ? '+' : ''}
                           {r.diffCajas.toFixed(0)} / {r.diffUnidades > 0 ? '+' : ''}
                           {r.diffUnidades.toFixed(0)}
+                        </td>
+                        <td
+                          className={`px-4 py-2 align-middle text-center text-xs font-medium tabular-nums ${
+                            r.monto == null
+                              ? 'text-gray-400'
+                              : r.monto < 0
+                                ? 'text-red-600'
+                                : r.monto > 0
+                                  ? 'text-green-600'
+                                  : 'text-gray-700'
+                          }`}
+                          title={r.precio != null ? `PVP: ${formatMoneda(r.precio)}` : 'PVP no disponible'}
+                        >
+                          {r.monto != null ? formatMoneda(r.monto) : '—'}
+                        </td>
+                        <td className="px-4 py-2 align-middle text-center">
+                          {r.ajustado ? (
+                            <Badge variant="outline">Ajustado</Badge>
+                          ) : (
+                            <Badge variant="warning">Pendiente</Badge>
+                          )}
                         </td>
                         <td className="px-4 py-2 align-middle text-center text-xs text-gray-700">
                           {r.fecha_control ? formatDateTime(r.fecha_control) : '—'}

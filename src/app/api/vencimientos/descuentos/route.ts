@@ -8,7 +8,7 @@ import {
   filtroSucursalesExcluidasLogin,
 } from '@/lib/sucursales/login-sucursales';
 import { listarProductosConDescuentoAplicado } from '@/lib/vencimientos-por-vencer-list';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 type CategoriaFinalPayload = {
   subrubro?: string;
@@ -65,8 +65,7 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   const sucursalParam = request.nextUrl.searchParams.get('sucursal');
   const sucursalFromQuery = Number(sucursalParam ?? 0);
   const sucursalFromCookie = Number(sucursalId ?? 0);

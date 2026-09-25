@@ -23,13 +23,26 @@ if (process.env.SYNC_CRON_DISABLED === '1') {
   }
 }
 
+// Cron de cierre de inventarios + snapshot de stock valorizado (KPIs): también en el proceso
+// padre PM2, así no depende de que instrumentation.ts de Next lo registre.
+if (process.env.INVENTARIO_CIERRE_CRON_DISABLED === '1') {
+  console.log('⏭️ Cron cierre inventarios deshabilitado (INVENTARIO_CIERRE_CRON_DISABLED=1)');
+} else {
+  try {
+    const cierre = require('./start-inventario-cierre-cron.cjs');
+    if (!cierre.started) console.error(`❌ Cron cierre inventarios no arrancó: ${cierre.error ?? 'sin detalle'}`);
+  } catch (err) {
+    console.error('❌ Cron cierre inventarios: error al registrar', err);
+  }
+}
+
 const port = process.env.PORT || '3000';
 const nextBin = path.join(appDir, 'node_modules', 'next', 'dist', 'bin', 'next');
 
 console.log(`🌐 Iniciando Next.js en puerto ${port}…`);
 
-// El cron ya corre en el proceso PM2 padre; evitar un segundo fork vía instrumentation de Next.
-const nextEnv = { ...process.env, SYNC_CRON_DISABLED: '1' };
+// Los crons ya corren en el proceso PM2 padre; evitar duplicarlos vía instrumentation de Next.
+const nextEnv = { ...process.env, SYNC_CRON_DISABLED: '1', INVENTARIO_CIERRE_CRON_DISABLED: '1' };
 
 const next = spawn(process.execPath, [nextBin, 'start', '-p', String(port)], {
   cwd: appDir,

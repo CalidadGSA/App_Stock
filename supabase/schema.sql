@@ -303,7 +303,8 @@ where estado is null
      'sin_diferencias',
      'auditado',
      'ajustado_auditoria',
-     'ajustado_sucursal'
+     'ajustado_sucursal',
+     'descartado'
    );
 
 alter table controles_inventario_detalle
@@ -318,7 +319,8 @@ alter table controles_inventario_detalle
       'sin_diferencias',
       'auditado',
       'ajustado_auditoria',
-      'ajustado_sucursal'
+      'ajustado_sucursal',
+      'descartado'
     )
   );
 
@@ -379,6 +381,20 @@ alter table controles_vencimientos_detalle
 alter table controles_vencimientos_detalle
   add column if not exists eliminado smallint not null default 0;
 
+-- Cantidad cargada original: `cantidad` es el saldo restante y se decrementa con las ventas.
+alter table controles_vencimientos_detalle
+  add column if not exists cantidad_original numeric(12,2);
+
+-- Cantidad ya descontada por el chequeo automático de ventas (Onze / Quantio).
+alter table controles_vencimientos_detalle
+  add column if not exists cantidad_vendida_auto numeric(12,2) not null default 0;
+
+alter table controles_vencimientos_detalle
+  add column if not exists ventas_auto_check_at timestamptz;
+
+create index if not exists idx_cvd_producto_vencimiento
+  on controles_vencimientos_detalle(producto_id_sistema, fecha_vencimiento);
+
 -- Historial de ventas desde “por vencer” (cada bajada de stock / marca vendido).
 -- Permite auditar por controles_vencimientos_detalle qué se vendió parcialmente y cuándo quedó liquidado.
 create table if not exists vencimientos_detalle_ventas (
@@ -388,17 +404,21 @@ create table if not exists vencimientos_detalle_ventas (
   cantidad_restante_despues  numeric(12,2) not null check (cantidad_restante_despues >= 0),
   linea_vendida_completa     smallint not null default 0,
   es_ajuste                  smallint not null default 0,
+  -- 'manual' (histórico) / 'auto' (descuento por ventas legacy)
+  origen                     text not null default 'manual',
   usuario_id                 integer references operadores(IDOperador),
   sucursal_id                integer not null references sucursales(Sucursal),
   created_at                 timestamptz not null default now(),
   check (
     (es_ajuste = 0 and cantidad_vendida > 0)
     or (es_ajuste = 1 and cantidad_vendida <> 0)
-  )
+  ),
+  check (origen in ('manual', 'auto'))
 );
 create index if not exists idx_vdv_detalle on vencimientos_detalle_ventas(detalle_id);
 create index if not exists idx_vdv_sucursal on vencimientos_detalle_ventas(sucursal_id);
 create index if not exists idx_vdv_created on vencimientos_detalle_ventas(created_at);
+create index if not exists idx_vdv_origen on vencimientos_detalle_ventas(origen);
 
 -- ------------------------------------------------------------
 -- DEVOLUCIONES DE VENCIMIENTOS
@@ -496,6 +516,51 @@ create table if not exists modo_mantenimiento (
 insert into modo_mantenimiento (id, is_active)
 values (1, 0)
 on conflict (id) do nothing;
+
+-- ------------------------------------------------------------
+-- PRESENCIA DE OPERADORES (heartbeat / usuarios conectados)
+-- ------------------------------------------------------------
+create table if not exists operador_presencia (
+  idoperador     integer primary key references operadores(idoperador) on delete cascade,
+  nombrecompleto text,
+  last_seen_at   timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+create index if not exists idx_operador_presencia_last_seen
+  on operador_presencia (last_seen_at desc);
+
+create or replace function public.operador_presencia_fill_nombre()
+returns trigger
+language plpgsql
+as $$
+declare
+  nombre text;
+begin
+  if new.nombrecompleto is not null and btrim(new.nombrecompleto) <> '' then
+    new.nombrecompleto := btrim(new.nombrecompleto);
+    return new;
+  end if;
+
+  select coalesce(
+    nullif(btrim(o.nombrecompleto), ''),
+    nullif(btrim(o.operador), '')
+  )
+  into nombre
+  from public.operadores o
+  where o.idoperador = new.idoperador;
+
+  new.nombrecompleto := nombre;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_operador_presencia_fill_nombre on public.operador_presencia;
+
+create trigger trg_operador_presencia_fill_nombre
+  before insert or update on public.operador_presencia
+  for each row
+  execute function public.operador_presencia_fill_nombre();
 
 -- Throttle de alertas Onze (opcional; puede actualizarlo n8n al enviar mails)
 create table if not exists onze_health_cron_state (

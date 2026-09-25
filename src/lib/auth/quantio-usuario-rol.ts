@@ -28,14 +28,3 @@ export async function resolverAppRoleIdPorRol(
 
   return data?.id ?? null;
 }
-
-/** No degradar superadmin asignado manualmente en Supabase. */
-export function rolQuantioParaOperadorExistente(
-  rolExistente: string | null | undefined,
-  administradorQuantio: unknown
-): RolOperador {
-  if (String(rolExistente ?? '').toLowerCase() === 'superadmin') {
-    return 'superadmin';
-  }
-  return rolDesdeAdministradorQuantio(administradorQuantio);
-}

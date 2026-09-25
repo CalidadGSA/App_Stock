@@ -1,15 +1,15 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { PageSpinner } from '@/components/ui/spinner';
 import { ArrowLeft } from 'lucide-react';
 import { formatDateTime } from '@/lib/utils';
 import { clientHasPermission } from '@/lib/auth/permissions-client';
-import { VencimientosTablaContenedor } from '@/components/vencimientos/VencimientosTablaContenedor';
 import { TablaImpresionDiferenciasConsolidado } from '@/components/vencimientos/TablaImpresionDiferenciasConsolidado';
 import {
   BotonImprimirListadoVencimientos,
@@ -40,9 +40,12 @@ import {
 import { DatatableListSection } from '@/components/list/DatatableListSection';
 import {
   usePaginacionServidor,
-  useTotalPaginas,
 } from '@/components/list/datatable-pagination';
 import { tamPaginaToPageSizeParam } from '@/lib/api/pagination';
+import {
+  CollapsibleFiltrosPanel,
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
 
 interface FilaDif {
   detalle_id: string;
@@ -54,6 +57,7 @@ interface FilaDif {
   laboratorio: string | null;
   diffCajas: number;
   diffUnidades: number;
+  ajustado?: boolean;
   operador: string;
   fecha_control: string;
   control_tipo: string | null;
@@ -83,6 +87,7 @@ export default function DiferenciasConsolidadoPage() {
   const [error, setError] = useState('');
   const [autorizado, setAutorizado] = useState<boolean | null>(null);
   const [busquedaAplicada, setBusquedaAplicada] = useState('');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
   const [rangeKey, setRangeKey] = useState<
     'all' | '30_all' | '60_all' | '90_all' | '30_only' | '60_only' | '90_only'
   >('90_all');
@@ -116,7 +121,6 @@ export default function DiferenciasConsolidadoPage() {
     busquedaAplicada,
   ]);
 
-  const totalPaginas = useTotalPaginas(total, tamPagina);
 
   function buildParams(overrides: Record<string, string>) {
     const p = new URLSearchParams(searchParams.toString());
@@ -282,15 +286,39 @@ export default function DiferenciasConsolidadoPage() {
         </Link>
       </div>
 
-      <Card className="print:hidden">
-        <CardHeader className="space-y-3">
-          <div>
-            <p className="text-sm font-medium">Filtros</p>
-            <p className="text-xs text-gray-500">
-              Todas las sucursales · Por fecha de cierre del control · Origen y tipo de inventario.
-            </p>
+      <Card className={DATATABLE_CARD_CLASS} {...{ [VENCIMIENTOS_PRINT_AREA_ATTR]: '' }}>
+        <CardHeader className="shrink-0 py-3 print:hidden">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="font-semibold">Listado ({total})</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <FiltrosToggleButton
+                abierto={filtrosAbiertos}
+                onClick={() => setFiltrosAbiertos((v) => !v)}
+                activos={
+                  (sucursalFiltro ? 1 : 0) +
+                  (origenFiltro ? 1 : 0) +
+                  (tipoFiltro ? 1 : 0) +
+                  (catMacroFiltro ? 1 : 0) +
+                  (mesFiltro ? 1 : 0) +
+                  (anioFiltro ? 1 : 0) +
+                  (rangeKey !== '90_all' ? 1 : 0)
+                }
+              />
+              <BotonImprimirListadoVencimientos
+                disabled={loading || total === 0}
+                onPreparePrint={prepararImpresion}
+              />
+            </div>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:flex xl:flex-wrap xl:items-end">
+        </CardHeader>
+        <CardContent className={DATATABLE_CARD_BODY_CLASS}>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          <CollapsibleFiltrosPanel
+            abierto={filtrosAbiertos}
+            onCerrar={() => setFiltrosAbiertos(false)}
+            descripcion="Todas las sucursales · Por fecha de cierre del control · Origen y tipo de inventario."
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:flex xl:flex-wrap xl:items-end">
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium">Periodo</label>
                 <select
@@ -450,27 +478,13 @@ export default function DiferenciasConsolidadoPage() {
               >
                 Actualizar
               </Button>
-          </div>
-        </CardHeader>
-      </Card>
-
-      <Card className={DATATABLE_CARD_CLASS} {...{ [VENCIMIENTOS_PRINT_AREA_ATTR]: '' }}>
-        <CardHeader className="shrink-0 py-3 print:hidden">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="font-semibold">Listado ({total})</h2>
-            <BotonImprimirListadoVencimientos
-              disabled={loading || total === 0}
-              onPreparePrint={prepararImpresion}
-            />
-          </div>
-        </CardHeader>
-        <CardContent className={DATATABLE_CARD_BODY_CLASS}>
+            </div>
+          </CollapsibleFiltrosPanel>
           <EncabezadoImpresionListadoVencimientos
             titulo="Diferencias de inventario — consolidado"
             detalle={`Origen: ${origenFiltro || 'todos'} · Tipo: ${tipoFiltro || 'todos'}`}
             cantidadRegistros={total}
           />
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           <DatatableListSection
             busquedaTexto={busquedaAplicada}
             onBusquedaChange={(v) => setBusquedaAplicada(v.trim())}
@@ -496,6 +510,7 @@ export default function DiferenciasConsolidadoPage() {
                     <th className={DATATABLE_TH}>Origen</th>
                     <th className={DATATABLE_TH}>Tipo</th>
                     <th className={`${DATATABLE_TH} text-right`}>Dif. cajas / uds.</th>
+                    <th className={DATATABLE_TH}>Ajuste</th>
                     <th className={DATATABLE_TH}>Fecha</th>
                     <th className={DATATABLE_TH}>Operador</th>
                   </tr>
@@ -523,6 +538,13 @@ export default function DiferenciasConsolidadoPage() {
                         {r.diffCajas > 0 ? '+' : ''}
                         {r.diffCajas} / {r.diffUnidades > 0 ? '+' : ''}
                         {r.diffUnidades}
+                      </td>
+                      <td className={DATATABLE_TD}>
+                        {r.ajustado ? (
+                          <Badge variant="outline">Ajustado</Badge>
+                        ) : (
+                          <Badge variant="warning">Pendiente</Badge>
+                        )}
                       </td>
                       <td className={`${DATATABLE_TD} whitespace-nowrap text-xs`}>
                         {r.fecha_control ? formatDateTime(r.fecha_control) : '—'}

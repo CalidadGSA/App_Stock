@@ -5,11 +5,11 @@ import {
   isSuperAdminContext,
   permissionsToArray,
 } from '@/lib/auth/rbac';
-import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
+import { fechaHoyArgentinaYmd, rangoFechasArgentinaIso, ymdAddDays } from '@/lib/utils';
 import {
   TIPOS_CONTROL_INVENTARIO_KPI_SUCURSAL,
 } from '@/lib/inventario/tipo-control';
-import { obtenerProgresoTrimestreSucursal, sumarCantidadDetalle, trimestrePadronCompleto } from '@/lib/inventario/trimestre-base';
+import { obtenerProgresoTrimestreSucursal, trimestrePadronCompleto } from '@/lib/inventario/trimestre-base';
 import { contarProductosParaDevolver } from '@/lib/vencimientos/devolver-para-devolver-masivo';
 import {
   filtroUsuarioIds,
@@ -17,23 +17,22 @@ import {
   debeOcultarInventariosDeAdmin,
 } from '@/lib/auth/operadores-admin-like';
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 export async function GET() {
   const rbac = await getOperadorRbacContext();
   if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
   const operador = rbac.operador;
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   const admin = await createAdminClient();
-  const hoy = new Date();
-  const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
-  const inicio60dias = new Date(hoy.getTime() - 60 * 86400000).toISOString();
   /** Vencimientos: mismo “hoy” calendario AR que /api/vencimientos/por-vencer. */
   const hoyVen = fechaHoyArgentinaYmd();
+  // Inicio de mes y ventana de 60 días en calendario Argentina (antes usaba la TZ del servidor).
+  const inicioMes = rangoFechasArgentinaIso(`${hoyVen.slice(0, 7)}-01`, hoyVen).desdeIso;
+  const inicio60dias = rangoFechasArgentinaIso(ymdAddDays(hoyVen, -60), hoyVen).desdeIso;
   const en30dias = ymdAddDays(hoyVen, 30);
   const en60dias = ymdAddDays(hoyVen, 60);
   const en90dias = ymdAddDays(hoyVen, 90);
@@ -111,36 +110,53 @@ export async function GET() {
 
   const sucursalActualNum = parseInt(sucursalId, 10);
 
-  const [invTotal, invMes, invItemsConDiferencia, vencTotal, porVencer30, porVencer60, porVencer90, ultimosInv, ultimosVenc, productosParaDevolver] =
+  /**
+   * Una sola lectura de 90 días (las ventanas 30/60 son subconjuntos) y sumas en memoria.
+   * Paginada: PostgREST corta en 1000 filas por defecto y truncaba silenciosamente el KPI.
+   */
+  async function cargarPorVencer90(): Promise<{ v30: number; v60: number; v90: number }> {
+    const CHUNK = 1000;
+    let v30 = 0;
+    let v60 = 0;
+    let v90 = 0;
+    for (let from = 0; ; from += CHUNK) {
+      const { data, error } = await admin
+        .from('controles_vencimientos_detalle')
+        .select('cantidad, fecha_vencimiento, controles_vencimientos!inner(sucursal_id)')
+        .eq('controles_vencimientos.sucursal_id', sucursalId)
+        .gte('fecha_vencimiento', hoyVen)
+        .lte('fecha_vencimiento', en90dias)
+        .eq('devuelto', 0)
+        .eq('eliminado', 0)
+        .order('id', { ascending: true })
+        .range(from, from + CHUNK - 1);
+      if (error) {
+        // Como antes: un fallo en este KPI no tumba el dashboard completo.
+        console.error('dashboard por_vencer:', error.message);
+        break;
+      }
+      const rows = (data ?? []) as Array<{ cantidad?: number | null; fecha_vencimiento?: string | null }>;
+      for (const r of rows) {
+        const cant = Number(r.cantidad ?? 0);
+        if (!Number.isFinite(cant)) continue;
+        const f = String(r.fecha_vencimiento ?? '').slice(0, 10);
+        v90 += cant;
+        if (f <= en60dias) v60 += cant;
+        if (f <= en30dias) v30 += cant;
+      }
+      if (rows.length < CHUNK) break;
+    }
+    const norm = (n: number) => Math.max(0, Math.round(n));
+    return { v30: norm(v30), v60: norm(v60), v90: norm(v90) };
+  }
+
+  const [invTotal, invMes, invItemsConDiferencia, vencTotal, porVencer, ultimosInv, ultimosVenc, productosParaDevolver] =
     await Promise.all([
       invTotalQuery,
       invMesQuery,
       invItemsConDiferenciaQuery,
       admin.from('controles_vencimientos').select('id', { count: 'exact', head: true }).eq('sucursal_id', sucursalId),
-      admin
-        .from('controles_vencimientos_detalle')
-        .select('cantidad, controles_vencimientos!inner(sucursal_id)')
-        .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .gte('fecha_vencimiento', hoyVen)
-        .lte('fecha_vencimiento', en30dias)
-        .eq('devuelto', 0)
-        .eq('eliminado', 0),
-      admin
-        .from('controles_vencimientos_detalle')
-        .select('cantidad, controles_vencimientos!inner(sucursal_id)')
-        .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .gte('fecha_vencimiento', hoyVen)
-        .lte('fecha_vencimiento', en60dias)
-        .eq('devuelto', 0)
-        .eq('eliminado', 0),
-      admin
-        .from('controles_vencimientos_detalle')
-        .select('cantidad, controles_vencimientos!inner(sucursal_id)')
-        .eq('controles_vencimientos.sucursal_id', sucursalId)
-        .gte('fecha_vencimiento', hoyVen)
-        .lte('fecha_vencimiento', en90dias)
-        .eq('devuelto', 0)
-        .eq('eliminado', 0),
+      cargarPorVencer90(),
       ultimosInvQuery,
       admin.from('controles_vencimientos')
         .select(
@@ -193,15 +209,9 @@ export async function GET() {
       items_con_diferencia: invItemsConDiferencia.count ?? 0,
       controles_vencimientos_total: vencTotal.count ?? 0,
       productos_para_devolver: productosParaDevolver,
-      productos_por_vencer_30: sumarCantidadDetalle(
-        (porVencer30.data ?? []) as Array<{ cantidad?: number | null }>
-      ),
-      productos_por_vencer_60: sumarCantidadDetalle(
-        (porVencer60.data ?? []) as Array<{ cantidad?: number | null }>
-      ),
-      productos_por_vencer_90: sumarCantidadDetalle(
-        (porVencer90.data ?? []) as Array<{ cantidad?: number | null }>
-      ),
+      productos_por_vencer_30: porVencer.v30,
+      productos_por_vencer_60: porVencer.v60,
+      productos_por_vencer_90: porVencer.v90,
       ultimos_inventarios: ultimosInv.data ?? [],
       ultimos_vencimientos: ultimosVenc.data ?? [],
       inventario_base_por_sucursal: inventarioBasePorSucursalResuelto,

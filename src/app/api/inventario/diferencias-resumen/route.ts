@@ -2,9 +2,13 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { requirePermission } from '@/lib/auth/rbac';
 import { cargarDiferenciasResumenPeriodo } from '@/lib/inventario/diferencias-resumen-carga';
-import { cookies } from 'next/headers';
+import {
+  parseOrdenColumnaDiferenciasResumen,
+  parseOrdenDirDiferenciasResumen,
+} from '@/lib/inventario/diferencias-resumen-orden';
 import { NextRequest, NextResponse } from 'next/server';
 import { parsePaginationParams } from '@/lib/api/pagination';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 export type { DiferenciaResumenFila } from '@/lib/inventario/diferencias-resumen-carga';
 
@@ -27,8 +31,7 @@ export async function GET(request: NextRequest) {
   const guard = await requirePermission('inventario.diferencias_resumen');
   if (!guard.ok) return guard.response;
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) {
     return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
   }
@@ -66,6 +69,9 @@ export async function GET(request: NextRequest) {
       mesControl: parseMesAnioParam(searchParams.get('mes')),
       anioControl: parseMesAnioParam(searchParams.get('anio')),
       operador: searchParams.get('operador') ?? undefined,
+      soloDiferencias: searchParams.get('solo_diferencias') !== '0',
+      ordenColumna: parseOrdenColumnaDiferenciasResumen(searchParams.get('sortBy')),
+      ordenDir: parseOrdenDirDiferenciasResumen(searchParams.get('sortDir')),
       page: pagination.page,
       pageSize: pagination.pageSize,
       unpaginated: pagination.unpaginated,
@@ -78,6 +84,9 @@ export async function GET(request: NextRequest) {
       pageSize: resumen.pageSize,
       cat_macros: resumen.cat_macros,
       operadores: resumen.operadores,
+      montoTotal: resumen.montoTotal,
+      montoPositivo: resumen.montoPositivo,
+      montoNegativo: resumen.montoNegativo,
       desdeActual,
       hastaActual,
     });

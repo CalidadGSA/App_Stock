@@ -138,7 +138,7 @@ export default function VencimientoDetailPage() {
       })();
     }, 450);
     return () => window.clearTimeout(handle);
-  }, [control?.id, control?.estado, productoEscaneado?.producto_id_sistema, lotes]);
+  }, [control?.id, control?.estado, productoEscaneado, lotes]);
 
   async function handleScan(barcode: string): Promise<boolean> {
     setErrorProducto('');
@@ -417,11 +417,9 @@ export default function VencimientoDetailPage() {
     return !completo;
   });
   // Nombre completo del operador desde el join con operadores
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const operadorJoin = control as { operadores?: { nombrecompleto?: string; nombreCompleto?: string } | null };
   const operadorNombreCompleto =
-    ((control as any).operadores?.nombrecompleto as string | undefined) ??
-    ((control as any).operadores?.nombreCompleto as string | undefined) ??
-    '';
+    operadorJoin.operadores?.nombrecompleto ?? operadorJoin.operadores?.nombreCompleto ?? '';
 
   return (
     <div className="flex flex-col gap-6">

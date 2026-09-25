@@ -276,6 +276,9 @@ const DIFERENCIA_INVENTARIO_CHUNK = 1000;
 
 type OrigenInventarioTrimestre = 'cadena' | 'auditoria';
 
+/** Tipos de control que cuentan como auditoría (alineado con esDiferenciaDeControlAuditoria). */
+const TIPOS_AUDITORIA_PG = '(auditoria,ocasional_auditoria,auditoria_integral,auditoria_sorpresa)';
+
 /** Productos distintos en controles cerrados del trimestre, filtrados por origen. */
 async function idsProductosInventarioTrimestrePorOrigen(
   admin: SupabaseClient,
@@ -304,6 +307,12 @@ async function idsProductosInventarioTrimestrePorOrigen(
     }
     if (opts.sucId != null) {
       q = q.eq('controles_inventario.sucursal_id', opts.sucId);
+    }
+    // Filtrar en Postgres evita escanear todo el detalle del trimestre (~70s → pocos segundos).
+    if (opts.origen === 'auditoria') {
+      q = q.or(`origen.eq.Auditoria,tipo.in.${TIPOS_AUDITORIA_PG}`, {
+        foreignTable: 'controles_inventario',
+      });
     }
 
     const { data, error } = await q;

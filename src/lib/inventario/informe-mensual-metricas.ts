@@ -9,7 +9,16 @@ import {
   inferirCuatrimestreDesdeYmd,
   resolverTrimestreDbPorCalendario,
 } from '@/lib/inventario/trimestre-periodo';
-import { porcentajeDesdeRatio } from '@/lib/utils';
+import { porcentajeDesdeRatio, ymdAddDays } from '@/lib/utils';
+import { queryValesPorSucursal, VALES_VACIO } from '@/lib/legacy-db/mysql-kpis-mensuales';
+import {
+  cargarProductosConDiferenciaPorSucursal,
+  cargarProgresoBasePorSucursal,
+  totalesProgresoMacro,
+} from '@/lib/inventario/agregados-informes';
+import { leerVueltasPsicos } from '@/lib/inventario/generar-base/cantidad-inventario';
+import { mapWithConcurrency } from '@/lib/map-with-concurrency';
+import { getCostosMedicamentosOnze } from '@/lib/legacy-db/onze-medicamentos';
 
 export type MetricasVencimientosInformeMensual = {
   productos_cargados_vencimientos: number;
@@ -22,14 +31,14 @@ export type InformeMensualDetalleSucursal = {
   sucursal_id: number;
   nombrefantasia: string;
   /**
-   * Avance del padrón del trimestre (vecesinventariado &gt; 0), mismo criterio que el dashboard.
-   * No usa el conteo de líneas en controles del mes (infla con auditoría / fuera de padrón).
+   * Productos distintos inventariados en controles cerrados del mes (fecha_fin en el mes).
+   * Viene del RPC / conteo mensual; no es el avance de padrón del trimestre.
    */
   productos_inventariados: number;
   /** Base total de productos del trimestre al que pertenece el mes (base_productos). */
   total_base_trimestre: number;
   /**
-   * Igual a productos_inventariados (alias explícito para UI/leyenda).
+   * Avance del padrón del trimestre (vecesinventariado &gt; 0), mismo criterio que el dashboard.
    */
   inventariados_padron_trimestre: number;
   /**
@@ -45,6 +54,10 @@ export type InformeMensualDetalleSucursal = {
   productos_vencidos_mes: number;
   vencidos_costo: number;
   unidades_vencidos_vendidas: number;
+  /** Vales (comprobantes con productos pendientes de entrega) generados en el mes. */
+  vales: number;
+  /** De esos vales, los que todavía tienen algún producto sin entregar. */
+  vales_pendientes: number;
 };
 
 export type InformeMensualDetalleTotales = Omit<
@@ -156,34 +169,23 @@ async function metricasVencidosEnMes(
   return { productos_vencidos_mes: productos.size, vencidos_costo: costo };
 }
 
+/**
+ * Costo por caja de cada producto, desde `onze_center.medicamentos` en vivo:
+ * se usa `Costo` y, si no hay, `Precio × 0,65` (ver `getCostosMedicamentosOnze`).
+ */
 export async function costosMedicamentosPorCodplex(
-  admin: SupabaseClient,
+  _admin: SupabaseClient,
   codplexTextos: string[]
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   const ids = [...new Set(codplexTextos)];
   if (ids.length === 0) return map;
 
-  const chunk = 200;
-  for (let i = 0; i < ids.length; i += chunk) {
-    const slice = ids.slice(i, i + chunk);
-    const numericIds = slice.map((s) => Number(s)).filter((n) => Number.isFinite(n) && n > 0);
-    if (numericIds.length === 0) continue;
+  const numericos = ids.map((s) => Number(s)).filter((n) => Number.isFinite(n) && n > 0);
+  if (numericos.length === 0) return map;
 
-    const { data, error } = await admin
-      .from('medicamentos')
-      .select('codplex, costo')
-      .in('codplex', numericIds);
-
-    if (error) {
-      console.error('costosMedicamentosPorCodplex:', error.message);
-      continue;
-    }
-    for (const r of data ?? []) {
-      const c = r as { codplex?: number; costo?: number | null };
-      map.set(String(c.codplex ?? ''), Number(c.costo ?? 0));
-    }
-  }
+  const { costos } = await getCostosMedicamentosOnze(numericos);
+  for (const [id, costo] of costos) map.set(id, costo);
   return map;
 }
 
@@ -228,61 +230,100 @@ export async function construirDetalleSucursalInformeMensual(
   month1_12: number
 ): Promise<InformeMensualDetalleSucursal[]> {
   const { fecha_inicio, fecha_fin } = rangoMesCalendarioYm(year, month1_12);
+
+  // Una sola consulta a Onze para todas las sucursales. Si no responde, los vales van en 0.
+  const valesRes = await queryValesPorSucursal(
+    filasRpc.map((r) => r.sucursal_id),
+    fecha_inicio,
+    ymdAddDays(fecha_fin, 1)
+  );
+  if (!valesRes.ok) console.warn('informe mensual (vales):', valesRes.error);
+  const valesPorSucursal = valesRes.ok ? valesRes.data : new Map<number, typeof VALES_VACIO>();
+
   const inf = inferirCuatrimestreDesdeYmd(fecha_inicio);
   const periodo =
     inf != null ? await resolverTrimestreDbPorCalendario(admin, inf.anio, inf.cuatrimestre) : null;
 
-  return Promise.all(
-    filasRpc.map(async (r) => {
-      const progreso = periodo
-        ? await obtenerProgresoPorTrimestreLabel(
-            admin,
-            r.sucursal_id,
-            periodo.trimestre,
-            periodo.fecha_inicio,
-            periodo.fecha_fin
-          )
-        : { total: 0, inventariados: 0, pendientes: 0, porcentaje: 0, trimestre: '', fecha_inicio: '', fecha_fin: '' };
+  // Agregados de Postgres para todas las sucursales de una (migración 030). Sin ella, null.
+  const vueltasPsicos = await leerVueltasPsicos(
+    admin,
+    filasRpc.map((r) => r.sucursal_id)
+  );
+  const [progresoPorSucursal, difPorSucursal] = await Promise.all([
+    periodo
+      ? cargarProgresoBasePorSucursal(admin, periodo.trimestre, vueltasPsicos)
+      : Promise.resolve(null),
+    cargarProductosConDiferenciaPorSucursal(admin, fecha_inicio, fecha_fin),
+  ]);
 
-      const totalBase = progreso.total;
-      const inventariadosPadron = progreso.inventariados;
-      const pctSobreBase = porcentajeDesdeRatio(inventariadosPadron, totalBase);
-
-      const [productos_con_diferencia, productos_mal_contados, venc] = await Promise.all([
-        contarProductosConDiferenciaInventarioTrimestre(
+  return mapWithConcurrency(filasRpc, 4, async (r) => {
+    const porMacroAgregado = progresoPorSucursal?.get(r.sucursal_id);
+    const progreso = porMacroAgregado
+      ? {
+          ...totalesProgresoMacro(porMacroAgregado),
+          trimestre: periodo?.trimestre ?? '',
+          fecha_inicio: periodo?.fecha_inicio ?? '',
+          fecha_fin: periodo?.fecha_fin ?? '',
+        }
+      : periodo
+      ? await obtenerProgresoPorTrimestreLabel(
           admin,
           r.sucursal_id,
-          fecha_inicio,
-          fecha_fin
-        ),
-        contarLineasMalContadasAuditoriaPeriodo(
-          admin,
-          fecha_inicio,
-          fecha_fin,
-          r.sucursal_id
-        ),
-        cargarMetricasVencimientosInformeMensual(admin, r.sucursal_id, year, month1_12),
-      ]);
+          periodo.trimestre,
+          periodo.fecha_inicio,
+          periodo.fecha_fin
+        )
+      : {
+          total: 0,
+          inventariados: 0,
+          pendientes: 0,
+          porcentaje: 0,
+          trimestre: '',
+          fecha_inicio: '',
+          fecha_fin: '',
+        };
 
-      return {
-        sucursal_id: r.sucursal_id,
-        nombrefantasia: r.nombrefantasia,
-        // Mismo criterio que el progreso del dashboard (padrón / base_productos).
-        // El conteo de líneas en controles cerrados del mes suele inflar (auditoría, fuera de padrón).
-        productos_inventariados: inventariadosPadron,
-        total_base_trimestre: totalBase,
-        inventariados_padron_trimestre: inventariadosPadron,
-        porcentaje_inventariados_sobre_base: pctSobreBase,
-        productos_con_diferencia,
-        productos_mal_contados,
-        productos_cargados_vencimientos: venc.productos_cargados_vencimientos,
-        por_vencer_mes: venc.por_vencer_mes,
-        productos_vencidos_mes: venc.productos_vencidos_mes,
-        vencidos_costo: venc.vencidos_costo,
-        unidades_vencidos_vendidas: Number(r.vencidos_vendidas_unidades),
-      };
-    })
-  );
+    const totalBase = progreso.total;
+    const inventariadosPadron = progreso.inventariados;
+    const pctSobreBase = porcentajeDesdeRatio(inventariadosPadron, totalBase);
+
+    const [productos_con_diferencia, productos_mal_contados, venc] = await Promise.all([
+      difPorSucursal
+        ? Promise.resolve(difPorSucursal.get(r.sucursal_id) ?? 0)
+        : contarProductosConDiferenciaInventarioTrimestre(
+            admin,
+            r.sucursal_id,
+            fecha_inicio,
+            fecha_fin
+          ),
+      contarLineasMalContadasAuditoriaPeriodo(
+        admin,
+        fecha_inicio,
+        fecha_fin,
+        r.sucursal_id
+      ),
+      cargarMetricasVencimientosInformeMensual(admin, r.sucursal_id, year, month1_12),
+    ]);
+
+    return {
+      sucursal_id: r.sucursal_id,
+      nombrefantasia: r.nombrefantasia,
+      // Conteo mensual (RPC): productos distintos en controles cerrados del mes.
+      productos_inventariados: Number(r.productos_inventariados ?? 0),
+      total_base_trimestre: totalBase,
+      inventariados_padron_trimestre: inventariadosPadron,
+      porcentaje_inventariados_sobre_base: pctSobreBase,
+      productos_con_diferencia,
+      productos_mal_contados,
+      productos_cargados_vencimientos: venc.productos_cargados_vencimientos,
+      por_vencer_mes: venc.por_vencer_mes,
+      productos_vencidos_mes: venc.productos_vencidos_mes,
+      vencidos_costo: venc.vencidos_costo,
+      unidades_vencidos_vendidas: Number(r.vencidos_vendidas_unidades),
+      vales: (valesPorSucursal.get(r.sucursal_id) ?? VALES_VACIO).vales,
+      vales_pendientes: (valesPorSucursal.get(r.sucursal_id) ?? VALES_VACIO).vales_pendientes,
+    };
+  });
 }
 
 export function totalesDetalleInformeMensual(
@@ -305,6 +346,8 @@ export function totalesDetalleInformeMensual(
       vencidos_costo: acc.vencidos_costo + f.vencidos_costo,
       unidades_vencidos_vendidas:
         acc.unidades_vencidos_vendidas + f.unidades_vencidos_vendidas,
+      vales: acc.vales + f.vales,
+      vales_pendientes: acc.vales_pendientes + f.vales_pendientes,
     }),
     {
       productos_inventariados: 0,
@@ -318,6 +361,8 @@ export function totalesDetalleInformeMensual(
       productos_vencidos_mes: 0,
       vencidos_costo: 0,
       unidades_vencidos_vendidas: 0,
+      vales: 0,
+      vales_pendientes: 0,
     }
   );
 

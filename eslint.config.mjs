@@ -12,7 +12,31 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // API Express legacy y cron en CommonJS (require): fuera del bundle Next, no aplican las reglas TS.
+    "src/controllers/**",
+    "src/routes/**",
+    "src/jobs/**",
+    "src/db.js",
+    "src/main.js",
+    "src/load-env.js",
+    "src/lib/supabaseAdmin.js",
+    "scripts/**",
+    "scripts-diag-tmp*.js",
+    "ecosystem.config.cjs",
   ]),
+  {
+    rules: {
+      // Parámetros/variables con guion bajo: se dejan a propósito (firma que debe respetarse).
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

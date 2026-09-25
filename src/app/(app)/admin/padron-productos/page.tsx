@@ -9,16 +9,24 @@ import {
   ArrowUp,
   ArrowUpDown,
   Columns3,
-  Plus,
   RefreshCw,
+  Wand2,
   Table2,
   FileSpreadsheet,
   X,
+  DatabaseZap,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
 import PadronProductoEditor from '@/components/padron/PadronProductoEditor';
+import PadronEdicionMasiva from '@/components/padron/PadronEdicionMasiva';
+import PadronListMobile from '@/components/padron/PadronListMobile';
+import {
+  COLUMNAS_PADRON_CON_CATALOGO,
+  evaluarValor,
+  type ValorCatalogo,
+} from '@/lib/padron/valores-catalogo';
 import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 import {
   DATATABLE_CARD_BODY_CLASS,
@@ -45,14 +53,6 @@ function formatCell(value: unknown, max = 48): string {
   return `${s.slice(0, max)}…`;
 }
 
-function emptyRow(meta: PadronMeta): Record<string, unknown> {
-  const row: Record<string, unknown> = {};
-  for (const c of meta.columns) {
-    row[c.name] = '';
-  }
-  return row;
-}
-
 export default function PadronProductosPage() {
   const router = useRouter();
   const notify = useAppNotify();
@@ -65,6 +65,8 @@ export default function PadronProductosPage() {
   const [tamPagina, setTamPagina] = useState<TamPaginaDatatable>(TAM_PAGINA_DATATABLE_DEFAULT);
   const pageSize = tamPagina === 'all' ? 100_000 : tamPagina;
   const [q, setQ] = useState('');
+  /** Vacío = búsqueda amplia en varias columnas. */
+  const [searchColumn, setSearchColumn] = useState('');
   const [visibleCols, setVisibleCols] = useState<string[]>([]);
   const [todasLasColumnas, setTodasLasColumnas] = useState(false);
   const [showColPicker, setShowColPicker] = useState(false);
@@ -72,12 +74,39 @@ export default function PadronProductosPage() {
   const [sortDir, setSortDir] = useState<PadronSortDir>('asc');
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<'create' | 'edit'>('edit');
   const [editPk, setEditPk] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<Record<string, unknown>>({});
   const [formLoading, setFormLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exportando, setExportando] = useState(false);
+  const [sincronizando, setSincronizando] = useState(false);
+  /** PKs tildados para la edición masiva (se mantienen al paginar). */
+  const [seleccionados, setSeleccionados] = useState<string[]>([]);
+  const [masivaOpen, setMasivaOpen] = useState(false);
+  /** Valores ya cargados en categoria / sub_categoria, para autocompletar y validar. */
+  const [catalogos, setCatalogos] = useState<Record<string, ValorCatalogo[]>>({});
+
+  const pksPagina = useMemo(
+    () => (meta ? rows.map((r) => String(r[meta.primaryKey] ?? '')).filter(Boolean) : []),
+    [rows, meta]
+  );
+  const seleccionadosSet = useMemo(() => new Set(seleccionados), [seleccionados]);
+  const todosLaPaginaTildados =
+    pksPagina.length > 0 && pksPagina.every((pk) => seleccionadosSet.has(pk));
+
+  function toggleSeleccion(pk: string) {
+    setSeleccionados((prev) =>
+      prev.includes(pk) ? prev.filter((x) => x !== pk) : [...prev, pk]
+    );
+  }
+
+  function toggleSeleccionPagina(checked: boolean) {
+    setSeleccionados((prev) => {
+      if (checked) return Array.from(new Set([...prev, ...pksPagina]));
+      const enPagina = new Set(pksPagina);
+      return prev.filter((pk) => !enPagina.has(pk));
+    });
+  }
 
   const tableColumns = useMemo(() => {
     if (!meta) return visibleCols;
@@ -89,6 +118,21 @@ export default function PadronProductosPage() {
     return cols.includes(pk) ? cols : [pk, ...cols];
   }, [meta, visibleCols, todasLasColumnas]);
 
+  const columnasSeleccionables = useMemo(() => {
+    if (!meta) return [];
+    return [...meta.columns].sort((a, b) =>
+      a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
+    );
+  }, [meta]);
+
+  const searchColumnOptions = useMemo(() => {
+    const opts = [{ value: '', label: 'Todas (amplia)' }];
+    for (const c of columnasSeleccionables) {
+      opts.push({ value: c.name, label: c.name });
+    }
+    return opts;
+  }, [columnasSeleccionables]);
+
   const cargar = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -98,10 +142,12 @@ export default function PadronProductosPage() {
         pageSize: String(pageSize),
       });
       if (q.trim()) params.set('q', q.trim());
+      if (searchColumn) params.set('searchColumn', searchColumn);
       if (tableColumns.length > 0) {
         params.set('columns', tableColumns.join(','));
       }
-      params.set('sortBy', sortBy || meta?.defaultSortColumn || 'producto');
+      // Sin `sortBy` el backend usa su columna por defecto (no hace falta leer `meta` acá).
+      if (sortBy) params.set('sortBy', sortBy);
       params.set('sortDir', sortDir);
 
       const res = await fetch(`/api/admin/padron-productos?${params.toString()}`);
@@ -130,7 +176,16 @@ export default function PadronProductosPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, q, tableColumns, sortBy, sortDir, router, visibleCols.length]);
+  }, [page, pageSize, q, searchColumn, tableColumns, sortBy, sortDir, router, visibleCols.length]);
+
+  useEffect(() => {
+    fetch('/api/admin/padron-productos/valores', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j: { catalogos?: Record<string, ValorCatalogo[]> }) => {
+        if (j.catalogos) setCatalogos(j.catalogos);
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     void cargar();
@@ -138,7 +193,6 @@ export default function PadronProductosPage() {
 
   async function abrirEditar(pk: string) {
     if (!meta) return;
-    setDrawerMode('edit');
     setEditPk(pk);
     setDrawerOpen(true);
     setFormLoading(true);
@@ -160,37 +214,59 @@ export default function PadronProductosPage() {
     }
   }
 
-  function abrirCrear() {
-    if (!meta) return;
-    setDrawerMode('create');
-    setEditPk(null);
-    setFormValues(emptyRow(meta));
-    setDrawerOpen(true);
-  }
-
   function cerrarDrawer() {
     setDrawerOpen(false);
     setFormValues({});
     setEditPk(null);
   }
 
+  /** Valores de clasificación que no existen todavía en el padrón. */
+  function valoresNuevosAlGuardar(): Array<{ columna: string; valor: string }> {
+    const nuevos: Array<{ columna: string; valor: string }> = [];
+    for (const columna of COLUMNAS_PADRON_CON_CATALOGO) {
+      const valor = String(formValues[columna] ?? '').trim();
+      if (!valor) continue;
+      const res = evaluarValor(valor, catalogos[columna] ?? []);
+      if (res?.tipo === 'nuevo') nuevos.push({ columna, valor });
+    }
+    return nuevos;
+  }
+
   async function guardar() {
     if (!meta) return;
+
+    const nuevos = valoresNuevosAlGuardar();
+    if (nuevos.length > 0) {
+      const detalle = nuevos
+        .map(({ columna, valor }) => {
+          const similares = (
+            evaluarValor(valor, catalogos[columna] ?? []) as
+              | { tipo: 'nuevo'; similares: ValorCatalogo[] }
+              | null
+          )?.similares ?? [];
+          const parecidos = similares.length
+            ? `\n   Parecidos que ya existen: ${similares.map((x) => x.valor).join(', ')}`
+            : '';
+          return `• ${columna}: «${valor}»${parecidos}`;
+        })
+        .join('\n');
+
+      const ok = await notify.confirm({
+        title: nuevos.length === 1 ? 'Crear un valor nuevo' : 'Crear valores nuevos',
+        message:
+          `Estos valores no existen todavía en el padrón:\n\n${detalle}\n\n` +
+          '¿Los creás igual? Si fue un error de tipeo, cancelá y elegí uno de los existentes.',
+        confirmLabel: 'Crear igual',
+        cancelLabel: 'Volver a revisar',
+        variant: 'warning',
+      });
+      if (!ok) return;
+    }
+
     setSaving(true);
     setError('');
     try {
-      if (drawerMode === 'create') {
-        const res = await fetch('/api/admin/padron-productos', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formValues),
-        });
-        const json = await res.json();
-        if (!res.ok) {
-          setError(json.error ?? 'Error al crear');
-          return;
-        }
-      } else if (editPk) {
+      if (editPk) {
         const res = await fetch(
           `/api/admin/padron-productos/${encodeURIComponent(editPk)}`,
           {
@@ -207,42 +283,15 @@ export default function PadronProductosPage() {
       }
       cerrarDrawer();
       await cargar();
+      // Un valor recién creado tiene que aparecer como existente la próxima vez.
+      fetch('/api/admin/padron-productos/valores', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((j: { catalogos?: Record<string, ValorCatalogo[]> }) => {
+          if (j.catalogos) setCatalogos(j.catalogos);
+        })
+        .catch(() => undefined);
     } catch {
       setError('Error al guardar');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function eliminar() {
-    if (!editPk || !meta) return;
-    if (
-      !(await notify.confirm({
-        title: 'Eliminar registro',
-        message: `¿Eliminar el registro ${meta.primaryKey} = ${editPk}? Esta acción no se puede deshacer.`,
-        confirmLabel: 'Eliminar',
-        cancelLabel: 'Cancelar',
-        variant: 'danger',
-      }))
-    ) {
-      return;
-    }
-    setSaving(true);
-    setError('');
-    try {
-      const res = await fetch(
-        `/api/admin/padron-productos/${encodeURIComponent(editPk)}`,
-        { method: 'DELETE' }
-      );
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(json.error ?? 'Error al eliminar');
-        return;
-      }
-      cerrarDrawer();
-      await cargar();
-    } catch {
-      setError('Error al eliminar');
     } finally {
       setSaving(false);
     }
@@ -291,12 +340,98 @@ export default function PadronProductosPage() {
     );
   }
 
+  async function sincronizarPadron(force = false) {
+    setError('');
+    if (!force) {
+      const ok = await notify.confirm({
+        title: 'Sincronizar padrón',
+        message:
+          'Se actualizará padron_final desde plexdr (productos) y proveedores Onze. Puede tardar varios minutos.',
+        confirmLabel: 'Sincronizar',
+        cancelLabel: 'Cancelar',
+        variant: 'warning',
+      });
+      if (!ok) return;
+    }
+
+    setSincronizando(true);
+    try {
+      const res = await fetch('/api/admin/padron-productos/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        code?: string;
+        error?: string;
+        message?: string;
+        runId?: number;
+        plexdr?: { productosLeidos?: number; actualizados?: number };
+        proveedoresOnze?: { medicamentosLeidos?: number; actualizados?: number };
+        failures?: Array<{ phase?: string; error?: string }>;
+      };
+
+      if (res.status === 409 || json.code === 'ALREADY_RUNNING') {
+        const forzar = await notify.confirm({
+          title: 'Sync ya en curso',
+          message:
+            json.message ??
+            json.error ??
+            'Ya hay un sync de padrón corriendo. ¿Cancelar el anterior y empezar uno nuevo?',
+          confirmLabel: 'Forzar nuevo',
+          cancelLabel: 'Esperar',
+          variant: 'warning',
+        });
+        if (forzar) {
+          await sincronizarPadron(true);
+        }
+        return;
+      }
+
+      if (!res.ok || json.ok === false) {
+        const detail =
+          json.failures?.map((f) => `${f.phase}: ${f.error}`).filter(Boolean).join(' · ') ||
+          json.error ||
+          json.message ||
+          'No se pudo sincronizar el padrón';
+        notify.error(detail);
+        setError(detail);
+        return;
+      }
+
+      const plexdr = json.plexdr;
+      const prov = json.proveedoresOnze;
+      const partes = [
+        json.runId != null ? `run #${json.runId}` : null,
+        plexdr
+          ? `plexdr ${plexdr.actualizados ?? 0}/${plexdr.productosLeidos ?? 0}`
+          : null,
+        prov
+          ? `proveedores ${prov.actualizados ?? 0}/${prov.medicamentosLeidos ?? 0}`
+          : null,
+      ].filter(Boolean);
+      notify.success(
+        partes.length > 0
+          ? `Padrón sincronizado (${partes.join(' · ')})`
+          : 'Padrón sincronizado correctamente'
+      );
+      await cargar();
+    } catch {
+      notify.error('Error al sincronizar el padrón');
+      setError('Error al sincronizar el padrón');
+    } finally {
+      setSincronizando(false);
+    }
+  }
+
   async function exportarExcel() {
     setExportando(true);
     setError('');
     try {
       const params = new URLSearchParams({ sortBy, sortDir });
       if (q.trim()) params.set('q', q.trim());
+      if (searchColumn) params.set('searchColumn', searchColumn);
       if (tableColumns.length > 0) {
         params.set('columns', tableColumns.join(','));
       }
@@ -357,20 +492,43 @@ export default function PadronProductosPage() {
           <Button
             size="sm"
             variant="outline"
+            onClick={() => void sincronizarPadron()}
+            disabled={loading || sincronizando || exportando}
+            loading={sincronizando}
+            title="Actualiza padron_final desde plexdr y proveedores Onze"
+          >
+            <DatabaseZap className="h-4 w-4 mr-1" />
+            Sincronizar padrón
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => void exportarExcel()}
-            disabled={loading || exportando || !meta}
+            disabled={loading || exportando || sincronizando || !meta}
             loading={exportando}
           >
             <FileSpreadsheet className="h-4 w-4 mr-1" />
             Exportar Excel
           </Button>
-          <Button size="sm" variant="outline" onClick={() => void cargar()} disabled={loading}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setMasivaOpen(true)}
+            disabled={!meta || loading || sincronizando}
+            title="Modificar una o varias columnas en muchos productos"
+          >
+            <Wand2 className="h-4 w-4 mr-1" />
+            Edición masiva
+            {seleccionados.length > 0 ? ` (${seleccionados.length})` : ''}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void cargar()}
+            disabled={loading || sincronizando}
+          >
             <RefreshCw className="h-4 w-4 mr-1" />
             Actualizar
-          </Button>
-          <Button size="sm" onClick={abrirCrear} disabled={!meta}>
-            <Plus className="h-4 w-4 mr-1" />
-            Nuevo
           </Button>
         </div>
       </div>
@@ -412,7 +570,7 @@ export default function PadronProductosPage() {
                   </label>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {meta.columns.map((c) => (
+                  {columnasSeleccionables.map((c) => (
                     <label
                       key={c.name}
                       className="inline-flex cursor-pointer items-center gap-1 rounded border border-gray-200 bg-white px-2 py-0.5 text-xs"
@@ -445,6 +603,12 @@ export default function PadronProductosPage() {
               setQ(v.trim());
               setPage(1);
             }}
+            searchColumn={searchColumn}
+            onSearchColumnChange={(v) => {
+              setSearchColumn(v);
+              setPage(1);
+            }}
+            searchColumnOptions={searchColumnOptions}
             tamPagina={tamPagina}
             onTamPaginaChange={(next) => {
               setTamPagina(next);
@@ -453,7 +617,11 @@ export default function PadronProductosPage() {
             paginaActual={page}
             onPaginaChange={setPage}
             totalFilas={total}
-            searchPlaceholder="Código, producto, categoría…"
+            searchPlaceholder={
+              searchColumn
+                ? `Buscar en ${searchColumn}… (Enter)`
+                : 'Código, producto, categoría…'
+            }
           />
           {loading ? (
             <div className="flex flex-1 items-center justify-center py-8">
@@ -463,10 +631,30 @@ export default function PadronProductosPage() {
             <p className="px-5 py-6 text-sm text-gray-500">Sin registros.</p>
           ) : (
             <>
+            <div className="datatable-rows-scroll row-start-2 min-h-0 overflow-auto overscroll-contain md:hidden print:hidden">
+              <PadronListMobile
+                rows={rows}
+                columns={tableColumns}
+                primaryKey={meta?.primaryKey ?? ''}
+                seleccionados={seleccionadosSet}
+                onToggleSeleccion={toggleSeleccion}
+                onEditar={(pk) => void abrirEditar(pk)}
+                formatCell={formatCell}
+              />
+            </div>
             <DatatableScrollArea fill className="row-start-2 hidden min-h-0 md:block">
               <table className="w-full min-w-max text-sm">
                 <thead className={DATATABLE_STICKY_THEAD}>
                   <tr>
+                    <th className="w-8 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        aria-label="Seleccionar todos los de esta página"
+                        title="Seleccionar todos los de esta página"
+                        checked={todosLaPaginaTildados}
+                        onChange={(e) => toggleSeleccionPagina(e.target.checked)}
+                      />
+                    </th>
                     {tableColumns.map((col) => (
                       <th
                         key={col}
@@ -493,8 +681,20 @@ export default function PadronProductosPage() {
                 <tbody className="divide-y divide-gray-100">
                   {rows.map((row) => {
                     const pk = meta ? String(row[meta.primaryKey] ?? '') : '';
+                    const tildado = seleccionadosSet.has(pk);
                     return (
-                      <tr key={pk} className="hover:bg-gray-50">
+                      <tr
+                        key={pk}
+                        className={tildado ? 'bg-blue-50/60' : 'hover:bg-gray-50'}
+                      >
+                        <td className="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            aria-label={`Seleccionar ${pk}`}
+                            checked={tildado}
+                            onChange={() => toggleSeleccion(pk)}
+                          />
+                        </td>
                         {tableColumns.map((col) => (
                           <td
                             key={col}
@@ -532,6 +732,35 @@ export default function PadronProductosPage() {
         </CardContent>
       </Card>
 
+      {masivaOpen && meta && (
+        <PadronEdicionMasiva
+          meta={meta}
+          seleccionados={seleccionados}
+          filtro={{ q, searchColumn }}
+          totalBusqueda={total}
+          onCerrar={() => setMasivaOpen(false)}
+          confirmar={(mensaje) =>
+            notify.confirm({
+              title: 'Confirmar edición masiva',
+              message: mensaje,
+              confirmLabel: 'Aplicar',
+              cancelLabel: 'Cancelar',
+              variant: 'warning',
+            })
+          }
+          onAplicado={(r) => {
+            setMasivaOpen(false);
+            setSeleccionados([]);
+            notify.success(
+              `${r.actualizados} producto${r.actualizados === 1 ? '' : 's'} actualizado${
+                r.actualizados === 1 ? '' : 's'
+              } (${r.columnas.join(', ')})`
+            );
+            void cargar();
+          }}
+        />
+      )}
+
       {drawerOpen && meta && (
         <div className="fixed inset-0 z-50 flex">
           <button
@@ -542,9 +771,7 @@ export default function PadronProductosPage() {
           />
           <div className="flex h-full w-full max-w-3xl flex-col border-l border-gray-200 bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-              <h2 className="text-lg font-semibold text-gray-900">
-                {drawerMode === 'create' ? 'Nuevo producto' : 'Editar producto'}
-              </h2>
+              <h2 className="text-lg font-semibold text-gray-900">Editar producto</h2>
               <button
                 type="button"
                 onClick={cerrarDrawer}
@@ -562,24 +789,12 @@ export default function PadronProductosPage() {
                   primaryKey={meta.primaryKey}
                   values={formValues}
                   onChange={setFormValues}
-                  readOnlyPk={drawerMode === 'edit'}
+                  readOnlyPk
+                  catalogos={catalogos}
                 />
               )}
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 px-4 py-3">
-              {drawerMode === 'edit' ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="text-red-700 border-red-200 hover:bg-red-50"
-                  onClick={() => void eliminar()}
-                  loading={saving}
-                >
-                  Eliminar
-                </Button>
-              ) : (
-                <span />
-              )}
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 px-4 py-3">
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" onClick={cerrarDrawer}>
                   Cancelar

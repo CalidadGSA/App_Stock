@@ -3,7 +3,6 @@ import type { RolOperador } from '@/lib/auth/roles';
 import {
   resolverAppRoleIdPorRol,
   rolDesdeAdministradorQuantio,
-  rolQuantioParaOperadorExistente,
 } from '@/lib/auth/quantio-usuario-rol';
 import {
   idOperadorQuantioDesdeLegacy,
@@ -18,6 +17,7 @@ export type OperadorQuantioValidado = {
   codigo: number;
   activo: string;
   fuente: string;
+  /** Lo que diría `Administrador` de Quantio. Informativo: el rol efectivo sale de Supabase. */
   rol: RolOperador;
   administrador: boolean;
 };
@@ -134,51 +134,47 @@ export async function validarOperadorQuantioEnSupabase(
   };
 }
 
+/**
+ * Espeja el usuario de Quantio en `operadores` y devuelve el rol con el que entra.
+ *
+ * El rol lo manda **siempre** Supabase: se asigna desde la pantalla de Roles y el login no lo
+ * toca, igual que en el camino de onze_center. `Administrador` de `plexdr.usuarios` no se usa
+ * para dar permisos; un usuario nuevo entra con el rol mínimo hasta que alguien se lo cambie.
+ */
 export async function upsertOperadorQuantioEnSupabase(
   admin: SupabaseClient,
   op: OperadorQuantioValidado
 ): Promise<{ rol: RolOperador; app_role_id: number | null }> {
   const { data: existente } = await admin
     .from('operadores')
-    .select('idoperador, rol')
+    .select('idoperador, rol, app_role_id')
     .eq('idoperador', op.idoperador)
     .maybeSingle();
 
-  const rolFinal = existente
-    ? rolQuantioParaOperadorExistente(
-        (existente as { rol?: string }).rol,
-        op.administrador ? 'S' : 'N'
-      )
-    : op.rol;
+  const fila = existente as { rol?: string | null; app_role_id?: number | null } | null;
 
-  const appRoleId = await resolverAppRoleIdPorRol(admin, rolFinal);
-
-  if (existente) {
-    const updatePayload: Record<string, unknown> = {
-      operador: op.operador,
-      nombrecompleto: op.nombrecompleto,
-      codigo: op.codigo,
-      activo: op.activo,
-    };
-
-    if (String((existente as { rol?: string }).rol ?? '').toLowerCase() !== 'superadmin') {
-      updatePayload.rol = rolFinal;
-      updatePayload.app_role_id = appRoleId;
-    }
-
+  if (fila) {
+    // Solo datos de identidad: rol y app_role_id quedan como están en Supabase.
     await admin
       .from('operadores')
-      .update(updatePayload)
+      .update({
+        operador: op.operador,
+        nombrecompleto: op.nombrecompleto,
+        codigo: op.codigo,
+        activo: op.activo,
+      })
       .eq('idoperador', op.idoperador)
       .eq('fuente', OPERADOR_FUENTE_QUANTIO);
 
+    const rol = (String(fila.rol ?? '').trim() || 'operador_sucursal') as RolOperador;
     return {
-      rol: String((existente as { rol?: string }).rol ?? '').toLowerCase() === 'superadmin'
-        ? 'superadmin'
-        : rolFinal,
-      app_role_id: appRoleId,
+      rol,
+      app_role_id: fila.app_role_id ?? (await resolverAppRoleIdPorRol(admin, rol)),
     };
   }
+
+  const rol: RolOperador = 'operador_sucursal';
+  const appRoleId = await resolverAppRoleIdPorRol(admin, rol);
 
   await admin.from('operadores').insert({
     idoperador: op.idoperador,
@@ -187,9 +183,9 @@ export async function upsertOperadorQuantioEnSupabase(
     codigo: op.codigo,
     activo: op.activo,
     fuente: OPERADOR_FUENTE_QUANTIO,
-    rol: rolFinal,
+    rol,
     app_role_id: appRoleId,
   });
 
-  return { rol: rolFinal, app_role_id: appRoleId };
+  return { rol, app_role_id: appRoleId };
 }

@@ -30,7 +30,7 @@ const VARIANT_STYLES: Record<
 
 type Props = {
   confirm: PendingAppConfirm | null;
-  onAnswer: (value: boolean) => void;
+  onAnswer: (value: boolean | 'cancel' | 'confirm' | 'alt') => void;
 };
 
 export function AppConfirmDialog({ confirm, onAnswer }: Props) {
@@ -39,6 +39,7 @@ export function AppConfirmDialog({ confirm, onAnswer }: Props) {
   const variant = confirm.variant ?? 'warning';
   const styles = VARIANT_STYLES[variant];
   const title = confirm.title?.trim() || 'Confirmar';
+  const isChoice = confirm.mode === 'choice';
 
   return (
     <div
@@ -49,7 +50,7 @@ export function AppConfirmDialog({ confirm, onAnswer }: Props) {
         type="button"
         className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
         aria-label="Cerrar"
-        onClick={() => onAnswer(false)}
+        onClick={() => onAnswer(isChoice ? 'cancel' : false)}
       />
       <div
         role="alertdialog"
@@ -83,17 +84,42 @@ export function AppConfirmDialog({ confirm, onAnswer }: Props) {
             </p>
           </div>
         </div>
-        <div className="flex flex-col-reverse gap-2 border-t border-gray-100 bg-gray-50/80 px-5 py-4 sm:flex-row sm:justify-end dark:border-gray-800 dark:bg-slate-900/80">
-          <Button type="button" variant="outline" onClick={() => onAnswer(false)}>
-            {confirm.cancelLabel ?? 'Cancelar'}
-          </Button>
+        <div
+          className={`flex gap-2 border-t border-gray-100 bg-gray-50/80 px-5 py-4 dark:border-gray-800 dark:bg-slate-900/80 ${
+            isChoice
+              ? 'flex-col sm:flex-row sm:flex-wrap sm:justify-end'
+              : 'flex-col-reverse sm:flex-row sm:justify-end'
+          }`}
+        >
           <Button
             type="button"
-            variant={styles.confirm === 'danger' ? 'danger' : 'primary'}
-            onClick={() => onAnswer(true)}
+            variant="outline"
+            onClick={() => onAnswer(isChoice ? 'cancel' : false)}
           >
-            {confirm.confirmLabel ?? 'Aceptar'}
+            {confirm.cancelLabel ?? 'Cancelar'}
           </Button>
+          {isChoice ? (
+            <>
+              <Button
+                type="button"
+                variant={styles.confirm === 'danger' ? 'danger' : 'primary'}
+                onClick={() => onAnswer('confirm')}
+              >
+                {confirm.confirmLabel ?? 'Aceptar'}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => onAnswer('alt')}>
+                {confirm.altConfirmLabel}
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant={styles.confirm === 'danger' ? 'danger' : 'primary'}
+              onClick={() => onAnswer(true)}
+            >
+              {confirm.confirmLabel ?? 'Aceptar'}
+            </Button>
+          )}
         </div>
       </div>
     </div>

@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { ExternalLink } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { ListStatPill } from '@/components/list/ListStatPill';
-import { formatDateTime } from '@/lib/utils';
+import { formatDateTime, formatMoneda } from '@/lib/utils';
 import { etiquetaTipoControlInventario, inferirTipoControlInventario } from '@/lib/inventario/tipo-control';
 
 export interface DiferenciaResumenMobile {
@@ -18,8 +19,15 @@ export interface DiferenciaResumenMobile {
   fecha_control: string;
   control_tipo: string | null;
   control_descripcion: string | null;
+  stockSistCajas?: number;
+  stockSistUnidades?: number;
+  stockRealCajas?: number;
+  stockRealUnidades?: number;
   diffCajas: number;
   diffUnidades: number;
+  precio?: number | null;
+  monto?: number | null;
+  ajustado?: boolean;
 }
 
 function etiquetaControl(r: DiferenciaResumenMobile): string {
@@ -44,13 +52,28 @@ export default function DiferenciasResumenListMobile({
           key={`${r.detalle_id}-${r.control_id}`}
           className="border-l-4 border-blue-400/70 bg-white px-3 py-3 dark:bg-slate-900"
         >
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{r.descripcion}</h3>
+          <div className="flex items-start justify-between gap-2">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{r.descripcion}</h3>
+            {r.ajustado ? (
+              <Badge variant="outline">Ajustado</Badge>
+            ) : (
+              <Badge variant="warning">Pendiente</Badge>
+            )}
+          </div>
           <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
             {r.presentacion} · {r.laboratorio}
           </p>
           <p className="mt-1 text-[11px] text-gray-500">ID {r.producto_id_sistema}</p>
           <p className="mt-1 font-mono text-[11px] text-gray-600 dark:text-gray-400">{r.codigo_barras}</p>
           <div className="mt-2 grid grid-cols-2 gap-2">
+            <ListStatPill
+              label="Stock sist."
+              value={`${r.stockSistCajas ?? 0} / ${r.stockSistUnidades ?? 0}`}
+            />
+            <ListStatPill
+              label="Stock real"
+              value={`${r.stockRealCajas ?? 0} / ${r.stockRealUnidades ?? 0}`}
+            />
             <ListStatPill
               label="Dif. cajas"
               value={`${r.diffCajas > 0 ? '+' : ''}${r.diffCajas.toFixed(0)}`}
@@ -62,6 +85,20 @@ export default function DiferenciasResumenListMobile({
               emphasize
             />
           </div>
+          <p
+            className={`mt-2 text-xs font-medium ${
+              r.monto == null
+                ? 'text-gray-400'
+                : r.monto < 0
+                  ? 'text-red-600'
+                  : r.monto > 0
+                    ? 'text-green-600'
+                    : 'text-gray-700'
+            }`}
+          >
+            <span className="font-medium text-gray-500">Monto:</span>{' '}
+            {r.monto != null ? formatMoneda(r.monto) : '—'}
+          </p>
           <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
             <span className="font-medium text-gray-500">Control:</span> {etiquetaControl(r)}
           </p>

@@ -20,7 +20,6 @@ export interface VencidoItemMobile {
   categoria_macro: string | null;
   cantidad_vendida_acumulada: number;
   cantidad_cargada_original: number;
-  venta_posterior_a_carga?: boolean;
   drogueria_devolucion?: string | null;
   trazable?: boolean;
 }
@@ -31,7 +30,6 @@ interface VencidosListMobileProps {
   onObsChange: (id: string, value: string) => void;
   guardandoId: string | null;
   onGuardarObs: (item: VencidoItemMobile) => void;
-  onVendido: (id: string, cantidadDisponible: number) => void;
   alertaObs: (item: VencidoItemMobile) => boolean;
 }
 
@@ -64,7 +62,6 @@ export default function VencidosListMobile({
   onObsChange,
   guardandoId,
   onGuardarObs,
-  onVendido,
   alertaObs,
 }: VencidosListMobileProps) {
   return (
@@ -103,14 +100,6 @@ export default function VencidosListMobile({
                       className="inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
                     >
                       Observación requerida
-                    </span>
-                  ) : null}
-                  {r.venta_posterior_a_carga ? (
-                    <span
-                      data-print-hide
-                      className="inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
-                    >
-                      Venta posterior a la carga
                     </span>
                   ) : null}
                   {r.trazable ? (
@@ -166,18 +155,6 @@ export default function VencidosListMobile({
                   onClick={() => onGuardarObs(r)}
                 >
                   {guardandoId === r.id ? 'Guardando…' : 'Guardar observación'}
-                </Button>
-              </div>
-
-              <div className="border-t border-gray-100 pt-2 dark:border-gray-800">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="min-h-10 w-full"
-                  disabled={rest <= 0}
-                  onClick={() => onVendido(r.id, rest)}
-                >
-                  Marcar vendido
                 </Button>
               </div>
             </div>

@@ -59,6 +59,21 @@ export default function BarcodeScanner({
     refocus();
   }, [refocus]);
 
+  const processScan = useCallback(
+    async (barcode: string) => {
+      const result = await onScan(barcode);
+      const found = result === true;
+      if (found) {
+        // En mobile, si encontramos producto ocultamos teclado.
+        skipRefocusOnceRef.current = true;
+        inputRef.current?.blur();
+        return;
+      }
+      refocus();
+    },
+    [onScan, refocus]
+  );
+
   useEffect(() => {
     // Nota: permitimos captura global incluso con `disabled=true` para soportar
     // flujos donde el buscador/cámara principal se bloquean pero el lector USB
@@ -113,18 +128,6 @@ export default function BarcodeScanner({
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     setInputValue(e.target.value);
-  }
-
-  async function processScan(barcode: string) {
-    const result = await onScan(barcode);
-    const found = result === true;
-    if (found) {
-      // En mobile, si encontramos producto ocultamos teclado.
-      skipRefocusOnceRef.current = true;
-      inputRef.current?.blur();
-      return;
-    }
-    refocus();
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {

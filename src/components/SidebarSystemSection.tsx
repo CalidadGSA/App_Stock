@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Construction, MonitorOff } from 'lucide-react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Activity, Construction, MonitorOff } from 'lucide-react';
 import type { RolOperador } from '@/lib/auth/roles';
 import { isSuperAdminRole } from '@/lib/auth/roles';
 import { cn } from '@/lib/utils';
@@ -15,11 +17,13 @@ export default function SidebarSystemSection({
   onAfterClick?: () => void;
 }) {
   const notify = useAppNotify();
+  const pathname = usePathname();
   const [maintenanceActive, setMaintenanceActive] = useState(false);
   const [changingMaintenance, setChangingMaintenance] = useState(false);
   const [revokingSessions, setRevokingSessions] = useState(false);
 
   const esSuperadmin = isSuperAdminRole(rol);
+  const rendimientoActivo = pathname === '/admin/rendimiento' || pathname.startsWith('/admin/rendimiento/');
 
   useEffect(() => {
     if (!esSuperadmin) return;
@@ -120,6 +124,30 @@ export default function SidebarSystemSection({
         Sistema
       </p>
       <ul className="flex flex-col gap-0.5">
+        {esSuperadmin ? (
+          <li>
+            <Link
+              href="/admin/rendimiento"
+              onClick={onAfterClick}
+              className={cn(
+                'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                rendimientoActivo
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+              )}
+              aria-current={rendimientoActivo ? 'page' : undefined}
+              title="Rendimiento"
+            >
+              <Activity
+                className={cn(
+                  'h-4 w-4 shrink-0',
+                  rendimientoActivo ? 'text-white' : 'text-gray-500 dark:text-gray-400'
+                )}
+              />
+              <span className="truncate">Rendimiento</span>
+            </Link>
+          </li>
+        ) : null}
         <li>
           <button
             type="button"

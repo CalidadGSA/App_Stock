@@ -1,5 +1,4 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
 import { canSeeAllInventarioTipos, getOperadorRbacContext } from '@/lib/auth/rbac';
 import {
   MAX_STOCK_REAL_CAJAS,
@@ -14,10 +13,10 @@ import {
   esTipoInventarioEditableCerrado,
   inferirTipoControlInventario,
 } from '@/lib/inventario/tipo-control';
-import { esProductoFraccionable } from '@/lib/inventario/fraccionable';
+import { bloquearCampoUnidadesInventario } from '@/lib/inventario/fraccionable';
 import { getProductoPadronById } from '@/lib/padron-productos-lookup';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 interface DetalleBody {
   producto_id_sistema: string;
@@ -49,15 +48,12 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const rbac = await getOperadorRbacContext();
+  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
   const { id: controlId } = await params;
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
-  const rbac = await getOperadorRbacContext();
-  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const sucursalId = await getSucursalIdSesion();
   const esAdmin = canSeeAllInventarioTipos(rbac);
 
   const admin = await createAdminClient();
@@ -84,8 +80,22 @@ export async function POST(
   ) {
     return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   }
+  if (control.estado !== 'en_progreso') {
+    return NextResponse.json({ error: 'Control cerrado' }, { status: 400 });
+  }
 
-  const body = await request.json() as DetalleBody;
+  let body: DetalleBody;
+  try {
+    body = (await request.json()) as DetalleBody;
+  } catch {
+    return NextResponse.json({ error: 'JSON inválido' }, { status: 400 });
+  }
+  if (!String(body?.producto_id_sistema ?? '').trim() || !String(body?.descripcion ?? '').trim()) {
+    return NextResponse.json(
+      { error: 'producto_id_sistema y descripcion son requeridos' },
+      { status: 400 }
+    );
+  }
 
   const cajas =
     typeof body.stock_real_cajas === 'number' && !Number.isNaN(body.stock_real_cajas)
@@ -175,14 +185,11 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-
-  const { id: controlId } = await params;
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
   const rbac = await getOperadorRbacContext();
   if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+
+  const { id: controlId } = await params;
+  const sucursalId = await getSucursalIdSesion();
   const esAdmin = canSeeAllInventarioTipos(rbac);
 
   const admin = await createAdminClient();
@@ -209,7 +216,7 @@ export async function PATCH(
     return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
   }
 
-  const body = await request.json() as {
+  type PatchBody = {
     detalle_id: string;
     stock_real_cajas?: number | null;
     stock_real_unidades?: number | null;
@@ -218,8 +225,14 @@ export async function PATCH(
     stock_sist_unidades?: number | null;
     verificado?: number | boolean | null;
   };
+  let body: PatchBody;
+  try {
+    body = (await request.json()) as PatchBody;
+  } catch {
+    return NextResponse.json({ error: 'JSON inválido' }, { status: 400 });
+  }
 
-  if (!body.detalle_id) {
+  if (!body?.detalle_id) {
     return NextResponse.json({ error: 'detalle_id requerido' }, { status: 400 });
   }
 
@@ -246,6 +259,8 @@ export async function PATCH(
       'stock_sist_cajas, stock_sist_unidades, stock_sistema, verificado, estado, ajustado, producto_id_sistema, codigo_barras'
     )
     .eq('id', body.detalle_id)
+    // El detalle debe pertenecer al control validado arriba (evita editar líneas de otro control/sucursal).
+    .eq('control_id', controlId)
     .maybeSingle();
 
   if (!detalleActual) {
@@ -292,18 +307,21 @@ export async function PATCH(
     stock_sistema?: number | string | null;
   };
   const codPlex = parseInt(String(detRow.producto_id_sistema ?? ''), 10);
-  let esFraccionable = true;
+  let fraccionablePadron: number | undefined;
   if (Number.isFinite(codPlex)) {
     const ficha = await getProductoPadronById(codPlex);
     if (ficha?.fraccionable != null) {
-      esFraccionable = esProductoFraccionable(ficha.fraccionable);
+      fraccionablePadron = Number(ficha.fraccionable);
     }
   }
 
+  // Alineado con la UI: si no es fraccionable y el sistema no tiene unidades sueltas,
+  // se fuerza 0. Si el sistema sí tiene unidades, se permite corregir (p. ej. 20 → 0).
+  // Antes se copiaba siempre sistUnidades y el diario (PATCH) nunca marcaba diferencia.
   let unidadesSueltasFinal =
     typeof unidadesSueltas === 'number' && !Number.isNaN(unidadesSueltas) ? unidadesSueltas : null;
-  if (!esFraccionable) {
-    unidadesSueltasFinal = sistUnidades;
+  if (bloquearCampoUnidadesInventario(fraccionablePadron, sistUnidades)) {
+    unidadesSueltasFinal = 0;
   }
 
   function inferirUnidadesPorCaja(d: {
@@ -385,6 +403,7 @@ export async function PATCH(
       verificado: verificadoFinal,
     })
     .eq('id', body.detalle_id)
+    .eq('control_id', controlId)
     .select()
     .single();
 
@@ -401,14 +420,11 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-
-  const { id: controlId } = await params;
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
   const rbac = await getOperadorRbacContext();
   if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+
+  const { id: controlId } = await params;
+  const sucursalId = await getSucursalIdSesion();
   const esAdmin = canSeeAllInventarioTipos(rbac);
 
   const detalleId = new URL(request.url).searchParams.get('detalle_id');
@@ -438,8 +454,18 @@ export async function DELETE(
   }
   if (control.estado !== 'en_progreso') return NextResponse.json({ error: 'Control cerrado' }, { status: 400 });
 
-  const { error } = await admin.from('controles_inventario_detalle').delete().eq('id', detalleId);
+  const { data: borrados, error } = await admin
+    .from('controles_inventario_detalle')
+    .delete()
+    .eq('id', detalleId)
+    .eq('control_id', controlId)
+    .select('id');
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!borrados || borrados.length === 0) {
+    return NextResponse.json({ error: 'Detalle no encontrado' }, { status: 404 });
+  }
+
+  await admin.from('controles_inventario').update({ updated_at: new Date().toISOString() }).eq('id', controlId);
 
   return NextResponse.json({ ok: true });
 }

@@ -1,20 +1,19 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
 import { canSeeAllInventarioTipos, getOperadorRbacContext } from '@/lib/auth/rbac';
 import {
   inferirTipoControlInventario,
   nombreTipoControlInventario,
 } from '@/lib/inventario/tipo-control';
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 /** POST /api/inventario/ocasional - crear inventario ocasional (admin y operadores) */
 export async function POST(request: Request) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const rbac = await getOperadorRbacContext();
+  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = rbac.operador;
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   let body: { motivo?: string; confirm_override?: boolean } = {};
@@ -25,8 +24,6 @@ export async function POST(request: Request) {
   }
 
   const admin = await createAdminClient();
-  const rbac = await getOperadorRbacContext();
-  if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
   const esAdmin = canSeeAllInventarioTipos(rbac);
   const tipoObjetivo =
     esAdmin ? 'ocasional_auditoria' : 'ocasional_sucursal';

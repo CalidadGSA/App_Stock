@@ -1,11 +1,10 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { PageSpinner } from '@/components/ui/spinner';
 import {
   formatDate,
   diasHastaVencimiento,
@@ -24,7 +23,6 @@ import {
   EncabezadoImpresionListadoVencimientos,
   VENCIMIENTOS_PRINT_AREA_ATTR,
 } from '@/components/vencimientos/ImprimirListadoVencimientos';
-import { VencimientosTablaContenedor } from '@/components/vencimientos/VencimientosTablaContenedor';
 import { TablaImpresionVencimientosCompacta } from '@/components/vencimientos/TablaImpresionVencimientosCompacta';
 import {
   DATATABLE_CARD_BODY_CLASS,
@@ -39,7 +37,6 @@ import {
 import { DatatableListSection } from '@/components/list/DatatableListSection';
 import {
   usePaginacionServidor,
-  useTotalPaginas,
 } from '@/components/list/datatable-pagination';
 import { tamPaginaToPageSizeParam } from '@/lib/api/pagination';
 import {
@@ -67,7 +64,6 @@ interface VencidoItem {
   cantidad_cargada_original: number;
   ratio_vendido_sobre_original: number | null;
   obligatorio_observacion_devolucion: boolean;
-  venta_posterior_a_carga?: boolean;
   drogueria_devolucion?: string | null;
   trazable?: boolean;
 }
@@ -133,11 +129,6 @@ export default function VencidosPage() {
     'producto' | 'macro' | 'vencimiento' | 'cantidad' | 'restante' | 'vendido'
   >('vencimiento');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [ventaPosteriorCheckStatus, setVentaPosteriorCheckStatus] = useState<
-    'off' | 'full' | 'skipped_slow_db' | 'skipped_unavailable'
-  >('off');
-  const ventaPosteriorCacheRef = useRef<Map<string, boolean>>(new Map());
-  const ventaPosteriorCheckHechoRef = useRef(false);
   const prevFiltrosKeyRef = useRef('');
 
   const filtrosKey = [drogueriaFiltro, categoriaFiltro, busquedaAplicada, sortKey, sortDir].join('|');
@@ -155,7 +146,6 @@ export default function VencidosPage() {
     sortDir,
   ]);
 
-  const totalPaginas = useTotalPaginas(total, tamPagina);
   const itemsPaginados = items;
 
   const idsSinObservacion = useMemo(
@@ -205,17 +195,10 @@ export default function VencidosPage() {
     setSortDir(key === 'vencimiento' || key === 'producto' || key === 'macro' ? 'asc' : 'desc');
   }
 
-  async function cargar(opciones?: { forzarCheckVentaPosterior?: boolean; limpiarObsLocal?: boolean }) {
+  async function cargar(opciones?: { limpiarObsLocal?: boolean }) {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      const solicitarCheck =
-        opciones?.forzarCheckVentaPosterior || !ventaPosteriorCheckHechoRef.current;
-      if (solicitarCheck) {
-        params.set('check_venta_posterior', '1');
-      } else {
-        params.set('check_venta_posterior', '0');
-      }
       if (drogueriaFiltro) params.set('drogueria', drogueriaFiltro);
       if (categoriaFiltro) params.set('categoria_macro', categoriaFiltro);
       if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
@@ -230,7 +213,6 @@ export default function VencidosPage() {
         droguerias?: string[];
         sin_observacion_devolucion_ids?: string[];
         error?: string;
-        venta_posterior_check?: 'off' | 'full' | 'skipped_slow_db' | 'skipped_unavailable';
       };
       if (!res.ok) {
         notify.error(json.error ?? 'Error al cargar productos para devolver');
@@ -239,28 +221,12 @@ export default function VencidosPage() {
         setSinObservacionDevolucionIds([]);
         return;
       }
-      const rawList = json.data ?? [];
-      let nextList = rawList;
-      if (solicitarCheck) {
-        for (const i of rawList) {
-          ventaPosteriorCacheRef.current.set(i.id, !!i.venta_posterior_a_carga);
-        }
-        ventaPosteriorCheckHechoRef.current = true;
-      } else {
-        nextList = rawList.map((i) => ({
-          ...i,
-          venta_posterior_a_carga: ventaPosteriorCacheRef.current.get(i.id) ?? false,
-        }));
-      }
-      setItems(nextList);
+      setItems(json.data ?? []);
       setTotal(json.total ?? 0);
       setDroguerias(json.droguerias ?? []);
       setSinObservacionDevolucionIds(json.sin_observacion_devolucion_ids ?? []);
       if (opciones?.limpiarObsLocal) {
         setObsLocal({});
-      }
-      if (json.venta_posterior_check) {
-        setVentaPosteriorCheckStatus(json.venta_posterior_check);
       }
     } catch {
       notify.error('Error al cargar productos para devolver');
@@ -277,7 +243,6 @@ export default function VencidosPage() {
       return;
     }
     const params = new URLSearchParams();
-    params.set('check_venta_posterior', '0');
     if (drogueriaFiltro) params.set('drogueria', drogueriaFiltro);
     if (categoriaFiltro) params.set('categoria_macro', categoriaFiltro);
     if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
@@ -289,12 +254,7 @@ export default function VencidosPage() {
     const json = (await res.json()) as { data?: VencidoItem[]; error?: string };
     if (!res.ok) throw new Error(json.error ?? 'Error al preparar impresión');
     const rawList = json.data ?? [];
-    setItemsImpresion(
-      rawList.map((i) => ({
-        ...i,
-        venta_posterior_a_carga: ventaPosteriorCacheRef.current.get(i.id) ?? false,
-      }))
-    );
+    setItemsImpresion(rawList);
   }, [
     tamPagina,
     items.length,
@@ -338,7 +298,6 @@ export default function VencidosPage() {
       setItems((prev) =>
         prev.map((x) => {
           if (x.id !== item.id) return x;
-          const orig = x.cantidad_cargada_original;
           const vend = x.cantidad_vendida_acumulada;
           const ratio = ratioVendidoSobreOriginal(x.cantidad, vend);
           return {
@@ -372,78 +331,8 @@ export default function VencidosPage() {
     }
   }, [items, notify, obsLocal, esSuperadmin]);
 
-  async function marcarVendido(id: string, cantidadDisponible: number) {
-    const max = Math.max(0, Math.floor(Number(cantidadDisponible) || 0));
-    if (max <= 0) {
-      notify.warning('El registro no tiene cantidad disponible para marcar como vendido.');
-      return;
-    }
-    const ingresado = window.prompt(`¿Cuántas unidades se vendieron? (1 a ${max})`, '1');
-    if (ingresado == null) return;
-    const cantidad = parseInt(ingresado, 10);
-    if (!Number.isFinite(cantidad) || cantidad <= 0 || cantidad > max) {
-      notify.warning(`Ingresá una cantidad válida entre 1 y ${max}.`);
-      return;
-    }
-    try {
-      const params = new URLSearchParams({
-        id,
-        cantidad: String(cantidad),
-      });
-      const res = await fetch(`/api/vencimientos/para-devolver?${params.toString()}`, {
-        method: 'PATCH',
-      });
-      const json = (await res.json().catch(() => ({}))) as { error?: string; cantidad_restante?: number };
-      if (!res.ok) {
-        notify.error(json.error ?? 'Error al marcar como vendido');
-        return;
-      }
-      const restante = Number(json.cantidad_restante ?? 0);
-      setItems((prev) =>
-        prev
-          .map((x) => {
-            if (x.id !== id) return x;
-            const newVend = (x.cantidad_vendida_acumulada ?? 0) + cantidad;
-            const orig = x.cantidad_cargada_original;
-            const ratio = ratioVendidoSobreOriginal(restante, newVend);
-            const next = {
-              ...x,
-              cantidad: restante,
-              cantidad_vendida_acumulada: newVend,
-              ratio_vendido_sobre_original: ratio,
-              obligatorio_observacion_devolucion: obligatorioObservacionDevolucion(orig, newVend, {
-                omitirSiSuperadmin: esSuperadmin,
-              }),
-            };
-            return next;
-          })
-          .filter((x) => x.cantidad > 0)
-      );
-      setSinObservacionDevolucionIds((prev) => {
-        const row = items.find((x) => x.id === id);
-        if (!row) return prev.filter((itemId) => itemId !== id);
-        const newVend = (row.cantidad_vendida_acumulada ?? 0) + cantidad;
-        const obligatorio = obligatorioObservacionDevolucion(
-          row.cantidad_cargada_original,
-          newVend,
-          { omitirSiSuperadmin: esSuperadmin }
-        );
-        const obs = textoObservacionEfectiva(row, obsLocal);
-        if (!obligatorio || tieneObservacionDevolucion(obs)) {
-          return prev.filter((itemId) => itemId !== id);
-        }
-        if (!prev.includes(id)) return [...prev, id];
-        return prev;
-      });
-      notify.success('Venta registrada');
-    } catch {
-      notify.error('Error al marcar como vendido');
-    }
-  }
-
   async function fetchTodosFiltrados(): Promise<VencidoItem[]> {
     const params = new URLSearchParams();
-    params.set('check_venta_posterior', '0');
     if (drogueriaFiltro) params.set('drogueria', drogueriaFiltro);
     if (categoriaFiltro) params.set('categoria_macro', categoriaFiltro);
     if (busquedaAplicada) params.set('busqueda', busquedaAplicada);
@@ -559,16 +448,6 @@ export default function VencidosPage() {
         </div>
       </div>
 
-      {(ventaPosteriorCheckStatus === 'skipped_slow_db' ||
-        ventaPosteriorCheckStatus === 'skipped_unavailable') && (
-        <div className="shrink-0 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200 print:hidden">
-          {ventaPosteriorCheckStatus === 'skipped_slow_db'
-            ? 'La base onze_center respondió lento. Se omitió la verificación de ventas posteriores para cargar el listado más rápido.'
-            : 'No se pudo consultar onze_center a tiempo. Se omitió la verificación de ventas posteriores.'}{' '}
-          Usá «Actualizar» para reintentar.
-        </div>
-      )}
-
       <Card className={DATATABLE_CARD_CLASS} {...{ [VENCIMIENTOS_PRINT_AREA_ATTR]: '' }}>
         <CardHeader className="shrink-0 py-3 print:hidden">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -641,15 +520,14 @@ export default function VencidosPage() {
                   className="h-7 sm:h-8"
                   disabled={loading}
                   onClick={() => {
-                    ventaPosteriorCheckHechoRef.current = false;
-                    ventaPosteriorCacheRef.current.clear();
-                    void cargar({ forzarCheckVentaPosterior: true });
+                    void cargar();
                   }}
                 >
                   Actualizar
                 </Button>
               </>
             }
+            filtrosActivos={(categoriaFiltro ? 1 : 0) + (drogueriaFiltro ? 1 : 0)}
             footerActions={
               total > 0 ? (
                 <>
@@ -681,7 +559,6 @@ export default function VencidosPage() {
                 }
                 guardandoId={guardandoId}
                 onGuardarObs={(item) => void guardarObservacion(item)}
-                onVendido={(id, cant) => void marcarVendido(id, cant)}
                 alertaObs={(item) => itemRequiereObservacionDevolucion(item, esSuperadmin)}
               />
             }
@@ -697,12 +574,6 @@ export default function VencidosPage() {
                     <th className={`${DATATABLE_TH} text-right`}><button type="button" onClick={() => toggleSort('vendido')}>Vendido</button></th>
                     <th className={`${DATATABLE_TH} min-w-[200px]`}>
                       Acción realizada / observación
-                    </th>
-                    <th
-                      data-print-hide
-                      className={`sticky right-0 z-[2] bg-gray-50 dark:bg-slate-900 ${DATATABLE_TH} text-right`}
-                    >
-                      Acciones
                     </th>
                   </tr>
                 </thead>
@@ -720,14 +591,6 @@ export default function VencidosPage() {
                             {r.presentacion} · {r.laboratorio}
                           </p>
                           <p className="mt-0.5 font-mono text-sm text-gray-600 dark:text-gray-400">{r.codigo_barras}</p>
-                          {r.venta_posterior_a_carga ? (
-                            <span
-                              data-print-hide
-                              className="mt-1 ml-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
-                            >
-                              Venta posterior a la carga
-                            </span>
-                          ) : null}
                           {r.trazable ? (
                             <span
                               data-print-hide
@@ -799,18 +662,6 @@ export default function VencidosPage() {
                             onClick={() => void guardarObservacion(r)}
                           >
                             {guardandoId === r.id ? 'Guardando…' : 'Guardar'}
-                          </Button>
-                        </td>
-                        <td
-                          data-print-hide
-                          className={`sticky right-0 z-[1] bg-white dark:bg-slate-900 ${DATATABLE_TD} text-right`}
-                        >
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => void marcarVendido(r.id, Number(r.cantidad ?? 0))}
-                          >
-                            Vendido
                           </Button>
                         </td>
                       </tr>

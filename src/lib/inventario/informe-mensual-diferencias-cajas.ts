@@ -7,6 +7,12 @@ import {
   normalizarDiferenciasValorAgregado,
   type DiferenciasValorAgregado,
 } from '@/lib/inventario/informe-mensual-diferencias-valor';
+import { cajasEquivalentes, valorDiferencia } from '@/lib/inventario/diferencia-valorizada';
+import {
+  cargarControlesCerradosDelMes,
+  recorrerDetallesConDiferencia,
+} from '@/lib/inventario/detalle-diferencias-mes';
+import { getUnidadesPorCajaOnze } from '@/lib/legacy-db/onze-medicamentos';
 import { esSucursalVisibleEnLogin } from '@/lib/sucursales/login-sucursales';
 import { rangoFechasArgentinaIso } from '@/lib/utils';
 
@@ -70,17 +76,17 @@ function cerrarTotales(t: DiferenciaCajasValorTotales): DiferenciaCajasValorTota
   return { ...t, valor_neto: t.valor_positivo - t.valor_negativo };
 }
 
-function pasaFiltroSigno(diffCajas: number, signo: SignoDiferenciaCajas): boolean {
-  if (signo === 'positiva') return diffCajas > 0;
-  if (signo === 'negativa') return diffCajas < 0;
+function pasaFiltroSigno(diffTotal: number, signo: SignoDiferenciaCajas): boolean {
+  if (signo === 'positiva') return diffTotal > 0;
+  if (signo === 'negativa') return diffTotal < 0;
   return true;
 }
 
 /**
- * Líneas de `controles_inventario_detalle` con diferencia solo en **cajas**
- * (`stock_real_cajas − stock_sist_cajas`), ignorando diferencias en unidades sueltas.
+ * Líneas de `controles_inventario_detalle` con diferencia de stock.
  *
- * Valor = diff_cajas × costo por caja (medicamentos.costo).
+ * `diff_cajas` son las cajas enteras; el **valor** además suma las unidades sueltas como
+ * fracción de caja (`medicamentos.Unidades`), para que los fraccionados no queden sin valorizar.
  */
 export async function cargarDetalleDiferenciasCajasValor(
   admin: SupabaseClient,
@@ -110,7 +116,9 @@ export async function cargarDetalleDiferenciasCajasValor(
         presentacion,
         laboratorio,
         stock_sist_cajas,
+        stock_sist_unidades,
         stock_real_cajas,
+        stock_real_unidades,
         controles_inventario!inner(
           id,
           sucursal_id,
@@ -144,7 +152,10 @@ export async function cargarDetalleDiferenciasCajasValor(
     const productoIds = batch
       .map((r) => String((r as { producto_id_sistema?: string }).producto_id_sistema ?? '').trim())
       .filter(Boolean);
-    const costos = await costosMedicamentosPorCodplex(admin, productoIds);
+    const [costos, unidadesPorCaja] = await Promise.all([
+      costosMedicamentosPorCodplex(admin, productoIds),
+      getUnidadesPorCajaOnze(productoIds),
+    ]);
 
     for (const row of batch) {
       const r = row as {
@@ -155,7 +166,9 @@ export async function cargarDetalleDiferenciasCajasValor(
         presentacion?: string | null;
         laboratorio?: string | null;
         stock_sist_cajas?: number | string | null;
+        stock_sist_unidades?: number | string | null;
         stock_real_cajas?: number | string | null;
+        stock_real_unidades?: number | string | null;
         controles_inventario?: {
           id?: string;
           sucursal_id?: number;
@@ -168,17 +181,18 @@ export async function cargarDetalleDiferenciasCajasValor(
       const sid = Number(r.controles_inventario?.sucursal_id);
       if (!Number.isFinite(sid) || !esSucursalVisibleEnLogin(sid)) continue;
 
-      const sistCajas = Number(r.stock_sist_cajas ?? 0);
-      const realCajas = Number(r.stock_real_cajas ?? 0);
-      if (!Number.isFinite(sistCajas) || !Number.isFinite(realCajas)) continue;
-
-      const diffCajas = realCajas - sistCajas;
-      if (!Number.isFinite(diffCajas) || diffCajas === 0) continue;
-      if (!pasaFiltroSigno(diffCajas, signo)) continue;
+      const diffCajas = Number(r.stock_real_cajas ?? 0) - Number(r.stock_sist_cajas ?? 0);
+      const diffUnidades =
+        Number(r.stock_real_unidades ?? 0) - Number(r.stock_sist_unidades ?? 0);
+      if (!Number.isFinite(diffCajas) || !Number.isFinite(diffUnidades)) continue;
+      if (diffCajas === 0 && diffUnidades === 0) continue;
 
       const pid = String(r.producto_id_sistema ?? '').trim();
+      const upc = unidadesPorCaja.get(pid);
+      if (!pasaFiltroSigno(cajasEquivalentes(diffCajas, diffUnidades, upc), signo)) continue;
+
       const costo = costos.get(pid) ?? 0;
-      const valor = diffCajas * costo;
+      const valor = valorDiferencia(diffCajas, diffUnidades, upc, costo);
 
       acumularTotales(totales, diffCajas, valor);
 
@@ -225,72 +239,60 @@ export async function cargarDiferenciasCajasValorPorSucursal(
   year: number,
   month1_12: number
 ): Promise<Map<number, DiferenciasValorAgregado>> {
-  const { fecha_inicio, fecha_fin } = rangoMesCalendarioYm(year, month1_12);
-  const { desdeIso, hastaIso } = rangoFechasArgentinaIso(fecha_inicio, fecha_fin);
-
   const porSucursal = new Map<number, DiferenciasValorAgregado>();
-  let offset = 0;
 
-  while (true) {
-    const { data, error } = await admin
-      .from('controles_inventario_detalle')
-      .select(
-        `producto_id_sistema,
-        stock_sist_cajas,
-        stock_real_cajas,
-        controles_inventario!inner(sucursal_id, estado, fecha_fin)`
-      )
-      .eq('controles_inventario.estado', 'cerrado')
-      .eq('con_diferencias', 1)
-      .gte('controles_inventario.fecha_fin', desdeIso)
-      .lte('controles_inventario.fecha_fin', hastaIso)
-      .order('id', { ascending: true })
-      .range(offset, offset + CHUNK - 1);
+  const controles = await cargarControlesCerradosDelMes(admin, year, month1_12);
+  if (controles.length === 0) return porSucursal;
+  const sucursalPorControl = new Map(controles.map((c) => [c.id, c.sucursal_id]));
 
-    if (error) {
-      console.error('cargarDiferenciasCajasValorPorSucursal:', error.message);
-      break;
-    }
+  type Fila = {
+    control_id: string;
+    producto_id_sistema?: string;
+    stock_sist_cajas?: number | string | null;
+    stock_sist_unidades?: number | string | null;
+    stock_real_cajas?: number | string | null;
+    stock_real_unidades?: number | string | null;
+  };
 
-    const batch = data ?? [];
-    if (batch.length === 0) break;
+  await recorrerDetallesConDiferencia<Fila>(
+    admin,
+    controles.map((c) => c.id),
+    'control_id, producto_id_sistema, stock_sist_cajas, stock_sist_unidades, stock_real_cajas, stock_real_unidades',
+    async (batch) => {
+      const productoIds = batch
+        .map((r) => String(r.producto_id_sistema ?? '').trim())
+        .filter(Boolean);
+      const [costos, unidadesPorCaja] = await Promise.all([
+        costosMedicamentosPorCodplex(admin, productoIds),
+        getUnidadesPorCajaOnze(productoIds),
+      ]);
 
-    const productoIds = batch
-      .map((r) => String((r as { producto_id_sistema?: string }).producto_id_sistema ?? '').trim())
-      .filter(Boolean);
-    const costos = await costosMedicamentosPorCodplex(admin, productoIds);
+      for (const r of batch) {
+        const sid = sucursalPorControl.get(r.control_id);
+        if (sid == null) continue;
 
-    for (const row of batch) {
-      const r = row as {
-        producto_id_sistema?: string;
-        stock_sist_cajas?: number | string | null;
-        stock_real_cajas?: number | string | null;
-        controles_inventario?: { sucursal_id?: number } | null;
-      };
+        const diffCajas = Number(r.stock_real_cajas ?? 0) - Number(r.stock_sist_cajas ?? 0);
+        const diffUnidades =
+          Number(r.stock_real_unidades ?? 0) - Number(r.stock_sist_unidades ?? 0);
+        if (diffCajas === 0 && diffUnidades === 0) continue;
 
-      const sid = Number(r.controles_inventario?.sucursal_id);
-      if (!Number.isFinite(sid) || !esSucursalVisibleEnLogin(sid)) continue;
+        const pid = String(r.producto_id_sistema ?? '').trim();
+        const valor = valorDiferencia(
+          diffCajas,
+          diffUnidades,
+          unidadesPorCaja.get(pid),
+          costos.get(pid) ?? 0
+        );
 
-      const sistCajas = Number(r.stock_sist_cajas ?? 0);
-      const realCajas = Number(r.stock_real_cajas ?? 0);
-      if (!Number.isFinite(sistCajas) || !Number.isFinite(realCajas)) continue;
+        const prev = porSucursal.get(sid) ?? vacioAgregado();
+        acumularAgregado(prev, valor);
+        porSucursal.set(sid, prev);
+      }
+    },
+    'cargarDiferenciasCajasValorPorSucursal'
+  );
 
-      const diffCajas = realCajas - sistCajas;
-      if (!Number.isFinite(diffCajas) || diffCajas === 0) continue;
-
-      const pid = String(r.producto_id_sistema ?? '').trim();
-      const costo = costos.get(pid) ?? 0;
-      const valor = diffCajas * costo;
-
-      const prev = porSucursal.get(sid) ?? vacioAgregado();
-      acumularAgregado(prev, valor);
-      porSucursal.set(sid, prev);
-    }
-
-    if (batch.length < CHUNK) break;
-    offset += CHUNK;
-  }
-
+  // Neto canónico = positivo − negativo.
   for (const [sid, agg] of porSucursal) {
     porSucursal.set(sid, cerrarAgregado(agg));
   }

@@ -63,6 +63,7 @@ export async function GET(request: NextRequest) {
       categoriaMacro: searchParams.get('categoria_macro') ?? undefined,
       mesControl: parseMesAnioParam(searchParams.get('mes')),
       anioControl: parseMesAnioParam(searchParams.get('anio')),
+      soloDiferencias: searchParams.get('solo_diferencias') !== '0',
       page: pagination.page,
       pageSize: pagination.pageSize,
       unpaginated: pagination.unpaginated,
@@ -89,6 +90,9 @@ export async function GET(request: NextRequest) {
       daysMin,
       sucursales,
       cat_macros: resumen.cat_macros,
+      montoTotal: resumen.montoTotal,
+      montoPositivo: resumen.montoPositivo,
+      montoNegativo: resumen.montoNegativo,
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Error al cargar diferencias';

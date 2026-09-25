@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import type { PadronMeta } from '@/lib/padron-final-crud';
+import { fechaHoyArgentinaYmd, formatDateForFilename } from '@/lib/utils';
 
 function cellValue(value: unknown): string | number | boolean {
   if (value === null || value === undefined) return '';
@@ -56,9 +57,5 @@ export function buildPadronExcelBuffer(
 }
 
 export function padronExportFileName(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `padron-productos_${y}${m}${day}.xlsx`;
+  return `padron-productos_${formatDateForFilename(fechaHoyArgentinaYmd())}.xlsx`;
 }

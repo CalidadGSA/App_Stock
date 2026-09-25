@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -8,6 +8,10 @@ import { PageSpinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/utils';
 import { calendarioActualArgentina, clampYmNoFuturo } from '@/lib/vencimientos-mes-anio-filtro';
 import AjustesHistorialListMobile from '@/components/ajustes/AjustesHistorialListMobile';
+import {
+  CollapsibleFiltrosPanel,
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
 
 interface AjusteRow {
   id: string;
@@ -34,6 +38,7 @@ export default function HistorialAjustesPage() {
   const [sucursalId, setSucursalId] = useState('');
   const [mes, setMes] = useState(''); // formato YYYY-MM
   const mesMaximoYm = calendarioActualArgentina().ym;
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
 
   useEffect(() => {
     async function cargarSucursales() {
@@ -134,15 +139,29 @@ export default function HistorialAjustesPage() {
         </Button>
       </div>
 
-      <Card>
+      <Card className="relative overflow-hidden">
         <CardHeader>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="font-semibold text-gray-900">Ajustes realizados</h2>
               <p className="text-sm text-gray-600">
                 Listado para volver a descargar el archivo CSV original de cada ajuste.
               </p>
             </div>
+            <FiltrosToggleButton
+              abierto={filtrosAbiertos}
+              onClick={() => setFiltrosAbiertos((v) => !v)}
+              activos={(sucursalId ? 1 : 0) + (mes ? 1 : 0)}
+              className="shrink-0 self-start"
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="relative p-0">
+          <CollapsibleFiltrosPanel
+            abierto={filtrosAbiertos}
+            onCerrar={() => setFiltrosAbiertos(false)}
+            descripcion="Filtrá por sucursal y mes."
+          >
             <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-end">
               <div className="flex w-full flex-col gap-1 sm:min-w-[180px] sm:w-auto">
                 <label className="text-sm font-medium text-gray-700">
@@ -177,17 +196,16 @@ export default function HistorialAjustesPage() {
               </div>
               <Button
                 size="sm"
-                variant="secondary"
-                className="w-full sm:w-auto"
-                onClick={() => void cargar(1)}
+                onClick={() => {
+                  setFiltrosAbiertos(false);
+                  void cargar(1);
+                }}
                 disabled={loading}
               >
-                Aplicar filtros
+                Aplicar
               </Button>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
+          </CollapsibleFiltrosPanel>
           {loading ? (
             <div className="py-6">
               <PageSpinner />

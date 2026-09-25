@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/server';
+import { getNombresLaboratoriosPorCodlab } from '@/lib/legacy-db/onze-catalogos';
 import { getOperadorSession } from '@/lib/auth/session';
 import { requirePermission } from '@/lib/auth/rbac';
 import {
@@ -6,7 +7,8 @@ import {
   PREFIJO_DESCRIPCION_AUDITORIA_INTEGRAL,
 } from '@/lib/inventario/tipo-control';
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion, getSucursalSession } from '@/lib/sucursales/sucursal-session';
+import { getFichasMedicamento } from '@/lib/legacy-db/onze-medicamentos';
 
 const TIPO_OBJETIVO = 'auditoria_integral' as const;
 const MAX_PRODUCTOS = 5000;
@@ -28,9 +30,9 @@ export async function GET() {
   const guard = await requirePermission('inventario.auditoria');
   if (!guard.ok) return guard.response;
 
-  const cookieStore = await cookies();
-  const sucursalIdRaw = cookieStore.get('sucursal_id')?.value;
-  const sucursalNombreCookie = cookieStore.get('sucursal_nombre')?.value ?? '';
+  const sucursalSesion = await getSucursalSession();
+  const sucursalIdRaw = sucursalSesion?.id;
+  const sucursalNombreCookie = sucursalSesion?.nombre ?? '';
   const sucursalIdNum = parseInt(String(sucursalIdRaw ?? ''), 10);
 
   if (!sucursalIdRaw || Number.isNaN(sucursalIdNum)) {
@@ -41,7 +43,7 @@ export async function GET() {
   }
 
   const admin = await createAdminClient();
-  let query = admin
+  const query = admin
     .from('controles_inventario')
     .select(
       'id, sucursal_id, descripcion, fecha_inicio, controles_inventario_detalle(id), sucursales(nombrefantasia)'
@@ -96,8 +98,7 @@ export async function POST(request: Request) {
   const guard = await requirePermission('inventario.auditoria');
   if (!guard.ok) return guard.response;
 
-  const cookieStore = await cookies();
-  const sucursalIdRaw = cookieStore.get('sucursal_id')?.value;
+  const sucursalIdRaw = await getSucursalIdSesion();
   if (!sucursalIdRaw) {
     return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
   }
@@ -194,22 +195,15 @@ export async function POST(request: Request) {
 
   const medPorCodplex = new Map<string, MedRow>();
 
-  for (const lote of chunk(productoIds, 400)) {
-    const codplexNums = lote.map((id) => parseInt(id, 10));
-    const { data: meds, error: medsError } = await admin
-      .from('medicamentos')
-      .select('codplex, codebar, producto, presentaci, codlab')
-      .in('codplex', codplexNums);
-
-    if (medsError) {
-      await admin.from('controles_inventario').delete().eq('id', controlId);
-      return NextResponse.json({ error: medsError.message }, { status: 500 });
-    }
-
-    for (const m of meds ?? []) {
-      const codplex = String((m as MedRow).codplex ?? '').trim();
-      if (codplex) medPorCodplex.set(codplex, m as MedRow);
-    }
+  const { fichas } = await getFichasMedicamento(admin, productoIds);
+  for (const [codplex, f] of fichas) {
+    medPorCodplex.set(codplex, {
+      codplex: Number(codplex),
+      codebar: f.codebar,
+      producto: f.producto,
+      presentaci: f.presentaci,
+      codlab: f.codlab,
+    });
   }
 
   const codlabs = Array.from(
@@ -220,24 +214,7 @@ export async function POST(request: Request) {
     )
   );
 
-  const labPorCodlab = new Map<number, string>();
-  if (codlabs.length > 0) {
-    const { data: labs, error: labsError } = await admin
-      .from('laboratorios')
-      .select('codlab, laborato')
-      .in('codlab', codlabs);
-
-    if (labsError) {
-      await admin.from('controles_inventario').delete().eq('id', controlId);
-      return NextResponse.json({ error: labsError.message }, { status: 500 });
-    }
-
-    for (const lab of labs ?? []) {
-      const codlab = (lab as { codlab?: number }).codlab;
-      const nombre = String((lab as { laborato?: string }).laborato ?? '').trim();
-      if (typeof codlab === 'number') labPorCodlab.set(codlab, nombre);
-    }
-  }
+  const labPorCodlab = await getNombresLaboratoriosPorCodlab(codlabs);
 
   const noEncontrados: string[] = [];
   const filasInsert = productoIds

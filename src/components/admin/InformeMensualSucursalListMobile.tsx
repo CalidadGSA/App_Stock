@@ -4,10 +4,14 @@ import { ListStatPill } from '@/components/list/ListStatPill';
 import type { InformeMensualDetalleSucursal } from '@/app/api/admin/informe-mensual/route';
 import { formatPorcentaje, porcentajeDesdeRatio } from '@/lib/utils';
 
+function textoConPorcentaje(numerador: number, denominador: number): string {
+  if (denominador <= 0) return String(numerador);
+  const pct = formatPorcentaje(porcentajeDesdeRatio(numerador, denominador));
+  return `${numerador} (${pct}%)`;
+}
+
 function textoConDiferenciaInventariados(conDif: number, inventariados: number): string {
-  if (inventariados <= 0) return String(conDif);
-  const pct = formatPorcentaje(porcentajeDesdeRatio(conDif, inventariados));
-  return `${conDif} (${pct}%)`;
+  return textoConPorcentaje(conDif, inventariados);
 }
 
 function fmtMoneda(n: number) {
@@ -36,18 +40,17 @@ export default function InformeMensualSucursalListMobile({
           </h3>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <ListStatPill
-              label="Avance trim. (padrón)"
-              value={
-                row.total_base_trimestre > 0
-                  ? `${row.inventariados_padron_trimestre}/${row.total_base_trimestre} (${formatPorcentaje(row.porcentaje_inventariados_sobre_base)}%)`
-                  : String(row.inventariados_padron_trimestre)
-              }
+              label="Invent. mes"
+              value={textoConPorcentaje(
+                row.productos_inventariados,
+                row.total_base_trimestre
+              )}
             />
             <ListStatPill
               label="Con diferencia"
               value={textoConDiferenciaInventariados(
                 row.productos_con_diferencia,
-                row.inventariados_padron_trimestre
+                row.productos_inventariados
               )}
               emphasize
               valueClassName={
@@ -58,7 +61,10 @@ export default function InformeMensualSucursalListMobile({
             />
             <ListStatPill
               label="Mal contados"
-              value={String(row.productos_mal_contados)}
+              value={textoConPorcentaje(
+                row.productos_mal_contados,
+                row.productos_con_diferencia
+              )}
               emphasize
               valueClassName={
                 row.productos_mal_contados > 0

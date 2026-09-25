@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const q = searchParams.get('q') ?? '';
+  const searchColumn = searchParams.get('searchColumn') ?? searchParams.get('qCol') ?? '';
   const columnsParam = searchParams.get('columns');
   const sortBy = searchParams.get('sortBy');
   const sortDirParam = searchParams.get('sortDir');
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest) {
 
     const result = await listPadronForExport({
       q,
+      searchColumn: searchColumn || null,
       columns: columnNames,
       sortBy,
       sortDir,

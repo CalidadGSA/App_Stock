@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 /**
  * GET ?control_id=&producto_id=&fechas=YYYY-MM-DD,YYYY-MM-DD
@@ -12,8 +12,7 @@ export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
-  const cookieStore = await cookies();
-  const sucursalCookie = cookieStore.get('sucursal_id')?.value;
+  const sucursalCookie = await getSucursalIdSesion();
   if (!sucursalCookie) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   const { searchParams } = new URL(request.url);

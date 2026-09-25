@@ -3,6 +3,8 @@ import { getOperadorSession } from '@/lib/auth/session';
 import { requirePermission } from '@/lib/auth/rbac';
 import { serializarCsvAjuste, type FormatoCsvAjuste } from '@/lib/csv-ajuste';
 import { rangoUtcAjustesInventario } from '@/lib/inventario/ajustes-query-fecha';
+import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
+import { formatDateForFilename } from '@/lib/utils';
 import { NextRequest, NextResponse } from 'next/server';
 
 function etiquetaOrigenArchivoAjuste(origen: string | null): string {
@@ -138,12 +140,13 @@ export async function GET(request: NextRequest) {
     diferencia_cajas: r.diffCajas,
     diferencia_unidades: r.diffUnidades,
   }));
-  const csv = serializarCsvAjuste(filasCsv, formato);
+  const omitirUnidades = await esSucursalDrogueria(admin, sucursalId);
+  const csv = serializarCsvAjuste(filasCsv, formato, { omitirUnidades });
 
   const sucursalNombre = (sucursal as { nombrefantasia: string }).nombrefantasia;
   const safeNombre = sucursalNombre.replace(/[^A-Za-z0-9 _-]/g, '');
   const sufijoOrigen = etiquetaOrigenArchivoAjuste(origen);
-  const filename = `Inventario ${safeNombre} ${desde} a ${hasta} ${sufijoOrigen}.csv`;
+  const filename = `Inventario ${safeNombre} ${formatDateForFilename(desde)} a ${formatDateForFilename(hasta)} ${sufijoOrigen}.csv`;
 
   // Marcar detalles como ajustados y registrar en tablas de ajustes.
   // Si algo falla, devolvemos error para no dejar un CSV exportado sin reflejo en la base.

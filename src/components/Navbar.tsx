@@ -1,12 +1,14 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Building2, LogOut, Menu, Moon, Sun, User } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
 import type { RolOperador } from '@/lib/auth/roles';
 import { clientHasAdminAccess } from '@/lib/auth/permissions-client';
 import { shouldHideAppNav } from '@/lib/navigation/app-nav';
+import { useModoOscuro } from '@/lib/ui/use-modo-oscuro';
 
 interface NavbarProps {
   nombreUsuario: string;
@@ -30,35 +32,8 @@ export default function Navbar({
   const router = useRouter();
   const pathname = usePathname();
   const [loggingOut, setLoggingOut] = useState(false);
-  const [modoOscuro, setModoOscuro] = useState(false);
+  const { modoOscuro, toggleModoOscuro } = useModoOscuro();
   const ocultarAccionesOperativas = shouldHideAppNav(pathname);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const guardado = localStorage.getItem('theme');
-    if (guardado === 'dark') {
-      root.classList.add('dark');
-      setModoOscuro(true);
-      return;
-    }
-    if (guardado === 'light') {
-      root.classList.remove('dark');
-      setModoOscuro(false);
-      return;
-    }
-    const prefiereOscuro = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    root.classList.toggle('dark', prefiereOscuro);
-    setModoOscuro(prefiereOscuro);
-  }, []);
-
-  function toggleModoOscuro() {
-    const root = document.documentElement;
-    const actualmenteOscuro = root.classList.contains('dark');
-    const siguiente = !actualmenteOscuro;
-    setModoOscuro(siguiente);
-    root.classList.toggle('dark', siguiente);
-    localStorage.setItem('theme', siguiente ? 'dark' : 'light');
-  }
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -95,9 +70,12 @@ export default function Navbar({
             className="flex items-center gap-3 shrink-0"
             aria-label="Ir al dashboard"
           >
-            <img
+            <Image
               src="/logo-gsa-icon-white.png"
               alt="GSA"
+              width={368}
+              height={360}
+              priority
               className="h-8 w-8 object-contain"
             />
             <p className="hidden sm:block text-sm font-semibold text-white leading-tight">

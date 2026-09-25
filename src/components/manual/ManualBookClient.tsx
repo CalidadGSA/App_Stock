@@ -4,7 +4,6 @@ import { useMemo } from 'react';
 import type { RolOperador } from '@/lib/auth/roles';
 import ManualBookShell from '@/components/manual/ManualBookShell';
 import { buildManualPages, manualPdfFileName } from '@/lib/manual/build-manual';
-import { ROL_LABELS } from '@/lib/manual/content-map';
 
 interface ManualBookClientProps {
   rol: RolOperador;
@@ -17,14 +16,11 @@ export default function ManualBookClient({ rol, permissions }: ManualBookClientP
     [rol, permissions],
   );
 
-  const rolLabel = ROL_LABELS[rol] ?? rol;
-
   return (
     <ManualBookShell
       pages={pages}
       cover={cover}
       pdfFileName={manualPdfFileName(rol)}
-      pdfPreviewTitle={`Manual Gestión Stock — ${rolLabel}`}
     />
   );
 }

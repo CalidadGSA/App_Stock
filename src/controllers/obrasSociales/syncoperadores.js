@@ -5,6 +5,109 @@ const { getSupabaseAdmin } = require('../../lib/supabaseAdmin'); // Supabase (in
 
 const SYNC_LIMIT = parseInt(process.env.SYNC_LIMIT || '0', 10);
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE_OPERADORES || '5000', 10);
+const OPERADOR_FUENTE_ONZE = 'onze';
+
+function trimOrNull(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  return s.length ? s : null;
+}
+
+function isOperadorActivo(activo) {
+  return String(activo ?? '').trim().toUpperCase() === 'S';
+}
+
+function operadorExUsername(operador, idoperador) {
+  return `${operador}__ex${idoperador}`;
+}
+
+/**
+ * Quién conserva el login ante mismo Operador:
+ * 1) activo = S gana sobre N
+ * 2) si empatan, gana el id más alto
+ */
+function debeConservarLogin(candidato, otro) {
+  const aActivo = isOperadorActivo(candidato.activo);
+  const bActivo = isOperadorActivo(otro.activo);
+  if (aActivo !== bActivo) return aActivo;
+  return Number(candidato.idoperador) > Number(otro.idoperador);
+}
+
+/**
+ * Unique (operador, fuente): ante recontratación / duplicado de login,
+ * conserva el nombre quien esté activo (S); el otro pasa a Operador__ex{id}.
+ */
+async function resolveOperadorUsername(supabase, { idoperador, operador, activo }) {
+  const desired = trimOrNull(operador);
+  if (!desired) {
+    throw new Error(`Operador sin nombre de login (idoperador=${idoperador})`);
+  }
+
+  const id = Number(idoperador);
+  const { data: conflict, error } = await supabase
+    .from('operadores')
+    .select('idoperador, activo')
+    .eq('fuente', OPERADOR_FUENTE_ONZE)
+    .eq('operador', desired)
+    .neq('idoperador', id)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!conflict) return desired;
+
+  const conflictId = Number(conflict.idoperador);
+  const self = { idoperador: id, activo };
+  const other = { idoperador: conflictId, activo: conflict.activo };
+
+  if (debeConservarLogin(self, other)) {
+    const renamed = operadorExUsername(desired, conflictId);
+    const { error: renErr } = await supabase
+      .from('operadores')
+      .update({ operador: renamed })
+      .eq('idoperador', conflictId);
+    if (renErr) throw renErr;
+    console.warn(
+      `⚠️ Login duplicado: id ${conflictId} (activo=${conflict.activo}) → ${renamed}; ` +
+        `id ${id} (activo=${activo}) conserva ${desired}`
+    );
+    return desired;
+  }
+
+  const renamedSelf = operadorExUsername(desired, id);
+  console.warn(
+    `⚠️ Login duplicado: id ${id} (activo=${activo}) → ${renamedSelf}; ` +
+      `login queda en id ${conflictId} (activo=${conflict.activo})`
+  );
+  return renamedSelf;
+}
+
+/** En un mismo lote MySQL, si se repite Operador: gana activo=S; empate → id más alto. */
+function assignUsernamesInBatch(rows) {
+  const byName = new Map();
+  for (const r of rows) {
+    const key = trimOrNull(r.operador);
+    if (!key) continue;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(r);
+  }
+
+  const out = [];
+  for (const [name, group] of byName) {
+    const winner = group.reduce((best, r) =>
+      debeConservarLogin(r, best) ? r : best
+    );
+    const winnerId = Number(winner.idoperador);
+    for (const r of group) {
+      const id = Number(r.idoperador);
+      out.push({
+        ...r,
+        operador: id === winnerId ? name : operadorExUsername(name, id),
+        fuente: OPERADOR_FUENTE_ONZE,
+      });
+    }
+  }
+  return out;
+}
 
 /* ======================================================
    🧠 ESTADO GLOBAL SYNC operadores
@@ -173,8 +276,7 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
           `📦 Lote operadores #${batchNumber} → ${rows.length} registros (desde IDOperador > ${lastIdOperador})`
         );
 
-        const batchToInsert = [];
-        const seenOperadores = new Set();
+        const batchRaw = [];
         let processedInBatch = 0;
         let lastIdOperadorInBatch = lastIdOperador;
 
@@ -188,16 +290,21 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
             break;
           }
 
-          // Evitar duplicados por nombre de operador (constraint unique en Supabase)
-          if (seenOperadores.has(r.operador)) {
+          const operador = trimOrNull(r.operador);
+          if (!operador) {
+            console.warn(
+              `⚠️ Se omite idoperador=${r.idoperador}: Operador vacío en legacy`
+            );
+            lastIdOperadorInBatch = r.idoperador;
+            processedInBatch++;
             continue;
           }
-          seenOperadores.add(r.operador);
 
-          batchToInsert.push({
+          batchRaw.push({
             idoperador: r.idoperador,
-            operador: r.operador,
-            nombrecompleto: r.nombrecompleto,
+            operador,
+            nombrecompleto:
+              trimOrNull(r.nombrecompleto) || operador,
             codigo: r.codigo,
             activo: r.activo,
           });
@@ -209,6 +316,14 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
         if (!processedInBatch) {
           // Ya alcanzamos el límite efectivo dentro de este lote
           break;
+        }
+
+        const batchToInsert = assignUsernamesInBatch(batchRaw);
+
+        if (!batchToInsert.length) {
+          lastIdOperador = lastIdOperadorInBatch;
+          syncOperadoresState.processed += processedInBatch;
+          continue;
         }
 
         const operadorIds = batchToInsert.map((r) => r.idoperador);
@@ -229,10 +344,12 @@ async function syncOperadoresLegacyToSupabase({ mode, limit: limitParam } = {}) 
         const actualizar = [];
 
         for (const row of batchToInsert) {
+          const operador = await resolveOperadorUsername(supabase, row);
+          const resolved = { ...row, operador, fuente: OPERADOR_FUENTE_ONZE };
           if (existingSet.has(Number(row.idoperador))) {
-            actualizar.push(row);
+            actualizar.push(resolved);
           } else {
-            nuevos.push(row);
+            nuevos.push(resolved);
           }
         }
 

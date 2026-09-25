@@ -9,6 +9,7 @@ import {
   estiloFilaProgresoVenta,
   formatDate,
   formatDateTime,
+  formatMoneda,
 } from '@/lib/utils';
 
 export interface PorVencerItemMobile {
@@ -23,11 +24,13 @@ export interface PorVencerItemMobile {
   fecha_registro?: string;
   cantidad: number;
   cantidad_vendida_acumulada?: number;
+  cantidad_vendida_auto?: number;
   vendido?: number;
   accion_observacion?: string | null;
-  venta_posterior_a_carga?: boolean;
   categoria: string | null;
   descuento_aplicado?: number | null;
+  precio?: number | null;
+  monto?: number | null;
 }
 
 export type FilaAgrupadaMobile =
@@ -44,7 +47,11 @@ interface PorVencerListMobileProps {
   onGuardarObs: (item: PorVencerItemMobile) => void;
   onVendido: (id: string, cantidadDisponible: number) => void;
   onReducirCarga: (id: string, cantidadDisponible: number) => void;
-  onArreglarVendido: (id: string, cantidadRestante: number, cantidadVendida: number) => void;
+  onArreglarVendido: (
+    id: string,
+    cantidadRestante: number,
+    cantidadVendidaActual: number
+  ) => void;
   ordenarItemsGrupo?: (items: PorVencerItemMobile[]) => PorVencerItemMobile[];
 }
 
@@ -101,7 +108,11 @@ function ItemCard({
   onGuardarObs: (item: PorVencerItemMobile) => void;
   onVendido: (id: string, cantidadDisponible: number) => void;
   onReducirCarga: (id: string, cantidadDisponible: number) => void;
-  onArreglarVendido: (id: string, cantidadRestante: number, cantidadVendida: number) => void;
+  onArreglarVendido: (
+    id: string,
+    cantidadRestante: number,
+    cantidadVendidaActual: number
+  ) => void;
 }) {
   const dias = diasHastaVencimiento(item.fecha_vencimiento);
   const color = colorVencimiento(dias);
@@ -135,11 +146,6 @@ function ItemCard({
           {nested ? (
             <p className="mt-1 text-[11px] text-gray-500">Control {item.control_id.slice(0, 8)}…</p>
           ) : null}
-          {item.venta_posterior_a_carga ? (
-            <p className="mt-1.5 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-              Venta posterior a la carga
-            </p>
-          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -164,14 +170,19 @@ function ItemCard({
           </p>
         ) : null}
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <StatPill label="Restante" value={rest.toFixed(0)} emphasize />
           <StatPill label="Vendido" value={vendHist.toFixed(0)} emphasize />
-          <div className="rounded-lg border border-gray-200 bg-gray-50/80 px-2.5 py-1.5 dark:border-gray-700 dark:bg-slate-800/50">
-            <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          <StatPill
+            label="Monto"
+            value={item.monto != null ? formatMoneda(item.monto) : '—'}
+            emphasize
+          />
+          <div className="rounded-md border border-gray-200 bg-gray-50/80 px-1.5 py-1 dark:border-gray-700 dark:bg-slate-800/50">
+            <p className="text-[9px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
               Descuento
             </p>
-            <div className="mt-1">
+            <div className="mt-0">
               <DescuentoBadge valor={item.descuento_aplicado} />
             </div>
           </div>
@@ -200,39 +211,37 @@ function ItemCard({
         </div>
 
         <div className="flex flex-col gap-2 border-t border-gray-100 pt-2 dark:border-gray-800">
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="min-h-10 flex-1"
-              disabled={liquidado}
-              onClick={() => onVendido(item.id, Number(item.cantidad ?? 0))}
-            >
-              Marcar vendido
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="min-h-10 px-3"
-              title="Quitar por error de carga"
-              disabled={liquidado}
-              onClick={() => onReducirCarga(item.id, Number(item.cantidad ?? 0))}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="min-h-10 w-full"
+            disabled={liquidado}
+            onClick={() => onVendido(item.id, Number(item.cantidad ?? 0))}
+          >
+            Vendido
+          </Button>
           {vendHist > 0 ? (
             <Button
               size="sm"
-              variant="secondary"
+              variant="outline"
               className="min-h-10 w-full"
-              onClick={() =>
-                onArreglarVendido(item.id, Number(item.cantidad ?? 0), vendHist)
-              }
+              title="Corregir unidades vendidas registradas por error"
+              onClick={() => onArreglarVendido(item.id, rest, vendHist)}
             >
-              Arreglar cantidad vendida
+              Arreglar vendido
             </Button>
           ) : null}
+          <Button
+            size="sm"
+            variant="outline"
+            className="min-h-10 w-full gap-1"
+            title="Quitar por error de carga"
+            disabled={liquidado}
+            onClick={() => onReducirCarga(item.id, Number(item.cantidad ?? 0))}
+          >
+            <Trash2 className="h-4 w-4" />
+            Quitar por error de carga
+          </Button>
         </div>
       </div>
     </article>
@@ -276,6 +285,8 @@ export default function PorVencerListMobile({
         const exp = gruposExpandidos[key] ?? false;
         const restG = grp.reduce((s, x) => s + (Number(x.cantidad) || 0), 0);
         const vendG = grp.reduce((s, x) => s + (Number(x.cantidad_vendida_acumulada) || 0), 0);
+        const montoG = grp.reduce((s, x) => s + (Number(x.monto) || 0), 0);
+        const tieneMontoG = grp.some((x) => x.monto != null);
         const liquidadoG = restG <= 0;
         const primero = grp[0]!;
         const dias = diasHastaVencimiento(primero.fecha_vencimiento);
@@ -310,11 +321,6 @@ export default function PorVencerListMobile({
                   <p className="mt-1 font-mono text-[11px] text-gray-500">
                     {primero.codigo_barras}
                   </p>
-                  {grp.some((x) => x.venta_posterior_a_carga) ? (
-                    <p className="mt-1.5 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
-                      Venta posterior a la carga
-                    </p>
-                  ) : null}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -330,9 +336,14 @@ export default function PorVencerListMobile({
                   </p>
                 ) : null}
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <StatPill label="Restante" value={restG.toFixed(0)} emphasize />
                   <StatPill label="Vendido" value={vendG.toFixed(0)} emphasize />
+                  <StatPill
+                    label="Monto"
+                    value={tieneMontoG ? formatMoneda(montoG) : '—'}
+                    emphasize
+                  />
                   <div className="rounded-lg border border-gray-200 bg-gray-50/80 px-2.5 py-1.5 dark:border-gray-700 dark:bg-slate-800/50">
                     <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
                       Descuento

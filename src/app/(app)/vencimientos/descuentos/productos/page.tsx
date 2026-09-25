@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
@@ -45,7 +45,7 @@ export default function ProductosConDescuentosPage() {
   const [sucursales, setSucursales] = useState<Array<{ sucursal: number; nombrefantasia: string }>>([]);
   const [inicializadoSucursal, setInicializadoSucursal] = useState(false);
 
-  async function cargar() {
+  const cargar = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -71,11 +71,11 @@ export default function ProductosConDescuentosPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [sucursalSel, inicializadoSucursal]);
 
   useEffect(() => {
     void cargar();
-  }, [sucursalSel, inicializadoSucursal]);
+  }, [cargar]);
 
   const categoriasFinales = useMemo(
     () => Array.from(new Set(items.map((i) => i.categoria_final))).sort((a, b) => a.localeCompare(b)),

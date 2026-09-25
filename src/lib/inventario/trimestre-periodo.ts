@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { fechaHoyArgentinaYmd, rangoFechasArgentinaIso } from '@/lib/utils';
+import { rangoFechasArgentinaIso } from '@/lib/utils';
 
 export type Cuatrimestre = 1 | 2 | 3 | 4;
 

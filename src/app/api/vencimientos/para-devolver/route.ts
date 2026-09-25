@@ -1,10 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
 import { getOperadorRbacContext, isSuperAdminContext } from '@/lib/auth/rbac';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
-import { resolverVentaPosteriorFlags } from '@/lib/vencimientos-venta-posterior';
 import { getPadronPorProductos } from '@/lib/padron-final-db';
 import { fechaHoyArgentinaYmd } from '@/lib/utils';
 import {
@@ -12,6 +9,7 @@ import {
   macroParaReglaDevolucion,
   rangoFechasVencimientoQuery,
 } from '@/lib/vencimientos/para-devolver';
+import { normalizarTextoBusqueda } from '@/lib/text-normalize';
 import {
   obligatorioObservacionDevolucion,
   ratioVendidoSobreOriginal,
@@ -19,12 +17,8 @@ import {
 } from '@/lib/vencimientos/observacion-devolucion';
 import {
   cargarMapaDrogueriaPorCodlab,
-  cargarIdSubrubroPorProducto,
-  cargarMedicamentoMetaPorProducto,
-  cargarNombresPsicofarmacos,
   cargarIdsTrazables,
   esProductoTrazable,
-  controlVencimientoDesdeFila,
   macroBultoParaProducto,
   metaMedicamentoPorProducto,
   padronParaProducto,
@@ -36,7 +30,39 @@ import {
   FILTRO_TRAZABLES,
   SIN_DROGUERIA_ASIGNADA,
 } from '@/lib/vencimientos-drogueria-lab';
+import {
+  cargarIdSubrubroPorProducto,
+  cargarMedicamentoMetaPorProducto,
+  cargarNombresPsicofarmacos,
+} from '@/lib/vencimientos-drogueria-lab-server';
 import { parsePaginationParams, slicePaginated } from '@/lib/api/pagination';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
+
+/** Control padre tal como lo devuelve el join de PostgREST. */
+type ControlVencimientoJoin = { sucursal_id?: number; categoria_macro?: string | null };
+
+/** Línea de `controles_vencimientos_detalle` con su control (el join puede venir como objeto o array). */
+type DetalleVencimientoJoin = {
+  id: string;
+  control_id: string;
+  producto_id_sistema: string | null;
+  codigo_barras: string | null;
+  descripcion: string | null;
+  presentacion: string | null;
+  laboratorio: string | null;
+  fecha_vencimiento: string | null;
+  fecha_registro?: string | null;
+  cantidad: number | null;
+  vendido?: number | null;
+  devuelto?: number | null;
+  accion_observacion?: string | null;
+  controles_vencimientos?: ControlVencimientoJoin | ControlVencimientoJoin[] | null;
+};
+
+/** Igual, pero con `!inner`: el control siempre viene como objeto. */
+type DetalleVencimientoDevolucion = Omit<DetalleVencimientoJoin, 'controles_vencimientos'> & {
+  controles_vencimientos?: ControlVencimientoJoin | null;
+};
 
 type ItemRow = {
   id: string;
@@ -57,7 +83,6 @@ type ItemRow = {
   ratio_vendido_sobre_original: number | null;
   /** Si hace falta texto para poder devolver (vendido &lt; 50 % de la carga original). */
   obligatorio_observacion_devolucion: boolean;
-  venta_posterior_a_carga?: boolean;
   codlab?: number | null;
   drogueria_devolucion?: string | null;
   trazable?: boolean;
@@ -96,32 +121,30 @@ function enriquecerItem(
  * BIENESTAR → menos de 10 días para vencer; FARMA/PSICO → mes anterior al vencimiento (&lt;40 días en ese mes).
  */
 export async function GET(request: NextRequest) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-
   const rbacCtx = await getOperadorRbacContext();
-  const omitirObsSiSuperadmin = rbacCtx ? isSuperAdminContext(rbacCtx) : false;
+  if (!rbacCtx) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+
+  const omitirObsSiSuperadmin = isSuperAdminContext(rbacCtx);
 
   const { searchParams } = new URL(request.url);
-  const checkVentaPosterior = searchParams.get('check_venta_posterior') !== '0';
   const pagination = parsePaginationParams(searchParams);
   const drogueriaFiltro = String(searchParams.get('drogueria') ?? '').trim();
   const categoriaFiltro = String(
     searchParams.get('categoria_macro') ?? searchParams.get('categoria') ?? ''
   ).trim();
-  const busqueda = String(searchParams.get('busqueda') ?? '').trim().toLowerCase();
+  const busqueda = normalizarTextoBusqueda(searchParams.get('busqueda')).trim().toLowerCase();
   const sortKey = String(searchParams.get('sortBy') ?? 'vencimiento').trim();
   const sortDir = searchParams.get('sortDir') === 'desc' ? 'desc' : 'asc';
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   const admin = await createAdminClient();
+  const sucursalNum = parseInt(sucursalId, 10);
 
   const hoyStr = fechaHoyArgentinaYmd();
   const { desde: desdeStr, hasta: hastaStr } = rangoFechasVencimientoQuery(hoyStr);
 
-  const rows: any[] = [];
+  const rows: DetalleVencimientoJoin[] = [];
   const chunkSize = 1000;
   let from = 0;
   while (true) {
@@ -130,7 +153,7 @@ export async function GET(request: NextRequest) {
       .select(
         'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, devuelto, accion_observacion, controles_vencimientos!inner(sucursal_id, categoria_macro)'
       )
-      .eq('controles_vencimientos.sucursal_id', parseInt(sucursalId, 10))
+      .eq('controles_vencimientos.sucursal_id', sucursalNum)
       .gte('fecha_vencimiento', desdeStr)
       .lte('fecha_vencimiento', hastaStr)
       .eq('devuelto', 0)
@@ -143,18 +166,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const parsed = (batch ?? []) as any[];
+    const parsed = (batch ?? []) as DetalleVencimientoJoin[];
     rows.push(...parsed);
     if (parsed.length < chunkSize) break;
     from += chunkSize;
   }
-  const fechaRegistroById = new Map<string, string>();
-  for (const r of rows) {
-    const id = String(r.id ?? '');
-    const fr = String(r.fecha_registro ?? '').trim();
-    if (id && fr) fechaRegistroById.set(id, fr);
-  }
-
   const productoIds = Array.from(
     new Set(rows.map((r) => String(r.producto_id_sistema ?? '').trim()).filter(Boolean))
   );
@@ -170,6 +186,7 @@ export async function GET(request: NextRequest) {
           cat_macro: v.cat_macro,
           categoria: v.categoria,
           subrubro: v.subrubro,
+          proveedormarrone: v.proveedormarrone,
         };
         const key = String(k).trim();
         if (!key) continue;
@@ -197,7 +214,7 @@ export async function GET(request: NextRequest) {
     console.warn('[para-devolver] medicamentos codlab/psico:', (e as Error).message);
   }
   try {
-    nombrePsicoPorId = await cargarNombresPsicofarmacos(admin);
+    nombrePsicoPorId = await cargarNombresPsicofarmacos();
   } catch (e) {
     console.warn('[para-devolver] psicofarmacos:', (e as Error).message);
   }
@@ -293,7 +310,7 @@ export async function GET(request: NextRequest) {
     console.warn('[vencidos] trazables:', (e as Error).message);
   }
 
-  let itemsConDrogueria = baseItems.map((i) => {
+  const itemsConDrogueria = baseItems.map((i) => {
     const meta = metaMedicamentoPorProducto(medicamentoMetaPorProducto, i.producto_id_sistema);
     const codlab = meta?.codlab ?? null;
     const padron = padronParaProducto(padronPorProducto, i.producto_id_sistema);
@@ -369,7 +386,7 @@ export async function GET(request: NextRequest) {
   });
 
   const paginado = slicePaginated(filtrados, pagination);
-  let paginaItems = paginado.data;
+  const paginaItems = paginado.data;
 
   const sinObservacionDevolucionIds = filtrados
     .filter(
@@ -379,32 +396,8 @@ export async function GET(request: NextRequest) {
     )
     .map((i) => i.id);
 
-  let ventaPosteriorMap = new Map<string, boolean>();
-  let ventaPosteriorCheck: 'off' | 'full' | 'skipped_slow_db' | 'skipped_unavailable' = 'off';
-  let ventaPosteriorMysqlLatencyMs: number | null = null;
-
-  if (checkVentaPosterior) {
-    const resolved = await resolverVentaPosteriorFlags(
-      paginaItems.map((i) => ({
-        detalleId: i.id,
-        sucursalId: parseInt(sucursalId, 10),
-        productoId: Number(i.producto_id_sistema),
-        fechaRegistroIso: fechaRegistroById.get(i.id) ?? '',
-      })),
-      true
-    );
-    ventaPosteriorMap = resolved.map;
-    ventaPosteriorCheck = resolved.status;
-    ventaPosteriorMysqlLatencyMs = resolved.mysqlLatencyMs;
-  }
-
-  const items: ItemRow[] = paginaItems.map((i) => ({
-    ...i,
-    venta_posterior_a_carga: ventaPosteriorMap.get(i.id) === true,
-  }));
-
   return NextResponse.json({
-    data: items,
+    data: paginaItems,
     total: paginado.total,
     page: paginado.page,
     pageSize: paginado.pageSize,
@@ -415,35 +408,25 @@ export async function GET(request: NextRequest) {
     hasta: hastaStr,
     droguerias: bultoOpciones,
     sin_drogueria_valor: SIN_DROGUERIA_ASIGNADA,
-    venta_posterior_check: ventaPosteriorCheck,
-    venta_posterior_mysql_latency_ms: ventaPosteriorMysqlLatencyMs,
   });
 }
 
 /** PATCH /api/vencimientos/para-devolver
  * - Body `{ id, accion_observacion }` → guarda observación
- * - `?id=&cantidad=` → marca venta (registra en vencimientos_detalle_ventas)
  * - `?devolver_todos=1` + body `{ ids }` → devolución masiva
  */
 export async function PATCH(request: NextRequest) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-
   const rbacCtx = await getOperadorRbacContext();
-  const omitirObsSiSuperadmin = rbacCtx ? isSuperAdminContext(rbacCtx) : false;
+  if (!rbacCtx) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = rbacCtx.operador;
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const omitirObsSiSuperadmin = isSuperAdminContext(rbacCtx);
+
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   const { searchParams } = new URL(request.url);
-  const id = searchParams.get('id');
   const devolverTodos = searchParams.get('devolver_todos') === '1';
-  const cantidadParam = searchParams.get('cantidad');
-  const cantidadVenta = cantidadParam ? parseInt(cantidadParam, 10) : null;
-  if (cantidadParam && (!Number.isFinite(cantidadVenta) || (cantidadVenta ?? 0) <= 0)) {
-    return NextResponse.json({ error: 'cantidad inválida' }, { status: 400 });
-  }
 
   const rawBody = (await request.json().catch(() => null)) as Record<string, unknown> | null;
 
@@ -460,15 +443,22 @@ export async function PATCH(request: NextRequest) {
       .select(
         'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, cantidad, accion_observacion, controles_vencimientos!inner(sucursal_id, categoria_macro)'
       )
-      .in('id', ids);
+      .in('id', ids)
+      // Solo líneas todavía devolvibles: evita duplicar una devolución ya registrada
+      // (doble click / dos pestañas) o devolver líneas quitadas.
+      .eq('devuelto', 0)
+      .eq('eliminado', 0);
 
     if (detError) {
       return NextResponse.json({ error: detError.message }, { status: 500 });
     }
 
-    const rows = (detalles ?? []) as any[];
+    const rows = (detalles ?? []) as DetalleVencimientoDevolucion[];
     if (rows.length === 0) {
-      return NextResponse.json({ error: 'Registros no encontrados' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'Los registros no existen o ya fueron devueltos. Actualizá el listado.' },
+        { status: 404 }
+      );
     }
 
     for (const r of rows) {
@@ -553,7 +543,8 @@ export async function PATCH(request: NextRequest) {
     const { error: updError } = await admin
       .from('controles_vencimientos_detalle')
       .update({ vendido: 0, devuelto: 1 })
-      .in('id', ids);
+      .in('id', rows.map((r) => String(r.id)))
+      .eq('devuelto', 0);
 
     if (updError) {
       return NextResponse.json({ error: updError.message }, { status: 500 });
@@ -583,7 +574,8 @@ export async function PATCH(request: NextRequest) {
     }
     if (!row) return NextResponse.json({ error: 'Registro no encontrado' }, { status: 404 });
 
-    const sucursalRow = (row as any).controles_vencimientos?.sucursal_id;
+    const sucursalRow = (row as { controles_vencimientos?: ControlVencimientoJoin })
+      .controles_vencimientos?.sucursal_id;
     if (String(sucursalRow) !== String(sucursalId)) {
       return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
     }
@@ -599,71 +591,6 @@ export async function PATCH(request: NextRequest) {
     }
 
     return NextResponse.json({ ok: true, accion_observacion: trimmed || null });
-  }
-
-  if (id && !devolverTodos) {
-    const { data: row, error: rowError } = await admin
-      .from('controles_vencimientos_detalle')
-      .select('id, cantidad, controles_vencimientos!inner(sucursal_id)')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (rowError) {
-      return NextResponse.json({ error: rowError.message }, { status: 500 });
-    }
-    if (!row) return NextResponse.json({ error: 'Registro no encontrado' }, { status: 404 });
-
-    const sucursalRow = (row as any).controles_vencimientos?.sucursal_id;
-    if (String(sucursalRow) !== String(sucursalId)) {
-      return NextResponse.json({ error: 'Sin acceso' }, { status: 403 });
-    }
-
-    const cantidadActual = Number((row as any).cantidad ?? 0);
-    if (!Number.isFinite(cantidadActual) || cantidadActual <= 0) {
-      return NextResponse.json({ error: 'El registro no tiene cantidad disponible' }, { status: 400 });
-    }
-
-    const cantidadAplicar = cantidadVenta ?? cantidadActual;
-    if (cantidadAplicar > cantidadActual) {
-      return NextResponse.json(
-        { error: `La cantidad a vender no puede ser mayor a ${cantidadActual}` },
-        { status: 400 }
-      );
-    }
-
-    const nuevoRestante = cantidadActual - cantidadAplicar;
-    const payload =
-      nuevoRestante <= 0 ? { vendido: 1, cantidad: 0 } : { cantidad: nuevoRestante };
-
-    const { error } = await admin.from('controles_vencimientos_detalle').update(payload).eq('id', id);
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    const restanteFinal = Math.max(0, nuevoRestante);
-    const { error: ventaErr } = await admin.from('vencimientos_detalle_ventas').insert({
-      detalle_id: id,
-      cantidad_vendida: cantidadAplicar,
-      cantidad_restante_despues: restanteFinal,
-      linea_vendida_completa: restanteFinal <= 0 ? 1 : 0,
-      usuario_id: operador.idoperador,
-      sucursal_id: parseInt(sucursalId, 10),
-    });
-    if (ventaErr) {
-      console.error('vencimientos_detalle_ventas insert (para-devolver):', ventaErr);
-      return NextResponse.json(
-        {
-          error: `Actualizado el stock pero no se pudo registrar el historial de venta: ${ventaErr.message}`,
-        },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({
-      ok: true,
-      cantidad_vendida: cantidadAplicar,
-      cantidad_restante: restanteFinal,
-    });
   }
 
   return NextResponse.json({ error: 'Solicitud inválida' }, { status: 400 });

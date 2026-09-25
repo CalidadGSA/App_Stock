@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  canManageSuperadminRole,
   requireRolesManageRbac,
   type AppRoleRow,
 } from '@/lib/auth/rbac';

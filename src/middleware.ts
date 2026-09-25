@@ -3,10 +3,15 @@ import {
   hasValidSessionFormat,
   OPERADOR_COOKIE_NAME,
 } from '@/lib/auth/sessionFormat';
-import { AUTH_COOKIE_NAMES, CAMBIO_SUCURSAL_COOKIE } from '@/lib/auth/cookie-config';
+import {
+  AUTH_COOKIE_NAMES,
+  CAMBIO_SUCURSAL_COOKIE,
+  cookieSecureFlag,
+  SUCURSAL_COOKIE_NAME,
+} from '@/lib/auth/cookie-config';
 
 function clearAuthCookies(response: NextResponse) {
-  const secure = process.env.NODE_ENV === 'production';
+  const secure = cookieSecureFlag();
   for (const name of AUTH_COOKIE_NAMES) {
     response.cookies.set(name, '', {
       httpOnly: true,
@@ -40,7 +45,10 @@ export async function middleware(request: NextRequest) {
 
   const operadorCookie = request.cookies.get(OPERADOR_COOKIE_NAME)?.value;
   const hasSession = hasValidSessionFormat(operadorCookie);
-  const sucursalId = request.cookies.get('sucursal_id')?.value?.trim();
+  // Solo formato (firma y pertenencia al operador se verifican en Node: getSucursalSession).
+  const sucursalId = hasValidSessionFormat(request.cookies.get(SUCURSAL_COOKIE_NAME)?.value)
+    ? 'ok'
+    : '';
   const cambioSucursalVoluntario =
     request.cookies.get(CAMBIO_SUCURSAL_COOKIE)?.value === '1';
 

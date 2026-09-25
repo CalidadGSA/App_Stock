@@ -1,32 +1,25 @@
 import { redirect } from 'next/navigation';
-import { cookies } from 'next/headers';
 import AppShell from '@/components/AppShell';
 import MaintenanceGuard from '@/components/MaintenanceGuard';
-import { getOperadorSession } from '@/lib/auth/session';
 import { getOperadorRbacContext, permissionsToArray } from '@/lib/auth/rbac';
 import type { RolOperador } from '@/lib/auth/roles';
+import { getSucursalSession } from '@/lib/sucursales/sucursal-session';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const operador = await getOperadorSession();
-  if (!operador) {
+  // Una sola verificación de sesión + rol (valida session_version en BD).
+  const rbacCtx = await getOperadorRbacContext();
+  if (!rbacCtx) {
     // Ruta API que limpia cookies con los mismos atributos (evita bucle /login ↔ /dashboard).
     redirect('/api/auth/session-expired');
   }
+  const operador = rbacCtx.operador;
+  const permissions = permissionsToArray(rbacCtx);
 
-  const rbacCtx = await getOperadorRbacContext();
-  const permissions = rbacCtx ? permissionsToArray(rbacCtx) : [];
+  const sucursal = await getSucursalSession();
+  const sucursalNombre = sucursal?.nombre ?? '';
+  const sucursalCodigo = sucursal?.codigo ?? '';
 
-  let sucursalNombre = '';
-  let sucursalCodigo = '';
-  try {
-    const cookieStore = await cookies();
-    sucursalNombre = cookieStore.get('sucursal_nombre')?.value ?? '';
-    sucursalCodigo = cookieStore.get('sucursal_codigo')?.value ?? '';
-  } catch {
-    // Ignorar si cookies fallan
-  }
-
-  const rol = (rbacCtx?.operador.rol ?? operador.rol ?? 'operador_sucursal') as RolOperador;
+  const rol = (operador.rol ?? 'operador_sucursal') as RolOperador;
 
   return (
     <MaintenanceGuard>

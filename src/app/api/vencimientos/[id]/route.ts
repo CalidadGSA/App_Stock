@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 export async function GET(
   _request: NextRequest,
@@ -11,8 +11,7 @@ export async function GET(
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
   const { id } = await params;
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
 
   const admin = await createAdminClient();
   const { data, error } = await admin

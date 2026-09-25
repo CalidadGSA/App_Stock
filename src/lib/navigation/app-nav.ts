@@ -1,7 +1,10 @@
 import type { LucideIcon } from 'lucide-react';
 import {
+  TriangleAlert,
+  Boxes,
   LayoutDashboard,
   BookOpen,
+  Gauge,
   ClipboardPlus,
   ClipboardList,
   Search,
@@ -61,6 +64,13 @@ export const APP_NAV_SECTIONS: AppNavSection[] = [
         label: 'Dashboard',
         href: '/dashboard',
         icon: LayoutDashboard,
+        permission: 'dashboard.view',
+      },
+      {
+        id: 'kpis',
+        label: 'KPIs mensuales',
+        href: '/kpis',
+        icon: Gauge,
         permission: 'dashboard.view',
       },
       {
@@ -250,6 +260,20 @@ export const APP_NAV_SECTIONS: AppNavSection[] = [
         href: '/admin/padron-productos',
         icon: Table2,
         permission: 'admin.padron_productos',
+      },
+      {
+        id: 'incidencias',
+        label: 'Incidencias',
+        href: '/admin/incidencias',
+        icon: TriangleAlert,
+        permission: 'admin.incidencias',
+      },
+      {
+        id: 'base-productos',
+        label: 'Generar bases',
+        href: '/admin/base-productos',
+        icon: Boxes,
+        permission: 'admin.base_productos',
       },
     ],
   },

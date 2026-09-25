@@ -1,5 +1,6 @@
-import { CAMBIO_SUCURSAL_COOKIE, SUCURSAL_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
+import { CAMBIO_SUCURSAL_COOKIE } from '@/lib/auth/cookie-config';
 import type { TipoControlInventario } from '@/lib/inventario/tipo-control';
+import { setSucursalSessionCookie } from '@/lib/sucursales/sucursal-session';
 import { cookies } from 'next/headers';
 
 /** Admin puede operar auditorías integrales sin depender de la cookie de sucursal activa. */
@@ -38,18 +39,14 @@ export function sucursalIdParaStockLegacy(params: {
 /** Alinea la cookie de sucursal con el control (stock legacy usa sucursal_id de cookie). */
 export async function sincronizarCookieSucursal(
   sucursalId: number | string,
-  nombreSucursal: string
+  nombreSucursal: string,
+  esDrogueria: boolean
 ): Promise<void> {
   const cookieStore = await cookies();
-  const opts = {
-    httpOnly: true,
-    path: '/',
-    maxAge: SUCURSAL_SESSION_MAX_AGE_SEC,
-    sameSite: 'lax' as const,
-  };
-  const sid = String(sucursalId);
-  cookieStore.set('sucursal_id', sid, opts);
-  cookieStore.set('sucursal_nombre', nombreSucursal, opts);
-  cookieStore.set('sucursal_codigo', sid, opts);
+  await setSucursalSessionCookie(cookieStore, {
+    id: sucursalId,
+    nombre: nombreSucursal,
+    esDrogueria,
+  });
   cookieStore.delete(CAMBIO_SUCURSAL_COOKIE);
 }

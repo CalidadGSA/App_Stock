@@ -1,11 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PadronProductoFicha } from '@/lib/padron-productos-lookup';
 import {
+  esCategoriaMacro,
   esCategoriaMacroSinPadron,
   filtrarQueryBaseProductosPorMacro,
   type CategoriaMacroInventarioDiario,
 } from '@/lib/inventario/categoria-macro';
 import { leerVueltasPsicosSucursal } from '@/lib/inventario/vueltas-psicos-sucursal';
+import { filtrarIdsSinConflictoMacroPadron } from '@/lib/padron-productos-lookup';
+import { baseRequiereFiltroMacroPadron } from '@/lib/inventario/macro-base-legacy';
 import type { UbicacionDrogueria } from '@/lib/inventario/ubicacion-drogueria';
 
 export type { UbicacionDrogueria } from '@/lib/inventario/ubicacion-drogueria';
@@ -96,11 +99,19 @@ export async function seleccionarIdsInventarioDiarioDrogueria(
     const niveles = Array.from(new Set(rows.map((row) => Number(row.vecesinventariado) || 0)));
 
     for (const nivel of niveles) {
+      const candidatos: number[] = [];
       for (const row of rows) {
         if (Number(row.vecesinventariado) !== nivel) continue;
         const id = Number(row.idproducto);
         if (!Number.isFinite(id) || vistos.has(id) || idsExcluidos.has(id)) continue;
         vistos.add(id);
+        candidatos.push(id);
+      }
+      const validos = baseRequiereFiltroMacroPadron(trimestreActual)
+        ? await filtrarIdsSinConflictoMacroPadron(candidatos, 'PSICOTROPICOS')
+        : candidatos;
+
+      for (const id of validos) {
         seleccionados.push(id);
         if (seleccionados.length === objetivo) return seleccionados;
       }
@@ -130,10 +141,20 @@ export async function seleccionarIdsInventarioDiarioDrogueria(
     if (error) throw error;
     if (!baseRows || baseRows.length === 0) break;
 
+    const candidatos: number[] = [];
     for (const r of baseRows as Array<{ idproducto: number }>) {
       const id = Number(r.idproducto);
       if (!Number.isFinite(id) || vistos.has(id) || idsExcluidos.has(id)) continue;
       vistos.add(id);
+      candidatos.push(id);
+    }
+
+    const validos =
+      baseRequiereFiltroMacroPadron(trimestreActual) && esCategoriaMacro(categoriaMacro)
+        ? await filtrarIdsSinConflictoMacroPadron(candidatos, categoriaMacro)
+        : candidatos;
+
+    for (const id of validos) {
       seleccionados.push(id);
       if (seleccionados.length === objetivo) break;
     }

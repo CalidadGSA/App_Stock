@@ -6,7 +6,7 @@ import { parsePaginationParams } from '@/lib/api/pagination';
 
 /**
  * Listado por vencer **multi-sucursal** (solo admin / superadmin).
- * No incluye verificación MySQL de “venta posterior a la carga” (solo aplica en GET /api/vencimientos/por-vencer por sucursal).
+ * Los saldos ya vienen descontados por el chequeo automático de ventas de cada sucursal.
  */
 export async function GET(request: NextRequest) {
   const guard = await requirePermission('vencimientos.consolidado');
@@ -38,7 +38,6 @@ export async function GET(request: NextRequest) {
     categoriaFiltro,
     laboratorioFiltro,
     vista,
-    includeVentaPosteriorMysql: false,
     page: pagination.page,
     pageSize: pagination.pageSize,
     unpaginated: pagination.unpaginated,

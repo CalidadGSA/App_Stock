@@ -2,11 +2,36 @@ import { EXPORT_MAX_ROWS } from '@/lib/api/pagination';
 import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
 import { esLineaSinLiquidar } from '@/lib/vencimientos/por-vencer-saldo';
 import { getPadronPorProductos, getPadronPerfumeriaMap } from '@/lib/padron-final-db';
+import { getPreciosVentaPorProductos } from '@/lib/padron-productos-lookup';
 import { sumarCantidadVendidaPorDetalle } from '@/lib/vencimientos-detalle-ventas';
 import { createAdminClient } from '@/lib/supabase/server';
 import { pasaFiltroMesAnioYmd } from '@/lib/vencimientos-mes-anio-filtro';
+import { normalizarTextoBusqueda } from '@/lib/text-normalize';
 
 type AdminClient = Awaited<ReturnType<typeof createAdminClient>>;
+
+/** Control padre según el join de PostgREST (con `sucursales` sólo en consolidado). */
+type ControlVencimientoJoin = {
+  sucursal_id?: number;
+  sucursales?: { nombrefantasia?: string | null } | null;
+};
+
+/** Fila cruda de `controles_vencimientos_detalle` (columnas de `columnasDetalle` + join). */
+type DetalleRow = {
+  id: string;
+  control_id: string;
+  producto_id_sistema: string;
+  codigo_barras: string;
+  descripcion: string;
+  presentacion: string | null;
+  laboratorio: string | null;
+  fecha_vencimiento: string;
+  fecha_registro: string | null;
+  cantidad: number | null;
+  vendido: number | null;
+  accion_observacion: string | null;
+  controles_vencimientos?: ControlVencimientoJoin | ControlVencimientoJoin[] | null;
+};
 
 type ItemRow = {
   id: string;
@@ -21,6 +46,11 @@ type ItemRow = {
   cantidad: number;
   accion_observacion: string | null;
   cantidad_vendida_acumulada: number;
+  /** Cantidad cargada originalmente (`cantidad` es el saldo restante). */
+  cantidad_original: number;
+  /** Cantidad descontada por el chequeo automático de ventas. */
+  cantidad_vendida_auto: number;
+  ventas_auto_check_at: string | null;
   vendido: number;
   sucursal_id: number;
   sucursal_nombre?: string | null;
@@ -54,6 +84,21 @@ function parseFechaISOaUTC(fecha: string): number {
   return Date.UTC(y, m - 1, d);
 }
 
+/** Rango [primer día, último día] del mes/año de vencimiento elegido (si hay año). */
+function limitesMesAnioVencimiento(
+  mes: number | undefined,
+  anio: number | undefined
+): { desde: string; hasta: string } | null {
+  if (anio == null || !Number.isFinite(anio) || anio <= 0) return null;
+  const mesIni = mes != null && mes >= 1 && mes <= 12 ? mes : 1;
+  const mesFin = mes != null && mes >= 1 && mes <= 12 ? mes : 12;
+  const ultimoDia = new Date(Date.UTC(anio, mesFin, 0)).getUTCDate();
+  return {
+    desde: `${anio}-${String(mesIni).padStart(2, '0')}-01`,
+    hasta: `${anio}-${String(mesFin).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`,
+  };
+}
+
 export type VistaPorVencerList = 'por_vencer' | 'vendidos' | 'vencidos' | 'vendido_parcial';
 
 export type SortKeyPorVencerList =
@@ -75,8 +120,6 @@ export type GetPorVencerListArgs = {
   categoriaFiltro: string;
   laboratorioFiltro?: string;
   vista: VistaPorVencerList;
-  /** Solo vista sucursal: consulta MySQL Onze (pesada). Nunca en consolidado. */
-  includeVentaPosteriorMysql: boolean;
   /**
    * Si es false, no filtra por cat_macro/categoría en el servidor (el cliente filtra sobre el lote ya cargado).
    * Consolidado y APIs que dependen del filtro server-side siguen con true (default).
@@ -88,7 +131,8 @@ export type GetPorVencerListArgs = {
   busqueda?: string;
   mesVenc?: number;
   anioVenc?: number;
-  soloVentaPosterior?: boolean;
+  /** Solo líneas donde el chequeo automático detectó ventas posteriores a la carga. */
+  soloConVentasDetectadas?: boolean;
   sortBy?: SortKeyPorVencerList;
   sortDir?: 'asc' | 'desc';
   /** Paginar por filas agrupadas (producto + vencimiento). Solo vista sucursal. */
@@ -96,12 +140,6 @@ export type GetPorVencerListArgs = {
   /** Enriquecer todo el lote y devolver solo líneas con descuento (export/listado descuentos). */
   modoListaDescuentos?: boolean;
 };
-
-export type VentaPosteriorCheckStatus =
-  | 'off'
-  | 'full'
-  | 'skipped_slow_db'
-  | 'skipped_unavailable';
 
 export type PorVencerListPayload = {
   data: unknown[];
@@ -119,14 +157,15 @@ export type PorVencerListPayload = {
   vista: VistaPorVencerList;
   desde: string;
   hasta: string;
-  venta_posterior_check?: VentaPosteriorCheckStatus;
-  venta_posterior_mysql_latency_ms?: number | null;
+  /** Suma de PVP × cantidad restante sobre el lote filtrado (no solo la página). */
+  montoTotal: number;
   totales?: {
     lineas: number;
     cajasRestantes: number;
     cajasVendidasHist: number;
     cajasMovimientoTotal: number;
     lineasLiquidados: number;
+    montoTotal: number;
   };
 };
 
@@ -146,7 +185,6 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     categoriaFiltro,
     laboratorioFiltro = '',
     vista,
-    includeVentaPosteriorMysql,
     aplicarFiltrosPadronEnServidor = true,
     page = 1,
     pageSize = 20,
@@ -154,7 +192,7 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     busqueda = '',
     mesVenc,
     anioVenc,
-    soloVentaPosterior = false,
+    soloConVentasDetectadas = false,
     sortBy = 'vencimiento',
     sortDir = 'asc',
     agruparFilas = false,
@@ -164,19 +202,41 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
   if (!consolidado && !sucursalCookie) {
     return { ok: false, error: 'Sucursal no seleccionada', status: 400 };
   }
-  if (includeVentaPosteriorMysql && consolidado) {
-    return { ok: false, error: 'Venta posterior no aplica a consolidado', status: 500 };
-  }
 
   const hoyStr = fechaHoyArgentinaYmd();
   const hoyMid = parseFechaISOaUTC(hoyStr);
-  const hasta = ymdAddDays(hoyStr, days);
-  const desdePasado = ymdAddDays(hoyStr, -days);
 
-  const selectNormal =
-    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, accion_observacion, controles_vencimientos!inner(sucursal_id)';
-  const selectConsolidado =
-    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, accion_observacion, controles_vencimientos!inner(sucursal_id, sucursales(nombrefantasia))';
+  // El filtro "Mes/Año de vencimiento" es absoluto y puede apuntar a un mes fuera de la
+  // ventana relativa de "Periodo" (days/daysMin). Como todo vence a fin de mes, ensanchamos
+  // esa ventana (solo para esta consulta, no se devuelve en el payload) para que ambos
+  // filtros compongan bien y no desaparezcan productos por una interacción no evidente.
+  let diasQuery = days;
+  let diasMinQuery = daysMin;
+  const limiteMesAnio = limitesMesAnioVencimiento(mesVenc, anioVenc);
+  if (limiteMesAnio) {
+    const diasHastaInicioLimite = Math.floor(
+      (parseFechaISOaUTC(limiteMesAnio.desde) - hoyMid) / 86400000
+    );
+    const diasHastaFinLimite = Math.floor(
+      (parseFechaISOaUTC(limiteMesAnio.hasta) - hoyMid) / 86400000
+    );
+    if (vista === 'vencidos') {
+      if (diasHastaInicioLimite < 0) {
+        diasQuery = Math.max(diasQuery, Math.abs(diasHastaInicioLimite));
+      }
+    } else {
+      if (diasHastaFinLimite > diasQuery) diasQuery = diasHastaFinLimite;
+      if (diasHastaInicioLimite < diasMinQuery) diasMinQuery = Math.max(0, diasHastaInicioLimite);
+    }
+  }
+
+  const hasta = ymdAddDays(hoyStr, diasQuery);
+  const desdePasado = ymdAddDays(hoyStr, -diasQuery);
+
+  const columnasDetalle =
+    'id, control_id, producto_id_sistema, codigo_barras, descripcion, presentacion, laboratorio, fecha_vencimiento, fecha_registro, cantidad, vendido, accion_observacion';
+  const selectNormal = `${columnasDetalle}, controles_vencimientos!inner(sucursal_id)`;
+  const selectConsolidado = `${columnasDetalle}, controles_vencimientos!inner(sucursal_id, sucursales(nombrefantasia))`;
 
   const buildDetalleQuery = () => {
     let q = admin
@@ -207,7 +267,7 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
 
   // Supabase puede devolver un maximo de ~1000 filas por consulta.
   // Leemos en paginas para evitar truncar consolidado y exportaciones.
-  const rows: any[] = [];
+  const rows: DetalleRow[] = [];
   const chunkSize = 1000;
   let from = 0;
   while (true) {
@@ -216,7 +276,7 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     if (error) {
       return { ok: false, error: error.message, status: 500 };
     }
-    const parsed = (batch ?? []) as any[];
+    const parsed = (batch ?? []) as unknown as DetalleRow[];
     rows.push(...parsed);
     if (parsed.length < chunkSize) break;
     from += chunkSize;
@@ -227,15 +287,15 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     const dias = Math.floor((fechaV - hoyMid) / 86400000);
     if (vista === 'vencidos') {
       if (!esLineaSinLiquidar(r.cantidad, r.vendido)) return false;
-      return dias < 0 && dias >= -days;
+      return dias < 0 && dias >= -diasQuery;
     }
     if (vista === 'vendidos') {
-      if (dias < daysMin) return false;
+      if (dias < diasMinQuery) return false;
       const cant = Number(r.cantidad ?? 0);
       const ven = Number(r.vendido ?? 0);
       return cant <= 0 || ven === 1;
     }
-    return dias >= daysMin;
+    return dias >= diasMinQuery;
   });
 
   const ventasPorDetalle = await sumarCantidadVendidaPorDetalle(
@@ -246,10 +306,9 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
   const sucursalIdCookieNum = sucursalCookie ? parseInt(sucursalCookie, 10) : 0;
 
   const items: ItemRow[] = rowsDentroRango.map((r) => {
-    const cv = r.controles_vencimientos as {
-      sucursal_id?: number;
-      sucursales?: { nombrefantasia?: string | null } | null;
-    };
+    const cv = (Array.isArray(r.controles_vencimientos)
+      ? r.controles_vencimientos[0]
+      : r.controles_vencimientos) as ControlVencimientoJoin | undefined;
     const sid = consolidado ? Number(cv?.sucursal_id ?? 0) : sucursalIdCookieNum;
     const sn = consolidado
       ? String(cv?.sucursales?.nombrefantasia ?? '').trim() || (sid ? `Sucursal ${sid}` : '')
@@ -270,6 +329,11 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
         return t ? t : null;
       })(),
       cantidad_vendida_acumulada: ventasPorDetalle.get(String(r.id)) ?? 0,
+      // Sin migración 027: original = restante + vendido acumulado del historial.
+      cantidad_original:
+        Number(r.cantidad ?? 0) + (ventasPorDetalle.get(String(r.id)) ?? 0),
+      cantidad_vendida_auto: 0,
+      ventas_auto_check_at: null,
       vendido: Number(r.vendido ?? 0) ? 1 : 0,
       sucursal_id: sid,
       sucursal_nombre: sn,
@@ -287,10 +351,6 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
       : vista === 'por_vencer' || vista === 'vencidos'
         ? items.filter((i) => esLineaSinLiquidar(i.cantidad, i.vendido))
         : items;
-
-  let ventaPosteriorMap = new Map<string, boolean>();
-  let ventaPosteriorCheck: VentaPosteriorCheckStatus = 'off';
-  let ventaPosteriorMysqlLatencyMs: number | null = null;
 
   let padronMap = new Map<string, { cat_macro: string | null; categoria: string | null; subrubro: string | null }>();
   let padronPerfumeria: Awaited<ReturnType<typeof getPadronPerfumeriaMap>> | null = null;
@@ -316,7 +376,7 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     };
   });
 
-  const termBusqueda = busqueda.trim().toLowerCase();
+  const termBusqueda = normalizarTextoBusqueda(busqueda).trim().toLowerCase();
   if (termBusqueda) {
     candidatos = candidatos.filter((i) => {
       const texto = [
@@ -379,22 +439,9 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     )
   ).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
 
-  if (soloVentaPosterior && includeVentaPosteriorMysql) {
-    const resolved = await (
-      await import('@/lib/vencimientos-venta-posterior')
-    ).resolverVentaPosteriorFlags(
-      candidatos.map((i) => ({
-        detalleId: i.id,
-        sucursalId: Number(i.sucursal_id),
-        productoId: Number(i.producto_id_sistema),
-        fechaRegistroIso: String(i.fecha_registro ?? ''),
-      })),
-      true
-    );
-    ventaPosteriorMap = resolved.map;
-    ventaPosteriorCheck = resolved.status;
-    ventaPosteriorMysqlLatencyMs = resolved.mysqlLatencyMs;
-    candidatos = candidatos.filter((i) => ventaPosteriorMap.get(i.id) === true);
+  if (soloConVentasDetectadas) {
+    // Modo manual: ventas = historial acumulado (no sync auto).
+    candidatos = candidatos.filter((i) => Number(i.cantidad_vendida_acumulada ?? 0) > 0);
   }
 
   const paginado = modoListaDescuentos
@@ -414,6 +461,18 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
         sortDir,
       });
 
+  const precios = await getPreciosVentaPorProductos(
+    admin,
+    candidatos.map((i) => i.producto_id_sistema)
+  );
+
+  let montoTotal = 0;
+  for (const i of candidatos) {
+    const precio = precios.get(String(i.producto_id_sistema));
+    if (precio == null) continue;
+    montoTotal += precio * (Number(i.cantidad) || 0);
+  }
+
   let totales: PorVencerListPayload['totales'];
   if (consolidado) {
     let cajasRestantes = 0;
@@ -432,27 +491,11 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
       cajasVendidasHist,
       cajasMovimientoTotal: cajasRestantes + cajasVendidasHist,
       lineasLiquidados,
+      montoTotal,
     };
   }
 
-  let paginaItems = paginado.data;
-
-  if (includeVentaPosteriorMysql && !soloVentaPosterior) {
-    const resolved = await (
-      await import('@/lib/vencimientos-venta-posterior')
-    ).resolverVentaPosteriorFlags(
-      paginaItems.map((i) => ({
-        detalleId: i.id,
-        sucursalId: Number(i.sucursal_id),
-        productoId: Number(i.producto_id_sistema),
-        fechaRegistroIso: String(i.fecha_registro ?? ''),
-      })),
-      true
-    );
-    ventaPosteriorMap = resolved.map;
-    ventaPosteriorCheck = resolved.status;
-    ventaPosteriorMysqlLatencyMs = resolved.mysqlLatencyMs;
-  }
+  const paginaItems = paginado.data;
 
   const reglaCols = await resolverColumnasReglas(admin);
   let descuentosRows: Array<Record<string, unknown>> = [];
@@ -524,11 +567,16 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
         ? categoriasFinalesRows.find((c) => Number(c.id) === catFinalId)?.categoria_final ?? null
         : null;
 
+    const precio = precios.get(String(i.producto_id_sistema)) ?? null;
+    const cantidadRestante = Number(i.cantidad) || 0;
+
     return {
       ...i,
       descuento_aplicado: descuentoAplicado,
       categoria_final_descuento: categoriaFinalDescuento,
-      venta_posterior_a_carga: ventaPosteriorMap.get(i.id) === true,
+      tiene_ventas_detectadas: Number(i.cantidad_vendida_acumulada ?? 0) > 0,
+      precio,
+      monto: precio != null ? precio * cantidadRestante : null,
     };
   });
 
@@ -567,9 +615,10 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
       daysMin,
       vista,
       desde: hoyStr,
-      hasta,
-      venta_posterior_check: ventaPosteriorCheck,
-      venta_posterior_mysql_latency_ms: ventaPosteriorMysqlLatencyMs,
+      // Reporta el "hasta" del periodo tal como fue elegido por el usuario (sin el
+      // ensanchado interno que se hace para poder combinar con el filtro de mes/año).
+      hasta: ymdAddDays(hoyStr, days),
+      montoTotal,
       totales,
     },
   };
@@ -627,7 +676,6 @@ export async function listarProductosConDescuentoAplicado(args: {
     catMacroFiltro: '',
     categoriaFiltro: '',
     vista: 'por_vencer',
-    includeVentaPosteriorMysql: false,
     aplicarFiltrosPadronEnServidor: true,
     modoListaDescuentos: true,
     agruparFilas: false,

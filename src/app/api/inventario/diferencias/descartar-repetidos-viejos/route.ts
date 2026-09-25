@@ -97,9 +97,12 @@ export async function POST(request: NextRequest) {
   const chunkSize = 200;
   for (let i = 0; i < idsDescartar.length; i += chunkSize) {
     const lote = idsDescartar.slice(i, i + chunkSize);
+    // estado: 'descartado' deja registro de que la fila no fue realmente exportada/corregida
+    // (solo descartada por ser una diferencia repetida más vieja), para que no habilite
+    // la línea para una futura auditoría.
     const { error: updErr } = await admin
       .from('controles_inventario_detalle')
-      .update({ ajustado: 1 })
+      .update({ ajustado: 1, estado: 'descartado' })
       .in('id', lote);
     if (updErr) {
       return NextResponse.json({ error: updErr.message }, { status: 500 });

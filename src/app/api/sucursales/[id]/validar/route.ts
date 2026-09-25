@@ -2,10 +2,10 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { isAdminLikeRole } from '@/lib/auth/roles';
 import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
-import { setCookieSucursalEsDrogueria } from '@/lib/sucursales/sesion-drogueria';
+import { setSucursalSessionCookie } from '@/lib/sucursales/sucursal-session';
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { CAMBIO_SUCURSAL_COOKIE, SUCURSAL_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
+import { CAMBIO_SUCURSAL_COOKIE } from '@/lib/auth/cookie-config';
 
 export async function POST(
   request: NextRequest,
@@ -63,16 +63,11 @@ export async function POST(
   }
 
   const cookieStore = await cookies();
-  const cookieOpts = {
-    httpOnly: true,
-    path: '/',
-    maxAge: SUCURSAL_SESSION_MAX_AGE_SEC,
-    sameSite: 'lax' as const,
-  };
-  cookieStore.set('sucursal_id', String(sucursal.sucursal), cookieOpts);
-  cookieStore.set('sucursal_nombre', sucursal.nombrefantasia, cookieOpts);
-  cookieStore.set('sucursal_codigo', String(sucursal.sucursal), cookieOpts);
-  setCookieSucursalEsDrogueria(cookieStore, sucursalEsDrogueria, cookieOpts);
+  await setSucursalSessionCookie(
+    cookieStore,
+    { id: sucursal.sucursal, nombre: sucursal.nombrefantasia, esDrogueria: sucursalEsDrogueria },
+    operador.idoperador
+  );
   cookieStore.delete(CAMBIO_SUCURSAL_COOKIE);
 
   return NextResponse.json({ data: { id: String(sucursal.sucursal), nombre: sucursal.nombrefantasia, codigo_interno: String(sucursal.sucursal) } });

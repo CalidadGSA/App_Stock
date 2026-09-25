@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -18,7 +18,7 @@ import {
   mesesCalendarioSeleccionables,
   opcionesAnioHastaActual,
 } from '@/lib/vencimientos-mes-anio-filtro';
-import { formatDateTime } from '@/lib/utils';
+import { formatDateTime, formatYmForFilename } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { PageSpinner } from '@/components/ui/spinner';
@@ -184,7 +184,7 @@ function DiferenciasCajasValorContent() {
 
   const nombreArchivoBase = useMemo(() => {
     const ym = mesConsultado || mesYm;
-    const partes = ['diferencias-cajas', ym];
+    const partes = ['diferencias-cajas', formatYmForFilename(ym)];
     if (sucursalId) partes.push(`suc-${sucursalId}`);
     if (signo !== 'todas') partes.push(signo);
     return partes.join('_');

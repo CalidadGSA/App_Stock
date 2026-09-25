@@ -23,6 +23,7 @@ import {
   mensajeMaxStockRealUnidades,
 } from '@/lib/inventario/stock-limits';
 import {
+  detalleEstaInventariado,
   esTipoAuditoria,
   inferirTipoControlInventario,
 } from '@/lib/inventario/tipo-control';
@@ -471,7 +472,7 @@ export default function InventarioDiferenciasPage() {
     const live = stockLivePorProductoId[clave];
     if (!live) return;
     aplicarStockLiveALinea(detalleSeleccionadoId, live);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [stockLivePorProductoId, detalleSeleccionadoId, detallesConDiferencias]);
 
   async function handleGuardarLinea(detalle: ControlInventarioDetalle) {
@@ -564,7 +565,6 @@ export default function InventarioDiferenciasPage() {
       sistUnidadesFinal,
       prod
     );
-    const stockSistema = sistCajasNum * unidadesPorCaja + sistUnidadesFinal;
     const stockReal = realCajasNum * unidadesPorCaja + realUnidadesFinal;
 
     setGuardando(true);
@@ -608,7 +608,28 @@ export default function InventarioDiferenciasPage() {
   }
 
   async function handleCerrarDefinitivo() {
-    if (
+    const todos = control?.controles_inventario_detalle ?? [];
+    const noControlados = todos.filter((d) => !detalleEstaInventariado(d));
+    const esAuditoriaStock = esTipoAuditoria(inferirTipoControlInventario(control ?? {}));
+
+    let marcarNoControlados = false;
+
+    if (esAuditoriaStock && noControlados.length > 0) {
+      const choice = await notify.confirmChoice({
+        title: 'Productos sin controlar',
+        message:
+          `Hay ${noControlados.length} producto${noControlados.length !== 1 ? 's' : ''} sin controlar.\n\n` +
+          '• Cancelar: seguís trabajando en esta auditoría.\n' +
+          '• Cerrar: cierra sin marcarlos (no vuelven a la cola de auditoría).\n' +
+          '• Cerrar y marcar no controlados: los marca como controlados sin diferencia y quedan disponibles para la próxima auditoría.',
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Cerrar',
+        altConfirmLabel: 'Cerrar y marcar no controlados',
+        variant: 'warning',
+      });
+      if (choice === 'cancel') return;
+      marcarNoControlados = choice === 'alt';
+    } else if (
       detallesConDiferencias.length > 0 &&
       !(await notify.confirm({
         title: 'Cerrar control',
@@ -620,9 +641,12 @@ export default function InventarioDiferenciasPage() {
     ) {
       return;
     }
+
     try {
       const res = await fetch(`/api/inventario/${id}/cerrar`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ marcar_no_controlados: marcarNoControlados }),
       });
       const json = (await res.json()) as { error?: string };
       if (!res.ok) {

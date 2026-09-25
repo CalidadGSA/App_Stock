@@ -1,5 +1,4 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
 import { canSeeAllInventarioTipos, getOperadorRbacContext } from '@/lib/auth/rbac';
 import {
   validarAccesoControlPorSucursal,
@@ -21,21 +20,19 @@ import {
   idsOperadoresAdminLike,
 } from '@/lib/auth/operadores-admin-like';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 /** GET /api/inventario/[id] - obtener un control con sus detalles */
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const operador = await getOperadorSession();
-  if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-
-  const { id } = await params;
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
   const rbac = await getOperadorRbacContext();
   if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  const operador = rbac.operador;
+
+  const { id } = await params;
+  const sucursalId = await getSucursalIdSesion();
   const esAdmin = canSeeAllInventarioTipos(rbac);
 
   const admin = await createAdminClient();
@@ -80,7 +77,11 @@ export async function GET(
     ? sucursalJoin[0]?.nombrefantasia
     : sucursalJoin?.nombrefantasia;
   if (sucursalNombre && String(data.sucursal_id) !== String(sucursalId ?? '')) {
-    await sincronizarCookieSucursal(data.sucursal_id, sucursalNombre);
+    await sincronizarCookieSucursal(
+      data.sucursal_id,
+      sucursalNombre,
+      await esSucursalDrogueria(admin, Number(data.sucursal_id))
+    );
   }
   // Si el inventario está en progreso, solo puede ingresar el operador que lo abrió o un admin.
   if (

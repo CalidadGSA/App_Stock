@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/server';
 import { requirePermission } from '@/lib/auth/rbac';
 import { syncSucursalesFromLegacy } from '@/lib/legacy-db/syncLegacy';
 

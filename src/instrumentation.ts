@@ -25,4 +25,12 @@ export async function register() {
   } catch (err) {
     console.error('❌ Cron cierre inventarios: falló el registro desde instrumentation', err);
   }
+
+  // Precalienta Onze sin importar mysql-stock (Webpack no puede resolver `tls` de mysql2).
+  try {
+    const { startOnzePoolWarmup } = await import('./instrumentation/register-onze-pool-warmup');
+    startOnzePoolWarmup();
+  } catch (err) {
+    console.warn('[warmup] Falló el registro del warmup Onze:', err);
+  }
 }

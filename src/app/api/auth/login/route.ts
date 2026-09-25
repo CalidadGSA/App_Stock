@@ -1,12 +1,24 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { createOperadorSessionCookie } from '@/lib/auth/session';
-import { SUCURSAL_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
 import {
   esSucursalDrogueria,
   OPERADOR_FUENTE_ONZE,
   OPERADOR_FUENTE_QUANTIO,
 } from '@/lib/sucursales/drogueria';
-import { setCookieSucursalEsDrogueria } from '@/lib/sucursales/sesion-drogueria';
+import { setSucursalSessionCookie } from '@/lib/sucursales/sucursal-session';
+import { registrarIntentoLogin, verificarRateLimitLogin } from '@/lib/auth/login-rate-limit';
+import {
+  upsertOperadorErpEnSupabase,
+  validarOperadorOnzeLive,
+  type OperadorErpValidado,
+  type ValidacionErpResult,
+} from '@/lib/auth/erp-operador-login';
+import {
+  upsertOperadorQuantioEnSupabase,
+  validarOperadorQuantioLive,
+  type OperadorQuantioValidado,
+  type ValidacionQuantioResult,
+} from '@/lib/auth/quantio-operador-login';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -65,103 +77,89 @@ async function logAuth(admin: AdminClient, params: AuthLogParams) {
   }
 }
 
+/**
+ * Valida operador + código contra el ERP correspondiente a la sucursal elegida
+ * (droguería → Quantio/plexdr; resto → onze_center) y espeja el operador en Supabase.
+ *
+ * Si el ERP no responde se cae a `operadores` de Supabase, para que una caída de la base
+ * legacy no deje a nadie afuera.
+ */
 async function resolverOperadorLogin(
   admin: AdminClient,
   operador: string,
   codigo: number,
   esDrogueria: boolean
 ): Promise<ResolverOperadorResult> {
-  if (esDrogueria) {
-    const { data: row, error } = await admin
+  const fuente = esDrogueria ? OPERADOR_FUENTE_QUANTIO : OPERADOR_FUENTE_ONZE;
+
+  const validacion: ValidacionErpResult | ValidacionQuantioResult = esDrogueria
+    ? await validarOperadorQuantioLive(operador, codigo)
+    : await validarOperadorOnzeLive(operador, codigo);
+
+  if (validacion.ok && esDrogueria) {
+    // El flujo Quantio ya mapea el rol desde `Administrador`.
+    const op = validacion.operador as OperadorQuantioValidado;
+    const { rol, app_role_id } = await upsertOperadorQuantioEnSupabase(admin, op);
+    const { data: fila } = await admin
       .from('operadores')
-      .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id, session_version')
-      .eq('fuente', OPERADOR_FUENTE_QUANTIO)
-      .eq('operador', operador)
-      .eq('codigo', codigo)
+      .select('session_version')
+      .eq('idoperador', op.idoperador)
       .maybeSingle();
+    return {
+      ok: true,
+      row: {
+        idoperador: op.idoperador,
+        operador: op.operador,
+        nombrecompleto: op.nombrecompleto,
+        rol,
+        activo: 'S',
+        app_role_id,
+        session_version: Number(
+          (fila as { session_version?: number | null } | null)?.session_version ?? 0
+        ),
+      },
+    };
+  }
 
-    if (error) {
-      if (String(error.message ?? '').includes('session_version')) {
-        const { data: row2, error: err2 } = await admin
-          .from('operadores')
-          .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
-          .eq('fuente', OPERADOR_FUENTE_QUANTIO)
-          .eq('operador', operador)
-          .eq('codigo', codigo)
-          .maybeSingle();
-        if (err2) {
-          if (err2.message?.includes('fuente')) {
-            console.error('resolverOperadorLogin droguería: falta columna fuente en operadores');
-            return { ok: false, reason: 'invalid_credentials' };
-          }
-          console.error('resolverOperadorLogin droguería:', err2.message);
-          return { ok: false, reason: 'invalid_credentials' };
-        }
-        if (row2 && row2.activo === 'S') {
-          return { ok: true, row: row2 as OperadorRow };
-        }
-        return { ok: false, reason: 'invalid_credentials' };
-      }
-      if (error.message?.includes('fuente')) {
-        console.error('resolverOperadorLogin droguería: falta columna fuente en operadores');
-        return { ok: false, reason: 'invalid_credentials' };
-      }
-      console.error('resolverOperadorLogin droguería:', error.message);
-      return { ok: false, reason: 'invalid_credentials' };
-    }
+  if (validacion.ok) {
+    const erp = validacion.operador as OperadorErpValidado;
+    const sesion = await upsertOperadorErpEnSupabase(admin, erp, fuente);
+    return {
+      ok: true,
+      row: {
+        idoperador: erp.idoperador,
+        operador: erp.operador,
+        nombrecompleto: erp.nombrecompleto,
+        rol: sesion.rol,
+        activo: 'S',
+        app_role_id: sesion.app_role_id,
+        session_version: sesion.session_version,
+      },
+    };
+  }
 
-    if (row && row.activo === 'S') {
-      return { ok: true, row: row as OperadorRow };
-    }
+  // Credenciales incorrectas en el ERP: no hay nada más que mirar.
+  if (validacion.reason === 'invalid_credentials') {
     return { ok: false, reason: 'invalid_credentials' };
   }
 
+  // ERP inalcanzable o sin configurar: respaldo con lo espejado en Supabase.
+  console.warn(
+    `[login] ERP ${fuente} no disponible (${validacion.reason}); se valida contra Supabase`
+  );
   const { data: row, error } = await admin
     .from('operadores')
     .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id, session_version')
+    .eq('fuente', fuente)
     .eq('operador', operador)
     .eq('codigo', codigo)
-    .eq('fuente', OPERADOR_FUENTE_ONZE)
     .maybeSingle();
 
   if (error) {
-    if (String(error.message ?? '').includes('session_version')) {
-      const { data: row2, error: err2 } = await admin
-        .from('operadores')
-        .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
-        .eq('operador', operador)
-        .eq('codigo', codigo)
-        .eq('fuente', OPERADOR_FUENTE_ONZE)
-        .maybeSingle();
-      if (!err2 && row2 && row2.activo === 'S') {
-        return { ok: true, row: row2 as OperadorRow };
-      }
-      // caer al fallback fuente abajo si aplica
-    }
-    if (error.message?.includes('fuente') || String(error.message ?? '').includes('session_version')) {
-      const { data: legacyRow, error: legacyError } = await admin
-        .from('operadores')
-        .select('idoperador, operador, nombrecompleto, rol, activo, app_role_id')
-        .eq('operador', operador)
-        .eq('codigo', codigo)
-        .maybeSingle();
-      if (legacyError) {
-        console.error('resolverOperadorLogin:', legacyError.message);
-        return { ok: false, reason: 'invalid_credentials' };
-      }
-      if (legacyRow && legacyRow.activo === 'S') {
-        return { ok: true, row: legacyRow as OperadorRow };
-      }
-      return { ok: false, reason: 'invalid_credentials' };
-    }
-    console.error('resolverOperadorLogin:', error.message);
+    console.error('resolverOperadorLogin (respaldo Supabase):', error.message);
     return { ok: false, reason: 'invalid_credentials' };
   }
-
-  if (row && row.activo === 'S') {
-    return { ok: true, row: row as OperadorRow };
-  }
-
+  if (row && row.activo === 'S') return { ok: true, row: row as OperadorRow };
   return { ok: false, reason: 'invalid_credentials' };
 }
 
@@ -186,6 +184,24 @@ export async function POST(request: NextRequest) {
   const ip = getClientIp(request);
   const userAgent = request.headers.get('user-agent') ?? null;
 
+  // Fuerza bruta: el código es numérico y corto; limitar intentos fallidos por IP y por operador.
+  const limite = verificarRateLimitLogin({ ip, operador });
+  if (!limite.ok) {
+    await logAuth(admin, {
+      username: operador,
+      sucursalNombre: null,
+      ip,
+      userAgent,
+      success: false,
+      action: 'login_rate_limited',
+      sessionId: null,
+    });
+    return NextResponse.json(
+      { error: `Demasiados intentos fallidos. Esperá ${limite.retryAfterSec} segundos y volvé a intentar.` },
+      { status: 429, headers: { 'Retry-After': String(limite.retryAfterSec) } }
+    );
+  }
+
   const sucursalId = typeof body.sucursal_id === 'string' ? body.sucursal_id.trim() : '';
   const sucursalPassword = typeof body.sucursal_password === 'string' ? body.sucursal_password : '';
 
@@ -200,6 +216,7 @@ export async function POST(request: NextRequest) {
   const resolved = await resolverOperadorLogin(admin, operador, codigo, esDrogueria);
 
   if (!resolved.ok || resolved.row.activo !== 'S') {
+    registrarIntentoLogin({ ip, operador, exito: false });
     await logAuth(admin, {
       username: operador,
       sucursalNombre: null,
@@ -209,15 +226,6 @@ export async function POST(request: NextRequest) {
       action: esDrogueria ? 'login_invalid_credentials_quantio' : 'login_invalid_credentials',
       sessionId: null,
     });
-    if (esDrogueria) {
-      return NextResponse.json(
-        {
-          error:
-            'Operador o código incorrectos. Verificá que el usuario esté sincronizado en Supabase (fuente Quantio).',
-        },
-        { status: 401 }
-      );
-    }
     return NextResponse.json({ error: 'Operador o código incorrectos' }, { status: 401 });
   }
 
@@ -243,11 +251,14 @@ export async function POST(request: NextRequest) {
       ? 'admin'
       : 'operador_sucursal') as 'superadmin' | 'admin' | 'operador_sucursal';
 
+  const nombreSesion =
+    String(row.nombrecompleto ?? '').trim() || String(row.operador ?? '').trim();
+
   const cookieStore = await cookies();
   const operadorCookie = createOperadorSessionCookie({
     idoperador: row.idoperador,
     operador: row.operador,
-    nombrecompleto: row.nombrecompleto ?? row.operador,
+    nombrecompleto: nombreSesion,
     rol: rolSesion,
     session_version: Number(row.session_version ?? 0),
   });
@@ -289,6 +300,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Sucursal inactiva' }, { status: 403 });
       }
       if (sucursal.contraseña !== sucursalPassword) {
+        registrarIntentoLogin({ ip, operador, exito: false });
         await logAuth(admin, {
           username: operador,
           sucursalNombre: sucursal.nombrefantasia,
@@ -303,21 +315,17 @@ export async function POST(request: NextRequest) {
 
       const sucursalEsDrogueria = await esSucursalDrogueria(admin, sucursalIdNum);
 
-      const opts = {
-        httpOnly: true,
-        path: '/' as const,
-        maxAge: SUCURSAL_SESSION_MAX_AGE_SEC,
-        sameSite: 'lax' as const,
-      };
-      cookieStore.set('sucursal_id', String(sucursal.sucursal), opts);
-      cookieStore.set('sucursal_nombre', sucursal.nombrefantasia, opts);
-      cookieStore.set('sucursal_codigo', String(sucursal.sucursal), opts);
-      setCookieSucursalEsDrogueria(cookieStore, sucursalEsDrogueria, opts);
+      await setSucursalSessionCookie(
+        cookieStore,
+        { id: sucursal.sucursal, nombre: sucursal.nombrefantasia, esDrogueria: sucursalEsDrogueria },
+        row.idoperador
+      );
       sucursalNombre = sucursal.nombrefantasia;
       sucursalSet = true;
     }
   }
 
+  registrarIntentoLogin({ ip, operador, exito: true });
   await logAuth(admin, {
     username: row.operador,
     sucursalNombre,
@@ -331,7 +339,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     ok: true,
     operador: row.operador,
-    nombrecompleto: row.nombrecompleto ?? row.operador,
+    nombrecompleto: nombreSesion,
     sucursal_set: sucursalSet,
   });
 }

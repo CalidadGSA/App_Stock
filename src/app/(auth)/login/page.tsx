@@ -2,6 +2,7 @@
 
 import { Suspense, useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Image from 'next/image';
 import { Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -111,14 +112,20 @@ function LoginForm() {
     <div className="w-full max-w-sm">
       <div className="mb-8 text-center">
         <div className="mx-auto mb-5 flex items-center justify-center">
-          <img
+          <Image
             src="/logo-gsa-light.png"
             alt="GSA Farmacias"
+            width={1024}
+            height={1024}
+            priority
             className="h-28 w-auto object-contain dark:hidden"
           />
-          <img
+          <Image
             src="/logo-gsa-dark.png"
             alt="GSA Farmacias"
+            width={1024}
+            height={1024}
+            priority
             className="hidden h-28 w-auto object-contain dark:block"
           />
         </div>

@@ -3,6 +3,7 @@
 import {
   formatDate,
   formatDateTime,
+  formatMoneda,
   diasHastaVencimiento,
   colorVencimiento,
   estiloFilaProgresoVenta,
@@ -23,6 +24,8 @@ export interface ConsolidadoItemMobile {
   cantidad: number;
   cantidad_vendida_acumulada?: number;
   descuento_aplicado?: number | null;
+  precio?: number | null;
+  monto?: number | null;
 }
 
 function StatPill({
@@ -130,9 +133,14 @@ export default function ConsolidadoListMobile({ items }: { items: ConsolidadoIte
                 </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <StatPill label="Restante" value={rest.toFixed(0)} emphasize />
                 <StatPill label="Vendido" value={vendHist.toFixed(0)} emphasize />
+                <StatPill
+                  label="Monto"
+                  value={r.monto != null ? formatMoneda(r.monto) : '—'}
+                  emphasize
+                />
                 <div className="rounded-lg border border-gray-200 bg-gray-50/80 px-2.5 py-1.5 dark:border-gray-700 dark:bg-slate-800/50">
                   <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
                     Descuento

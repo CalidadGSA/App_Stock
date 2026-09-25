@@ -69,6 +69,7 @@ export type PadronProductoResumen = {
   cat_macro: string | null;
   categoria: string | null;
   subrubro: string | null;
+  proveedormarrone?: string | null;
 };
 
 export type DrogueriaLaboratorioRow = {
@@ -105,6 +106,50 @@ export function macroDesdePadron(
   if (c === 'FARMA') return 'FARMA';
   if (c === 'OTC') return 'FARMA';
   return null;
+}
+
+/**
+ * `proveedormarrone` del padrón → macro de inventario.
+ * Fuente de verdad para FARMA / BIENESTAR / PSICOTROPICOS
+ * (cat_macro no sirve: los psico suelen figurar como Farma y muchos
+ * de perfumería vienen con cat_macro null).
+ */
+export function macroDesdeProveedorMarrone(
+  proveedormarrone: string | null | undefined
+): MacroBulto | null {
+  const c = normalizarCategoriaMacro(proveedormarrone);
+  if (!c || c === 'SIN PROVEEDOR') return null;
+
+  if (c === 'PSICOTROPICOS' || c === 'PSICOTROPICO') return 'PSICOTROPICOS';
+
+  if (
+    c === 'MEDICAMENTOS' ||
+    c === 'HOSPITALARIOS' ||
+    c === 'HELADERA' ||
+    c === 'ALTA ROTACION'
+  ) {
+    return 'FARMA';
+  }
+
+  if (
+    c === 'PERFUMERIA' ||
+    c === 'KIOSCO' ||
+    c === 'HOGAR' ||
+    c === 'PAÑALES' ||
+    c === 'PANALES' ||
+    c === 'MATERIAL POP' ||
+    c === 'IMPORTADOS'
+  ) {
+    return 'BIENESTAR';
+  }
+
+  return null;
+}
+
+export function esProveedorMarronePsicotropicos(
+  proveedormarrone: string | null | undefined
+): boolean {
+  return macroDesdeProveedorMarrone(proveedormarrone) === 'PSICOTROPICOS';
 }
 
 /** OTC en padrón (cat_macro o categoria): venta libre, devolución con reglas FARMA. */
@@ -192,7 +237,7 @@ export function metaMedicamentoPorProducto(
   return undefined;
 }
 
-function guardarMetaMedicamento(
+export function guardarMetaMedicamento(
   map: Map<string, MedicamentoDrogueriaMeta>,
   codplex: string,
   meta: MedicamentoDrogueriaMeta
@@ -252,82 +297,7 @@ export async function cargarMapaDrogueriaPorCodlab(admin: AdminClient) {
   };
 }
 
-export async function cargarMedicamentoMetaPorProducto(
-  admin: AdminClient,
-  productoIds: string[]
-): Promise<Map<string, MedicamentoDrogueriaMeta>> {
-  const ids = Array.from(new Set(productoIds.map((id) => String(id).trim()).filter(Boolean)));
-  const out = new Map<string, MedicamentoDrogueriaMeta>();
-  if (ids.length === 0) return out;
 
-  const chunkSize = 400;
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const lote = ids.slice(i, i + chunkSize);
-    const codplexNums = Array.from(
-      new Set(
-        lote
-          .map((id) => Number(id))
-          .filter((n) => Number.isFinite(n))
-      )
-    );
-    if (codplexNums.length === 0) continue;
-
-    const { data, error } = await admin
-      .from('medicamentos')
-      .select('codplex, codlab, idpsicofarmaco')
-      .in('codplex', codplexNums);
-    if (error) throw new Error(error.message);
-    for (const m of data ?? []) {
-      const codplex = String((m as { codplex?: string | number }).codplex ?? '').trim();
-      if (!codplex) continue;
-      const codlabRaw = (m as { codlab?: number | null }).codlab;
-      const codlab = codlabRaw != null && Number.isFinite(Number(codlabRaw)) ? Number(codlabRaw) : null;
-      const idpsicofarmaco = (m as { idpsicofarmaco?: string | null }).idpsicofarmaco ?? null;
-      guardarMetaMedicamento(out, codplex, { codlab, idpsicofarmaco });
-    }
-  }
-  return out;
-}
-
-/** `codplex` → `idsubrubro` (tabla medicamentos). */
-export async function cargarIdSubrubroPorProducto(
-  admin: AdminClient,
-  productoIds: string[]
-): Promise<Map<string, number | null>> {
-  const ids = Array.from(new Set(productoIds.map((id) => String(id).trim()).filter(Boolean)));
-  const out = new Map<string, number | null>();
-  if (ids.length === 0) return out;
-
-  const chunkSize = 400;
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const lote = ids.slice(i, i + chunkSize);
-    const codplexNums = Array.from(
-      new Set(
-        lote
-          .map((id) => Number(id))
-          .filter((n) => Number.isFinite(n))
-      )
-    );
-    if (codplexNums.length === 0) continue;
-
-    const { data, error } = await admin
-      .from('medicamentos')
-      .select('codplex, idsubrubro')
-      .in('codplex', codplexNums);
-    if (error) throw new Error(error.message);
-    for (const m of data ?? []) {
-      const codplex = String((m as { codplex?: string | number }).codplex ?? '').trim();
-      if (!codplex) continue;
-      const raw = (m as { idsubrubro?: number | null }).idsubrubro;
-      const idsubrubro =
-        raw != null && Number.isFinite(Number(raw)) ? Number(raw) : null;
-      out.set(codplex, idsubrubro);
-      const num = Number(codplex);
-      if (Number.isFinite(num)) out.set(String(num), idsubrubro);
-    }
-  }
-  return out;
-}
 
 /** Droguería destino según codlab en vencimientos_drogueria_laboratorio. */
 export function drogueriaDesdeCodlab(
@@ -337,22 +307,6 @@ export function drogueriaDesdeCodlab(
   if (codlab == null || !Number.isFinite(Number(codlab))) return null;
   const row = drogueriaPorCodlab.get(Number(codlab));
   return row?.drogueria ? String(row.drogueria).trim() : null;
-}
-
-export async function cargarNombresPsicofarmacos(admin: AdminClient): Promise<Map<string, string>> {
-  const { data, error } = await admin.from('psicofarmacos').select('idpsicofarmaco, nombre');
-  if (error) throw new Error(error.message);
-
-  const nombrePsicoPorId = new Map<string, string>();
-  for (const p of data ?? []) {
-    const id = String((p as { idpsicofarmaco?: string }).idpsicofarmaco ?? '').trim();
-    const nombre = String((p as { nombre?: string }).nombre ?? '').trim();
-    if (id) {
-      nombrePsicoPorId.set(id, nombre);
-      nombrePsicoPorId.set(id.toUpperCase(), nombre);
-    }
-  }
-  return nombrePsicoPorId;
 }
 
 /** Mes calendario de vencimiento anterior al mes actual (Argentina). */

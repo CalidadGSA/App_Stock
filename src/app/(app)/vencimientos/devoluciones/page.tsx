@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -10,6 +10,10 @@ import { Badge } from '@/components/ui/badge';
 import { PageSpinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/utils';
 import { ArrowLeft } from 'lucide-react';
+import {
+  CollapsibleFiltrosPanel,
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
 
 type DevolucionRow = {
   id: string;
@@ -34,6 +38,7 @@ export default function DevolucionesVencimientosPage() {
   const [error, setError] = useState('');
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
 
   async function cargar() {
     setLoading(true);
@@ -63,8 +68,11 @@ export default function DevolucionesVencimientosPage() {
   }, []);
 
   function handleAplicarFiltros() {
+    setFiltrosAbiertos(false);
     void cargar();
   }
+
+  const filtrosActivos = (desde ? 1 : 0) + (hasta ? 1 : 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -84,17 +92,23 @@ export default function DevolucionesVencimientosPage() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <p className="text-sm font-medium text-gray-800">
-                Filtros
-              </p>
-              <p className="text-xs text-gray-500">
-                Filtra por fecha de devolución.
-              </p>
-            </div>
+      <Card className="relative overflow-hidden">
+        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+          <h2 className="font-semibold text-gray-900">
+            Devoluciones registradas
+          </h2>
+          <FiltrosToggleButton
+            abierto={filtrosAbiertos}
+            onClick={() => setFiltrosAbiertos((v) => !v)}
+            activos={filtrosActivos}
+          />
+        </CardHeader>
+        <CardContent className="relative min-h-[12rem] p-0">
+          <CollapsibleFiltrosPanel
+            abierto={filtrosAbiertos}
+            onCerrar={() => setFiltrosAbiertos(false)}
+            descripcion="Filtra por fecha de devolución."
+          >
             <div className="flex flex-wrap items-end gap-3">
               <Input
                 label="Desde"
@@ -112,17 +126,7 @@ export default function DevolucionesVencimientosPage() {
                 Aplicar
               </Button>
             </div>
-          </div>
-        </CardHeader>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <h2 className="font-semibold text-gray-900">
-            Devoluciones registradas
-          </h2>
-        </CardHeader>
-        <CardContent className="p-0">
+          </CollapsibleFiltrosPanel>
           {loading ? (
             <div className="py-6">
               <PageSpinner />
@@ -136,7 +140,6 @@ export default function DevolucionesVencimientosPage() {
           ) : (
             <ul className="divide-y divide-gray-100">
               {items.map((d) => {
-                // Si por algún motivo no vino el id o viene corrupto, evitamos generar un link inválido
                 if (!d.id || d.id === 'undefined') {
                   return null;
                 }
@@ -198,4 +201,3 @@ export default function DevolucionesVencimientosPage() {
     </div>
   );
 }
-

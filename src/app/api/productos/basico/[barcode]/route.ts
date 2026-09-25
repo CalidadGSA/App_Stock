@@ -5,7 +5,7 @@ import {
   getProductoPadronById,
   padronProductosDisponible,
 } from '@/lib/padron-productos-lookup';
-import { createAdminClient } from '@/lib/supabase/server';
+import { getProductoIdPorCodebarOnze } from '@/lib/legacy-db/onze-medicamentos';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Versión básica: solo ficha desde padron_final (sin stock MySQL).
@@ -28,17 +28,9 @@ export async function GET(
   let ficha = await getProductoPadronByBarcode(barcode);
 
   if (!ficha) {
-    const admin = await createAdminClient();
-    const { data: mapRow } = await admin
-      .from('productoscodebars')
-      .select('idproducto')
-      .eq('codebar', barcode)
-      .order('idproducto', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (mapRow && typeof mapRow.idproducto === 'number') {
-      ficha = await getProductoPadronById(mapRow.idproducto);
+    const idPorCodebar = await getProductoIdPorCodebarOnze(barcode);
+    if (idPorCodebar != null) {
+      ficha = await getProductoPadronById(idPorCodebar);
     }
   }
 

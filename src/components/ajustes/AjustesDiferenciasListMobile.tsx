@@ -2,6 +2,7 @@
 
 import { Button } from '@/components/ui/button';
 import { ListStatPill } from '@/components/list/ListStatPill';
+import { formatDateTime } from '@/lib/utils';
 
 export interface AjusteDiferenciaMobile {
   id: string;
@@ -17,6 +18,8 @@ export interface AjusteDiferenciaMobile {
   origen?: string | null;
   diffCajas: number;
   diffUnidades: number;
+  fecha_registro?: string | null;
+  fecha_fin_control?: string | null;
 }
 
 export default function AjustesDiferenciasListMobile({
@@ -54,6 +57,9 @@ export default function AjustesDiferenciasListMobile({
             <p className="mt-1 font-mono text-[11px] text-gray-600 dark:text-gray-400">{d.codigo_barras}</p>
             <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
               Origen: {d.origen === 'Auditoria' ? 'Auditoría' : 'Sucursal'}
+            </p>
+            <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+              Confirmado: {formatDateTime(d.fecha_registro ?? d.fecha_fin_control)}
             </p>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <ListStatPill

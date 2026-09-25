@@ -4,29 +4,11 @@ const {
   syncOperadoresLegacyToSupabase,
 } = require('../controllers/obrasSociales/syncoperadores');
 const {
-  syncMedicamentosLegacyToSupabase,
-} = require('../controllers/obrasSociales/syncmedicamentos');
-const {
-  syncRubrosLegacyToSupabase,
-} = require('../controllers/obrasSociales/syncrubros');
-const {
-  syncSubrubrosLegacyToSupabase,
-} = require('../controllers/obrasSociales/syncsubrubros');
-const {
-  syncCategoriasLegacyToSupabase,
-} = require('../controllers/obrasSociales/synccategorias');
-const {
-  syncPsicofarmacosLegacyToSupabase,
-} = require('../controllers/obrasSociales/syncpsicofarmacos');
-const {
   syncUsuariosQuantioToSupabase,
 } = require('../controllers/obrasSociales/syncusuariosquantio');
 const {
   syncProductosQuantioToSupabase,
 } = require('../controllers/obrasSociales/syncproductosquantio');
-const {
-  syncLaboratoriosLegacyToSupabase,
-} = require('../controllers/obrasSociales/synclaboratorios');
 
 const TZ = (process.env.TZ || 'America/Argentina/Buenos_Aires').trim();
 
@@ -64,7 +46,7 @@ function shouldSkipDuplicateStart() {
  */
 async function runLegacySyncBatch() {
   console.log(
-    '\n⏰ Sync legacy → Supabase (sucursales, operadores, medicamentos, catálogos, laboratorios, Quantio droguería)',
+    '\n⏰ Sync legacy → Supabase (sucursales, operadores, Quantio droguería)',
     new Date().toLocaleString('es-AR', { timeZone: TZ })
   );
 
@@ -73,12 +55,6 @@ async function runLegacySyncBatch() {
     ['operadores', () => syncOperadoresLegacyToSupabase({ mode: 'ALL' })],
     ['usuarios_quantio', () => syncUsuariosQuantioToSupabase()],
     ['productos_quantio', () => syncProductosQuantioToSupabase()],
-    ['medicamentos', () => syncMedicamentosLegacyToSupabase({ mode: 'ALL' })],
-    ['rubros', () => syncRubrosLegacyToSupabase({ mode: 'ALL' })],
-    ['subrubros', () => syncSubrubrosLegacyToSupabase({ mode: 'ALL' })],
-    ['categorias', () => syncCategoriasLegacyToSupabase({ mode: 'ALL' })],
-    ['psicofarmacos', () => syncPsicofarmacosLegacyToSupabase({ mode: 'ALL' })],
-    ['laboratorios', () => syncLaboratoriosLegacyToSupabase({ mode: 'ALL' })],
   ];
 
   const fallidos = [];
@@ -103,12 +79,11 @@ async function runLegacySyncBatch() {
 
 async function runOperadoresMedicamentosSyncBatch() {
   console.log(
-    '\n⏰ Sync legacy → Supabase (solo operadores y medicamentos)',
+    '\n⏰ Sync legacy → Supabase (solo operadores)',
     new Date().toLocaleString('es-AR', { timeZone: TZ })
   );
 
   await syncOperadoresLegacyToSupabase({ mode: 'ALL' });
-  await syncMedicamentosLegacyToSupabase({ mode: 'ALL' });
 }
 
 function startLegacySyncCron() {

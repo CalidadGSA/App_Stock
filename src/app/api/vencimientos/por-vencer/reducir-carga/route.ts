@@ -1,15 +1,14 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { getOperadorSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 /** POST { detalle_id, cantidad } — quita unidades por error de carga (no registra venta). */
 export async function POST(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
-  const cookieStore = await cookies();
-  const sucursalCookie = cookieStore.get('sucursal_id')?.value;
+  const sucursalCookie = await getSucursalIdSesion();
   if (!sucursalCookie) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   let body: { detalle_id?: string; cantidad?: number };
@@ -29,7 +28,9 @@ export async function POST(request: NextRequest) {
 
   const { data: row, error: rowError } = await admin
     .from('controles_vencimientos_detalle')
-    .select('id, control_id, cantidad, eliminado, controles_vencimientos!inner(sucursal_id)')
+    .select(
+      'id, control_id, cantidad, eliminado, controles_vencimientos!inner(sucursal_id)'
+    )
     .eq('id', detalleId)
     .maybeSingle();
 
@@ -64,8 +65,20 @@ export async function POST(request: NextRequest) {
   const payload =
     nuevo <= 0 ? { cantidad: 0, eliminado: 1 } : { cantidad: nuevo };
 
-  const { error: upErr } = await admin.from('controles_vencimientos_detalle').update(payload).eq('id', detalleId);
+  // Bloqueo optimista sobre `cantidad` (misma protección que marcar vendido).
+  const { data: actualizados, error: upErr } = await admin
+    .from('controles_vencimientos_detalle')
+    .update(payload)
+    .eq('id', detalleId)
+    .eq('cantidad', actual)
+    .select('id');
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
+  if (!actualizados || actualizados.length === 0) {
+    return NextResponse.json(
+      { error: 'La línea cambió mientras se procesaba (otro usuario la actualizó). Actualizá el listado.' },
+      { status: 409 }
+    );
+  }
 
   const controlId = String((row as { control_id?: string }).control_id ?? '');
   if (controlId) {

@@ -1,14 +1,15 @@
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession } from '@/lib/auth/session';
 import { requirePermission } from '@/lib/auth/rbac';
+import { getNombresPsicofarmacosOnze } from '@/lib/legacy-db/onze-catalogos';
 import {
   clasificarProductoControlado,
   etiquetaTipoControlado,
   type TipoProductoControlado,
 } from '@/lib/medicamentos/clasificacion-controlados';
 import { esSucursalVisibleEnLogin } from '@/lib/sucursales/login-sucursales';
-import { fechaHoyArgentinaYmd, ymdAddDays } from '@/lib/utils';
+import { fechaHoyArgentinaYmd, rangoFechasArgentinaIso, ymdAddDays } from '@/lib/utils';
 import { NextRequest, NextResponse } from 'next/server';
+import { getFichasMedicamento } from '@/lib/legacy-db/onze-medicamentos';
 
 export interface DiferenciaPsicoOcasionalItem {
   id: string;
@@ -39,13 +40,6 @@ export interface DiferenciaPsicoOcasionalSucursal {
   items: DiferenciaPsicoOcasionalItem[];
 }
 
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
-}
 
 /** GET /api/admin/diferencias-psico-ocasional — diferencias de inventario ocasional_sucursal cerrado (solo admin). */
 export async function GET(request: NextRequest) {
@@ -78,8 +72,8 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = await createAdminClient();
-  const desdeIso = `${desde}T00:00:00.000Z`;
-  const hastaIso = `${hasta}T23:59:59.999Z`;
+  // Días calendario Argentina (UTC-3), no UTC: si no, se pierden los controles de la noche.
+  const { desdeIso, hastaIso } = rangoFechasArgentinaIso(desde, hasta);
 
   let query = admin
     .from('controles_inventario_detalle')
@@ -143,40 +137,12 @@ export async function GET(request: NextRequest) {
     { idpsicofarmaco: string | null }
   >();
 
-  for (const lote of chunk(codplexIds, 400)) {
-    const { data: meds, error: medsError } = await admin
-      .from('medicamentos')
-      .select('codplex, idpsicofarmaco')
-      .in('codplex', lote);
-
-    if (medsError) {
-      return NextResponse.json({ error: medsError.message }, { status: 500 });
-    }
-
-    for (const m of meds ?? []) {
-      const codplex = String((m as { codplex?: string | number }).codplex ?? '');
-      if (!codplex) continue;
-      medPorCodplex.set(codplex, {
-        idpsicofarmaco: (m as { idpsicofarmaco?: string | null }).idpsicofarmaco ?? null,
-      });
-    }
+  const { fichas } = await getFichasMedicamento(admin, codplexIds);
+  for (const [codplex, f] of fichas) {
+    medPorCodplex.set(codplex, { idpsicofarmaco: f.idpsicofarmaco });
   }
 
-  const { data: psicoRows, error: psicoError } = await admin
-    .from('psicofarmacos')
-    .select('idpsicofarmaco, nombre');
-
-  if (psicoError) {
-    return NextResponse.json({ error: psicoError.message }, { status: 500 });
-  }
-
-  const nombrePsicoPorId = new Map<string, string>();
-  for (const p of psicoRows ?? []) {
-    const id = String((p as { idpsicofarmaco?: string }).idpsicofarmaco ?? '').trim();
-    const nombre = String((p as { nombre?: string }).nombre ?? '').trim();
-    if (id) nombrePsicoPorId.set(id, nombre);
-    if (id) nombrePsicoPorId.set(id.toUpperCase(), nombre);
-  }
+  const nombrePsicoPorId = await getNombresPsicofarmacosOnze();
 
   const porSucursal = new Map<number, DiferenciaPsicoOcasionalSucursal>();
 

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { esperarRenderImpresion } from '@/lib/list/preparar-impresion';
+import { formatNowDateTime } from '@/lib/utils';
 
 export const VENCIMIENTOS_PRINT_AREA_ATTR = 'data-vencimientos-print-area';
 
@@ -62,9 +63,7 @@ export function EncabezadoImpresionListadoVencimientos({
   detalle?: string;
   cantidadRegistros: number;
 }) {
-  const generado = new Date().toLocaleString('es-AR', {
-    timeZone: 'America/Argentina/Buenos_Aires',
-  });
+  const generado = formatNowDateTime();
   return (
     <div className="datatable-print-header mb-2 border-b border-gray-300 pb-2">
       <h1 className="text-sm font-bold text-gray-900">{titulo}</h1>

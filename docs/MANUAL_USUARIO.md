@@ -23,6 +23,15 @@ En el dashboard vas a ver:
 
 Desde los KPI se puede navegar a vistas de detalle.
 
+### KPIs mensuales
+
+En **General → KPIs mensuales** (todos los usuarios) se ven dos indicadores del mes elegido para la sucursal activa (admin puede elegir otra sucursal):
+
+- **Diferencias de inventario vs stock valorizado**: sobrante, faltante y neto en pesos (diferencia en cajas x costo) de todos los controles cerrados en el mes, por tipo de control, comparado con el stock valorizado de la sucursal. Para meses cerrados se usa el ultimo valor guardado de ese mes («aprox.» = no habia registro y se usa el stock de hoy).
+- **Bajas y altas de stock vs facturacion**: operaciones de stock de Onze por motivo (Vencido, Devolucion, Roto, Ajustes, etc.) con signo (altas suman, bajas restan), a costo y a precio de venta, comparadas con la facturacion neta del mes (FV/TF/TK menos notas de credito que anulan esas ventas).
+
+Si Onze no responde, el KPI de diferencias se muestra igual y el resto queda marcado como no disponible.
+
 ## 4) Inventario diario
 
 ### Crear inventario diario
@@ -72,17 +81,37 @@ En la vista de diferencias podes:
 3. Exportar CSV de diferencias para ajustar.
 4. Consultar historial de ajustes/exportaciones.
 
+## 8 bis) Padron de productos (admin)
+
+- Los productos se dan de alta **solo en el ERP (Plex)**; desde la app se editan, no se crean.
+- Los campos que vienen de Plex (plexdr) u Onze Center se muestran con candado y no se pueden editar: el sync del padron los sobrescribe. Solo se editan los campos propios de GSA (categoria, cat_macro, temporada, formato, sub_categoria, comisiones_vc, cronica, etc.).
+
+### Activar productos dados de baja en el ERP
+
+La columna **activo** la sincroniza Plex y no se puede editar. Para usar en esta app un producto que el ERP dio de baja, poner **activomanual** en `S`: la app considera vigente un producto si `activo = S` **o** `activomanual = S` (escaneo, buscadores, inventarios y vencimientos). Para desactivarlo, volver a dejarlo en `N`. Se puede hacer de a un producto o con la edicion masiva.
+
+### Edicion masiva
+
+1. Elegi los productos: tildando el casillero de cada fila (la seleccion se mantiene al cambiar de pagina) o buscando y usando «todos los resultados de la busqueda».
+2. Abri **Edicion masiva**, elegi una o varias columnas editables y escribi el nuevo valor de cada una («Dejar vacio» borra el contenido).
+3. Confirma: antes de aplicar se muestra cuantos productos se modifican y con que valores. El cambio se aplica a **todas** las coincidencias de la busqueda (aunque sean miles) y no se puede deshacer: revisa bien ese numero antes de confirmar.
+
 ## 9) Vencimientos - por vencer
 
 1. Ir a `Vencimientos > Por vencer`.
 2. Filtrar por periodo (30/60/90 y variantes) y categoria.
 3. Buscar por descripcion/presentacion/codigo.
-4. Usar boton **Vendido** para descontar cantidad vendida.
+4. Si se vendio stock de una linea, usar **Vendido** e indicar cuantas unidades (cajas). Cuando lo vendido llega a lo cargado, la linea queda liquidada.
+5. Si te equivocaste en la cantidad vendida, usar **Arreglar vendido**.
+6. Usar **Quitar** solo para corregir un error de carga (no es una venta).
 
-## 10) Vencimientos - vencidos
+> Nota tecnica: el descuento automatico de ventas (Onze/Quantio) esta desactivado.
+> Para reactivarlo ver `docs/VENTAS_AUTO_POR_VENCER.md`.
+
+## 10) Vencimientos - vencidos / para devolver
 
 - Lista productos vencidos segun reglas por categoria macro.
-- Permite marcar vendidos.
+- El saldo restante es el de la carga menos lo marcado como vendido a mano.
 - Permite devolucion masiva cuando aplica.
 
 ## 11) Devoluciones

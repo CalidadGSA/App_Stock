@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
-import { createHmac } from 'crypto';
+import { cache } from 'react';
+import { createHmac, timingSafeEqual } from 'crypto';
 import type { RolOperador } from '@/lib/auth/roles';
-import { OPERADOR_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
+import { cookieSecureFlag, OPERADOR_SESSION_MAX_AGE_SEC } from '@/lib/auth/cookie-config';
 import { createAdminClient } from '@/lib/supabase/server';
 
 const COOKIE_NAME = 'operador_session';
@@ -55,16 +56,33 @@ export function createOperadorSessionCookie(payload: OperadorSession): {
       path: '/',
       maxAge: MAX_AGE,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecureFlag(),
     },
   };
+}
+
+/** Firma HMAC de un valor arbitrario (misma clave que la sesión). */
+export function firmarValor(value: string): string {
+  return sign(value);
+}
+
+/** Compara una firma en tiempo constante. */
+export function firmaCoincide(value: string, sig: string): boolean {
+  return signatureMatches(value, sig);
+}
+
+function signatureMatches(encoded: string, sig: string): boolean {
+  const expected = Buffer.from(sign(encoded), 'utf8');
+  const received = Buffer.from(sig, 'utf8');
+  // Comparación en tiempo constante: evita filtrar la firma byte a byte por timing.
+  return expected.length === received.length && timingSafeEqual(expected, received);
 }
 
 function verifyAndDecode(value: string): OperadorSession | null {
   try {
     const [encoded, sig] = value.split('.');
     if (!encoded || !sig) return null;
-    if (sign(encoded) !== sig) return null;
+    if (!signatureMatches(encoded, sig)) return null;
     const data = Buffer.from(encoded, 'base64url').toString('utf8');
     const parsed = JSON.parse(data) as OperadorSession;
     if (typeof parsed.idoperador !== 'number' || typeof parsed.operador !== 'string') return null;
@@ -83,55 +101,94 @@ function verifyAndDecode(value: string): OperadorSession | null {
   }
 }
 
-async function sessionVersionCoincide(session: OperadorSession): Promise<boolean> {
-  try {
-    const admin = await createAdminClient();
-    const { data, error } = await admin
-      .from('operadores')
-      .select('session_version')
-      .eq('idoperador', session.idoperador)
-      .maybeSingle();
-
-    if (error) {
-      // Migración aún no aplicada: no bloquear sesiones existentes.
-      if (String(error.message ?? '').includes('session_version')) {
-        return true;
-      }
-      console.warn('sessionVersionCoincide:', error.message);
-      return true;
-    }
-
-    const dbVersion = Number(
-      (data as { session_version?: number | null } | null)?.session_version ?? 0
-    );
-    const cookieVersion = Number(session.session_version ?? 0);
-    const dbOk = Number.isFinite(dbVersion) ? Math.floor(dbVersion) : 0;
-    const cookieOk = Number.isFinite(cookieVersion) ? Math.floor(cookieVersion) : 0;
-    if (dbOk !== cookieOk) {
-      console.warn('Sesión invalidada por session_version', {
-        idoperador: session.idoperador,
-        cookieOk,
-        dbOk,
-      });
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.warn('sessionVersionCoincide unexpected:', err);
-    return true;
+/** Compara la versión de sesión de la cookie contra la de BD (null en BD = migración no aplicada → no bloquear). */
+export function sessionVersionCoincideConDb(
+  session: OperadorSession,
+  dbSessionVersion: number | null | undefined
+): boolean {
+  if (dbSessionVersion == null) return true;
+  const dbVersion = Number(dbSessionVersion);
+  const cookieVersion = Number(session.session_version ?? 0);
+  const dbOk = Number.isFinite(dbVersion) ? Math.floor(dbVersion) : 0;
+  const cookieOk = Number.isFinite(cookieVersion) ? Math.floor(cookieVersion) : 0;
+  if (dbOk !== cookieOk) {
+    console.warn('Sesión invalidada por session_version', {
+      idoperador: session.idoperador,
+      cookieOk,
+      dbOk,
+    });
+    return false;
   }
+  return true;
 }
 
-/** Obtiene la sesión del operador desde las cookies (server). */
-export async function getOperadorSession(): Promise<OperadorSession | null> {
+/** Fila mínima de `operadores` que necesitan sesión y RBAC (una sola consulta por request). */
+export interface OperadorSessionDbRow {
+  rol: string | null;
+  app_role_id: number | null;
+  session_version: number | null;
+}
+
+/**
+ * Lee `operadores` para el operador de la sesión. Memoizado por request en Server Components
+ * (React `cache`); en route handlers cada llamada consulta, por eso RBAC reutiliza esta misma
+ * lectura en vez de repetirla.
+ */
+export const leerOperadorSessionRow = cache(
+  async (idoperador: number): Promise<OperadorSessionDbRow | null> => {
+    try {
+      const admin = await createAdminClient();
+      let { data, error } = await admin
+        .from('operadores')
+        .select('rol, app_role_id, session_version')
+        .eq('idoperador', idoperador)
+        .maybeSingle();
+
+      // Migración 021 (session_version) aún no aplicada: leer el resto igual.
+      if (error && String(error.message ?? '').includes('session_version')) {
+        ({ data, error } = await admin
+          .from('operadores')
+          .select('rol, app_role_id')
+          .eq('idoperador', idoperador)
+          .maybeSingle());
+      }
+
+      if (error) {
+        // Error de BD: no bloquear sesiones existentes.
+        console.warn('leerOperadorSessionRow:', error.message);
+        return null;
+      }
+      const row = data as Partial<OperadorSessionDbRow> | null;
+      // Operador inexistente: versión 0 (una cookie con versión > 0 queda inválida).
+      if (!row) return { rol: null, app_role_id: null, session_version: 0 };
+      return {
+        rol: row.rol ?? null,
+        app_role_id: row.app_role_id ?? null,
+        session_version: row.session_version ?? null,
+      };
+    } catch (err) {
+      console.warn('leerOperadorSessionRow unexpected:', err);
+      return null;
+    }
+  }
+);
+
+/** Sesión firmada de la cookie (sin tocar BD). */
+export async function leerOperadorSessionCookie(): Promise<OperadorSession | null> {
   const cookieStore = await cookies();
   const cookie = cookieStore.get(COOKIE_NAME)?.value;
   if (!cookie) return null;
-  const parsed = verifyAndDecode(cookie);
-  if (!parsed) return null;
-  if (!(await sessionVersionCoincide(parsed))) return null;
-  return parsed;
+  return verifyAndDecode(cookie);
 }
+
+/** Obtiene la sesión del operador desde las cookies (server) y valida session_version en BD. */
+export const getOperadorSession = cache(async (): Promise<OperadorSession | null> => {
+  const parsed = await leerOperadorSessionCookie();
+  if (!parsed) return null;
+  const row = await leerOperadorSessionRow(parsed.idoperador);
+  if (!sessionVersionCoincideConDb(parsed, row?.session_version)) return null;
+  return parsed;
+});
 
 /** Verifica el valor de la cookie (para middleware que recibe request). Solo usar en entorno Node (API/layout). */
 export function getOperadorSessionFromCookieValue(cookieValue: string | undefined): OperadorSession | null {

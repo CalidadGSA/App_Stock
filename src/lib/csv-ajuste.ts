@@ -13,11 +13,22 @@ export type FilaCsvAjuste = {
  */
 export type FormatoCsvAjuste = 'gsa' | 'import' | 'legacy';
 
+export type OpcionesCsvAjuste = {
+  /** Droguería: solo cajas; el sistema destino no acepta columna de unidades. */
+  omitirUnidades?: boolean;
+};
+
 const CABECERA_IMPORT = [
   'idproducto',
   'codigo_barras',
   'diferencia_cajas',
   'diferencia_unidades',
+];
+
+const CABECERA_IMPORT_SIN_UNIDADES = [
+  'idproducto',
+  'codigo_barras',
+  'diferencia_cajas',
 ];
 
 function campoEntreComillas(valor: string): string {
@@ -45,48 +56,59 @@ function campoGsa(valor: string, separador: string): string {
  */
 export function serializarCsvAjuste(
   filas: FilaCsvAjuste[],
-  formato: FormatoCsvAjuste
+  formato: FormatoCsvAjuste,
+  opts?: OpcionesCsvAjuste
 ): string {
+  const omitirUnidades = Boolean(opts?.omitirUnidades);
+
   if (formato === 'gsa') {
     const sep = ';';
-    const lineas = filas.map((r) =>
-      [
+    const lineas = filas.map((r) => {
+      const cols = [
         campoGsa(r.idproducto ?? '', sep),
         campoGsa(r.codigo_barras ?? '', sep),
         campoGsa(String(Math.trunc(Number(r.diferencia_cajas) || 0)), sep),
-        campoGsa(String(Math.trunc(Number(r.diferencia_unidades) || 0)), sep),
-      ].join(sep)
-    );
+      ];
+      if (!omitirUnidades) {
+        cols.push(campoGsa(String(Math.trunc(Number(r.diferencia_unidades) || 0)), sep));
+      }
+      return cols.join(sep);
+    });
     const cuerpo = lineas.join('\n') + (lineas.length > 0 ? '\n' : '');
     return cuerpo;
   }
 
   if (formato === 'legacy') {
     const sep = ',';
-    const lineas = filas.map((r) =>
-      [
+    const lineas = filas.map((r) => {
+      const cols = [
         campoEntreComillas(r.idproducto ?? ''),
         campoEntreComillas(r.codigo_barras ?? ''),
         campoEntreComillas(String(r.diferencia_cajas ?? 0)),
-        campoEntreComillas(String(r.diferencia_unidades ?? 0)),
-      ].join(sep)
-    );
+      ];
+      if (!omitirUnidades) {
+        cols.push(campoEntreComillas(String(r.diferencia_unidades ?? 0)));
+      }
+      return cols.join(sep);
+    });
     const cuerpo = lineas.join('\n') + (lineas.length > 0 ? '\n' : '');
     return cuerpo;
   }
 
   // import: BOM + cabecera + ; + comillas
   const sep = ';';
-  const lineas: string[] = [CABECERA_IMPORT.join(sep)];
+  const cabecera = omitirUnidades ? CABECERA_IMPORT_SIN_UNIDADES : CABECERA_IMPORT;
+  const lineas: string[] = [cabecera.join(sep)];
   for (const r of filas) {
-    lineas.push(
-      [
-        campoEntreComillas(r.idproducto ?? ''),
-        campoEntreComillas(r.codigo_barras ?? ''),
-        campoEntreComillas(String(r.diferencia_cajas ?? 0)),
-        campoEntreComillas(String(r.diferencia_unidades ?? 0)),
-      ].join(sep)
-    );
+    const cols = [
+      campoEntreComillas(r.idproducto ?? ''),
+      campoEntreComillas(r.codigo_barras ?? ''),
+      campoEntreComillas(String(r.diferencia_cajas ?? 0)),
+    ];
+    if (!omitirUnidades) {
+      cols.push(campoEntreComillas(String(r.diferencia_unidades ?? 0)));
+    }
+    lineas.push(cols.join(sep));
   }
   const cuerpo = lineas.join('\n') + (lineas.length > 0 ? '\n' : '');
   return `\uFEFF${cuerpo}`;

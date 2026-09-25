@@ -16,6 +16,7 @@ export type FilaImpresionDiferenciaCompacta = {
   control_tipo: string | null;
   diffCajas: number;
   diffUnidades: number;
+  ajustado?: boolean;
   fecha_control: string;
   operador: string;
 };
@@ -49,6 +50,7 @@ export function TablaImpresionDiferenciasConsolidado({
           <th className="px-1 py-0.5 text-left font-semibold whitespace-nowrap">Tipo</th>
           <th className="px-1 py-0.5 text-right font-semibold whitespace-nowrap">Dif.C</th>
           <th className="px-1 py-0.5 text-right font-semibold whitespace-nowrap">Dif.U</th>
+          <th className="px-1 py-0.5 text-left font-semibold whitespace-nowrap">Ajuste</th>
           <th className="px-1 py-0.5 text-left font-semibold whitespace-nowrap">Fecha</th>
           <th className="px-1 py-0.5 text-left font-semibold">Operador</th>
         </tr>
@@ -76,6 +78,9 @@ export function TablaImpresionDiferenciasConsolidado({
             <td className="px-1 py-0.5 align-middle text-right tabular-nums whitespace-nowrap">
               {r.diffUnidades > 0 ? '+' : ''}
               {r.diffUnidades}
+            </td>
+            <td className="px-1 py-0.5 align-middle whitespace-nowrap">
+              {r.ajustado ? 'Ajustado' : 'Pendiente'}
             </td>
             <td className="px-1 py-0.5 align-middle whitespace-nowrap">
               {r.fecha_control ? formatDateTime(r.fecha_control) : '—'}

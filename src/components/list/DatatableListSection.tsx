@@ -25,8 +25,10 @@ export interface DatatableListSectionProps {
   footerActions?: ReactNode;
   hideSearch?: boolean;
   hidePageSize?: boolean;
-  /** Filtros en la toolbar del datatable (segunda fila). */
+  /** Filtros en la toolbar del datatable (accesibles con botón «Filtros»). */
   toolbarFilters?: ReactNode;
+  /** Badge de filtros activos. */
+  filtrosActivos?: number;
   loading?: boolean;
   error?: string | null;
   empty?: boolean;
@@ -58,6 +60,7 @@ export function DatatableListSection({
   hideSearch,
   hidePageSize,
   toolbarFilters,
+  filtrosActivos,
   loading,
   error,
   empty,
@@ -82,6 +85,7 @@ export function DatatableListSection({
           hideSearch={hideSearch}
           hidePageSize={hidePageSize}
           toolbarFilters={toolbarFilters}
+          filtrosActivos={filtrosActivos}
         />
         <div className="row-start-2 flex flex-1 items-center justify-center py-6">
           <PageSpinner />
@@ -112,6 +116,7 @@ export function DatatableListSection({
         hideSearch={hideSearch}
         hidePageSize={hidePageSize}
         toolbarFilters={toolbarFilters}
+        filtrosActivos={filtrosActivos}
       />
       {empty ? (
         <p className="row-start-2 shrink-0 px-3 py-3 text-sm text-gray-400 sm:px-4 dark:text-gray-500">

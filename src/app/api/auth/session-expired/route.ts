@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
-import { AUTH_COOKIE_NAMES } from '@/lib/auth/cookie-config';
+import { AUTH_COOKIE_NAMES, cookieSecureFlag } from '@/lib/auth/cookie-config';
 import { OPERADOR_COOKIE_NAME } from '@/lib/auth/session';
 
 /**
@@ -10,7 +10,7 @@ import { OPERADOR_COOKIE_NAME } from '@/lib/auth/session';
  */
 export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
-  const secure = process.env.NODE_ENV === 'production';
+  const secure = cookieSecureFlag();
 
   for (const name of AUTH_COOKIE_NAMES) {
     cookieStore.set(name, '', {

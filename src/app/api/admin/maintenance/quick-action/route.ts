@@ -1,8 +1,6 @@
-import { createAdminClient } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
+import { setAppMaintenanceActive } from '@/lib/maintenance';
 import { verifyMaintenanceQuickAction } from '@/lib/maintenance-quick-action-token';
-
-const MAINTENANCE_ROW_ID = 1;
 
 /**
  * GET sin sesión: enlaces firmados desde el correo de alerta Onze (activar / desactivar mantenimiento).
@@ -16,14 +14,10 @@ export async function GET(request: NextRequest) {
   }
 
   const isActive = v.action === 'on' ? 1 : 0;
-  const admin = await createAdminClient();
-  const now = new Date().toISOString();
-  const { error } = await admin
-    .from('modo_mantenimiento')
-    .upsert({ id: MAINTENANCE_ROW_ID, is_active: isActive, updated_at: now }, { onConflict: 'id' });
+  const { error } = await setAppMaintenanceActive(isActive);
 
   if (error) {
-    return new NextResponse(`Error: ${error.message}`, {
+    return new NextResponse(`Error: ${error}`, {
       status: 500,
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });

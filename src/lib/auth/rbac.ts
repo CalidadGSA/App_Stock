@@ -1,5 +1,12 @@
+import { cache } from 'react';
 import { createAdminClient } from '@/lib/supabase/server';
-import { getOperadorSession, type OperadorSession } from '@/lib/auth/session';
+import {
+  leerOperadorSessionCookie,
+  leerOperadorSessionRow,
+  sessionVersionCoincideConDb,
+  type OperadorSession,
+  type OperadorSessionDbRow,
+} from '@/lib/auth/session';
 import { isAdminLikeRole, isSuperAdminRole, type RolOperador } from '@/lib/auth/roles';
 import {
   ALL_PERMISSION_CODES,
@@ -29,9 +36,17 @@ export function isSuperAdminContext(ctx: OperadorRbacContext): boolean {
   return isSuperAdminRole(ctx.operador.rol) || ctx.appRoleCodigo === 'superadmin';
 }
 
+type AppRoleConPermisos = {
+  id: number;
+  codigo: string;
+  activo: boolean;
+  app_role_permissions: Array<{ permission_codigo: string }> | null;
+};
+
 async function loadPermissionsForOperador(
   idoperador: number,
   rolEnum: RolOperador | undefined,
+  opRowPrecargada?: OperadorSessionDbRow | null,
 ): Promise<{
   rolDb: RolOperador;
   appRoleId: number | null;
@@ -39,96 +54,78 @@ async function loadPermissionsForOperador(
   permissions: Set<string>;
 }> {
   const fallbackRol = (rolEnum ?? 'operador_sucursal') as RolOperador;
+  const vacio = (rolDb: RolOperador) => ({
+    rolDb,
+    appRoleId: null,
+    appRoleCodigo: null,
+    permissions: new Set<string>(),
+  });
 
   try {
     const admin = await createAdminClient();
-    const { data: opRow, error: opErr } = await admin
-      .from('operadores')
-      .select('app_role_id, rol')
-      .eq('idoperador', idoperador)
-      .maybeSingle();
+    const opRow =
+      opRowPrecargada !== undefined ? opRowPrecargada : await leerOperadorSessionRow(idoperador);
 
-    if (opErr) {
-      return {
-        rolDb: fallbackRol,
-        appRoleId: null,
-        appRoleCodigo: null,
-        permissions: new Set(),
-      };
-    }
+    if (!opRow) return vacio(fallbackRol);
 
-    const rolDb = (opRow?.rol ?? fallbackRol) as RolOperador;
-    let roleId = opRow?.app_role_id as number | null | undefined;
+    const rolDb = (opRow.rol ?? fallbackRol) as RolOperador;
+    let roleId = opRow.app_role_id;
 
-    if (rolDb === 'superadmin') {
+    const selectRol = 'id, codigo, activo, app_role_permissions(permission_codigo)';
+
+    // Superadmin y operadores sin rol app: resolver el rol de sistema por código.
+    let role: AppRoleConPermisos | null = null;
+    if (rolDb === 'superadmin' || !roleId) {
       const { data: sysRole } = await admin
         .from('app_roles')
-        .select('id, codigo')
-        .eq('codigo', 'superadmin')
-        .maybeSingle();
-      if (sysRole?.id) {
-        roleId = sysRole.id as number;
-        if (opRow?.app_role_id !== roleId) {
-          await admin
-            .from('operadores')
-            .update({ app_role_id: roleId })
-            .eq('idoperador', idoperador);
-        }
-      }
-    } else if (!roleId) {
-      const { data: sysRole } = await admin
-        .from('app_roles')
-        .select('id, codigo')
+        .select(selectRol)
         .eq('codigo', rolDb)
         .maybeSingle();
-      roleId = sysRole?.id ?? null;
+      role = (sysRole as AppRoleConPermisos | null) ?? null;
+      if (rolDb === 'superadmin' && role?.id && opRow.app_role_id !== role.id) {
+        // Mantener operadores.app_role_id alineado (solo la primera vez que se detecta desfase).
+        const { error: alignErr } = await admin
+          .from('operadores')
+          .update({ app_role_id: role.id })
+          .eq('idoperador', idoperador);
+        if (alignErr) console.warn('rbac: no se pudo alinear app_role_id superadmin', alignErr.message);
+      }
+      roleId = role?.id ?? null;
+    } else {
+      const { data } = await admin.from('app_roles').select(selectRol).eq('id', roleId).maybeSingle();
+      role = (data as AppRoleConPermisos | null) ?? null;
     }
 
-    if (!roleId) {
-      return { rolDb, appRoleId: null, appRoleCodigo: null, permissions: new Set() };
-    }
-
-    const { data: role } = await admin
-      .from('app_roles')
-      .select('id, codigo, activo')
-      .eq('id', roleId)
-      .maybeSingle();
-
-    if (!role || !role.activo) {
-      return { rolDb, appRoleId: null, appRoleCodigo: null, permissions: new Set() };
-    }
-
-    const { data: perms } = await admin
-      .from('app_role_permissions')
-      .select('permission_codigo')
-      .eq('role_id', roleId);
+    if (!roleId || !role || !role.activo) return vacio(rolDb);
 
     const permissions = new Set(
-      (perms ?? []).map((p) => String(p.permission_codigo)),
+      (role.app_role_permissions ?? []).map((p) => String(p.permission_codigo)),
     );
 
     return {
       rolDb,
-      appRoleId: role.id as number,
-      appRoleCodigo: role.codigo as string,
+      appRoleId: Number(role.id),
+      appRoleCodigo: String(role.codigo),
       permissions,
     };
   } catch {
-    return {
-      rolDb: fallbackRol,
-      appRoleId: null,
-      appRoleCodigo: null,
-      permissions: new Set(),
-    };
+    return vacio(fallbackRol);
   }
 }
 
-/** Contexto RBAC del operador autenticado (consulta BD; rol de BD tiene prioridad sobre cookie). */
-export async function getOperadorRbacContext(): Promise<OperadorRbacContext | null> {
-  const operador = await getOperadorSession();
+/**
+ * Contexto RBAC del operador autenticado (consulta BD; rol de BD tiene prioridad sobre cookie).
+ * Valida session_version con la misma lectura de `operadores` que usa para el rol
+ * (una consulta menos por request que llamar además a getOperadorSession).
+ */
+export const getOperadorRbacContext = cache(async (): Promise<OperadorRbacContext | null> => {
+  const operador = await leerOperadorSessionCookie();
   if (!operador) return null;
 
-  const loaded = await loadPermissionsForOperador(operador.idoperador, operador.rol);
+  const opRow = await leerOperadorSessionRow(operador.idoperador);
+  if (!sessionVersionCoincideConDb(operador, opRow?.session_version)) return null;
+
+  const loaded = await loadPermissionsForOperador(operador.idoperador, operador.rol, opRow);
 
   const operadorActualizado: OperadorSession = {
     ...operador,
@@ -141,7 +138,7 @@ export async function getOperadorRbacContext(): Promise<OperadorRbacContext | nu
     appRoleCodigo: loaded.appRoleCodigo,
     permissions: loaded.permissions,
   };
-}
+});
 
 function effectivePermissions(ctx: OperadorRbacContext): Set<string> {
   return effectivePermissionsForRole(

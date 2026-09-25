@@ -6,11 +6,14 @@ import {
   parseYm,
   anteriorMesYm,
   rangoMedioAbiertoMesArgentinaYm,
+  ymdAddDays,
 } from '@/lib/utils';
 import { queryBajasStockAgregado } from '@/lib/legacy-db/mysql-bajas-stock';
+import { queryValesPorMes } from '@/lib/legacy-db/mysql-kpis-mensuales';
 import { esSucursalVisibleEnLogin } from '@/lib/sucursales/login-sucursales';
 import {
   construirDetalleSucursalInformeMensual,
+  rangoMesCalendarioYm,
   totalesDetalleInformeMensual,
   type InformeMensualDetalleSucursal,
   type InformeMensualDetalleTotales,
@@ -26,6 +29,27 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type { InformeMensualDetalleSucursal, InformeMensualDetalleTotales };
+
+const TOTALES_MES_CERO = {
+  productos_inventariados: 0,
+  vencidos_cargados: 0,
+  vencidos_costo: 0,
+  vencidos_vendidas_unidades: 0,
+  inventario_lineas_con_diferencia: 0,
+  vales: 0,
+  vales_pendientes: 0,
+} as const;
+
+const DIFERENCIAS_VALOR_CERO: DiferenciasValorAgregado = {
+  valor_positivo: 0,
+  valor_negativo: 0,
+  valor_neto: 0,
+  lineas_con_diferencia: 0,
+};
+
+function esTimeoutPostgres(msg: string): boolean {
+  return /statement timeout|canceling statement|57014/i.test(msg);
+}
 
 /** Fila agregada por RPC (tendencias / compatibilidad). */
 type InformeMensualFilaRpc = {
@@ -46,6 +70,9 @@ export type InformeMensualTrendMes = {
     vencidos_costo: number;
     vencidos_vendidas_unidades: number;
     inventario_lineas_con_diferencia: number;
+    /** Vales (comprobantes pendientes de entrega) generados en el mes, toda la cadena. */
+    vales: number;
+    vales_pendientes: number;
   };
   diferencias_valor: DiferenciasValorAgregado;
 };
@@ -188,9 +215,10 @@ async function cargarBajasStock(
     };
   }
 
-  const { desdeIso } = rangoMedioAbiertoMesArgentinaYm(p0.year, p0.month);
-  const { hastaExclusivoIso } = rangoMedioAbiertoMesArgentinaYm(p1.year, p1.month);
-  if (!desdeIso || !hastaExclusivoIso) {
+  // `stock_operaciones.FechaHora` es hora local AR: el rango va en YYYY-MM-DD, sin pasar por UTC.
+  const desdeYmd = `${p0.year}-${String(p0.month).padStart(2, '0')}-01`;
+  const hastaExclusivoYmd = ymdAddDays(rangoMesCalendarioYm(p1.year, p1.month).fecha_fin, 1);
+  if (!desdeYmd || !hastaExclusivoYmd) {
     return {
       disponible: false,
       error: 'Rango de fechas inválido',
@@ -201,7 +229,7 @@ async function cargarBajasStock(
     };
   }
 
-  const query = await queryBajasStockAgregado(desdeIso, hastaExclusivoIso);
+  const query = await queryBajasStockAgregado(desdeYmd, hastaExclusivoYmd);
   if (query.status !== 'ok') {
     return {
       disponible: false,
@@ -363,6 +391,8 @@ async function cargarPorRango(admin: SupabaseClient, desdeIso: string, hastaExcI
   return { filasSucursal: out, totales };
 }
 
+export const maxDuration = 120;
+
 /** GET /api/admin/informe-mensual?mes=YYYY-MM&mesesTrend=6 */
 export async function GET(request: NextRequest) {
   const operador = await getOperadorSession();
@@ -405,14 +435,6 @@ export async function GET(request: NextRequest) {
   const admin = await createAdminClient();
 
   const mesSeleccionYm = `${year}-${String(month).padStart(2, '0')}`;
-  let seleccionMes:
-    | {
-        mes: string;
-        filasSucursal: InformeMensualDetalleSucursal[];
-        totales: InformeMensualDetalleTotales;
-        diferencias_valor: InformeMensualDiferenciasValorMes;
-      }
-    | undefined;
 
   const { data: sucRowsNombres } = await admin.from('sucursales').select('sucursal, nombrefantasia');
   const nombreSucursalById = new Map<number, string>();
@@ -427,89 +449,245 @@ export async function GET(request: NextRequest) {
   }
 
   const trends: InformeMensualTrendMes[] = [];
-  let y = year;
-  let mo = month;
+  const mesesACargar: { year: number; month: number; ym: string }[] = [];
+  {
+    let y = year;
+    let mo = month;
+    for (let i = 0; i < mesesTrend; i++) {
+      mesesACargar.push({
+        year: y,
+        month: mo,
+        ym: `${y}-${String(mo).padStart(2, '0')}`,
+      });
+      const ant = anteriorMesYm(y, mo);
+      y = ant.year;
+      mo = ant.month;
+    }
+  }
 
-  for (let i = 0; i < mesesTrend; i++) {
-    const ym = `${y}-${String(mo).padStart(2, '0')}`;
-    const { desdeIso, hastaExclusivoIso } = rangoMedioAbiertoMesArgentinaYm(y, mo);
-    if (!desdeIso || !hastaExclusivoIso) break;
-    try {
-      const { filasSucursal, totales } = await cargarPorRango(admin, desdeIso, hastaExclusivoIso);
-      const difValorMap = await cargarDiferenciasCajasValorPorSucursal(admin, y, mo);
-      const diferencias_valor = sumarDiferenciasValor(difValorMap.values());
-      trends.push({ mes: ym, totales, diferencias_valor });
-      if (ym === mesSeleccionYm) {
-        const filasDetalle = await construirDetalleSucursalInformeMensual(
-          admin,
-          filasSucursal.map((f) => ({
-            sucursal_id: f.sucursal_id,
-            nombrefantasia: f.nombrefantasia,
-            productos_inventariados: f.productos_inventariados,
-            vencidos_vendidas_unidades: f.vencidos_vendidas_unidades,
-          })),
-          year,
-          month
-        );
-        const filasDifValor = Array.from(difValorMap.entries())
-          .map(([sucursal_id, totales]) => ({
-            sucursal_id,
-            nombrefantasia: nombreSucursalById.get(sucursal_id) ?? `Sucursal ${sucursal_id}`,
-            ...normalizarDiferenciasValorAgregado(totales),
-          }))
-          .filter((f) => f.lineas_con_diferencia > 0 || f.valor_neto !== 0)
-          .sort(
-            (a, b) =>
-              Math.abs(b.valor_neto) - Math.abs(a.valor_neto) ||
-              a.nombrefantasia.localeCompare(b.nombrefantasia, 'es')
-          );
-        seleccionMes = {
-          mes: mesSeleccionYm,
-          filasSucursal: filasDetalle,
-          totales: totalesDetalleInformeMensual(
-            filasDetalle,
-            totales.inventario_lineas_con_diferencia
-          ),
-          diferencias_valor: {
-            filasSucursal: filasDifValor,
-            totales: diferencias_valor,
-          },
-        };
+  let seleccionMes:
+    | {
+        mes: string;
+        filasSucursal: InformeMensualDetalleSucursal[];
+        totales: InformeMensualDetalleTotales;
+        diferencias_valor: InformeMensualDiferenciasValorMes;
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      const faltaRpc =
-        /function .* does not exist|42883|could not find function|permission denied for function/i.test(
-          msg
-        );
+    | undefined;
+
+  type ResultadoMes = {
+    ym: string;
+    totales: {
+      productos_inventariados: number;
+      vencidos_cargados: number;
+      vencidos_costo: number;
+      vencidos_vendidas_unidades: number;
+      inventario_lineas_con_diferencia: number;
+    };
+    diferencias_valor: DiferenciasValorAgregado;
+    difValorMap: Map<number, DiferenciasValorAgregado>;
+    filasSucursal: InformeMensualFilaRpc[];
+  };
+
+  async function cargarMesAgregados(
+    y: number,
+    mo: number,
+    ym: string,
+    opts: { conDiferenciasValor: boolean }
+  ): Promise<ResultadoMes> {
+    const { desdeIso, hastaExclusivoIso } = rangoMedioAbiertoMesArgentinaYm(y, mo);
+    if (!desdeIso || !hastaExclusivoIso) {
+      throw new Error(`Rango inválido para ${ym}`);
+    }
+    const { filasSucursal, totales } = await cargarPorRango(admin, desdeIso, hastaExclusivoIso);
+    let difValorMap = new Map<number, DiferenciasValorAgregado>();
+    let diferencias_valor = { ...DIFERENCIAS_VALOR_CERO };
+    if (opts.conDiferenciasValor) {
+      difValorMap = await cargarDiferenciasCajasValorPorSucursal(admin, y, mo);
+      diferencias_valor = sumarDiferenciasValor(difValorMap.values());
+    }
+    return { ym, totales, diferencias_valor, difValorMap, filasSucursal };
+  }
+
+  try {
+    // 1) Mes seleccionado primero (crítico). En serie: evita saturar Postgres
+    //    (el paralelismo de varios meses provocaba "statement timeout").
+    const mesSelMeta = mesesACargar.find((m) => m.ym === mesSeleccionYm);
+    if (!mesSelMeta) {
       return NextResponse.json(
-        {
-          error: faltaRpc
-            ? 'No se pudo ejecutar la función admin_estadisticas_mensual_sucursal en Postgres.'
-            : 'Error al obtener estadísticas mensuales.',
-          detalle: msg,
-          ayuda: faltaRpc
-            ? [
-                'En Supabase: SQL Editor → ejecutá las migraciones del informe mensual (004, 009, 011).',
-                'Si la función ya existe pero sigue fallando: ejecutá también supabase/migrations/005_admin_informe_mensual_rpc_grants.sql (permisos EXECUTE para service_role).',
-              ].join(' ')
-            : undefined,
-        },
+        { error: 'Mes seleccionado fuera del rango de tendencias.' },
         { status: 500 }
       );
     }
-    const ant = anteriorMesYm(y, mo);
-    y = ant.year;
-    mo = ant.month;
+
+    const mesSel = await cargarMesAgregados(mesSelMeta.year, mesSelMeta.month, mesSelMeta.ym, {
+      conDiferenciasValor: true,
+    });
+
+    let filasDetalle: InformeMensualDetalleSucursal[];
+    try {
+      filasDetalle = await construirDetalleSucursalInformeMensual(
+        admin,
+        mesSel.filasSucursal.map((f) => ({
+          sucursal_id: f.sucursal_id,
+          nombrefantasia: f.nombrefantasia,
+          productos_inventariados: f.productos_inventariados,
+          vencidos_vendidas_unidades: f.vencidos_vendidas_unidades,
+        })),
+        year,
+        month
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!esTimeoutPostgres(msg)) throw e;
+      // Fallback: tabla con datos del RPC; métricas extra en 0.
+      filasDetalle = mesSel.filasSucursal.map((f) => ({
+        sucursal_id: f.sucursal_id,
+        nombrefantasia: f.nombrefantasia,
+        productos_inventariados: f.productos_inventariados,
+        total_base_trimestre: 0,
+        inventariados_padron_trimestre: 0,
+        porcentaje_inventariados_sobre_base: 0,
+        productos_con_diferencia: 0,
+        productos_mal_contados: 0,
+        productos_cargados_vencimientos: 0,
+        por_vencer_mes: 0,
+        productos_vencidos_mes: 0,
+        vencidos_costo: f.vencidos_costo,
+        unidades_vencidos_vendidas: f.vencidos_vendidas_unidades,
+        vales: 0,
+        vales_pendientes: 0,
+      }));
+    }
+
+    const filasDifValor = Array.from(mesSel.difValorMap.entries())
+      .map(([sucursal_id, totales]) => ({
+        sucursal_id,
+        nombrefantasia: nombreSucursalById.get(sucursal_id) ?? `Sucursal ${sucursal_id}`,
+        ...normalizarDiferenciasValorAgregado(totales),
+      }))
+      .filter((f) => f.lineas_con_diferencia > 0 || f.valor_neto !== 0)
+      .sort(
+        (a, b) =>
+          Math.abs(b.valor_neto) - Math.abs(a.valor_neto) ||
+          a.nombrefantasia.localeCompare(b.nombrefantasia, 'es')
+      );
+
+    seleccionMes = {
+      mes: mesSeleccionYm,
+      filasSucursal: filasDetalle,
+      totales: totalesDetalleInformeMensual(
+        filasDetalle,
+        mesSel.totales.inventario_lineas_con_diferencia
+      ),
+      diferencias_valor: {
+        filasSucursal: filasDifValor,
+        totales: mesSel.diferencias_valor,
+      },
+    };
+
+    // 2) Resto de meses en serie; timeout en un mes no tumba el informe.
+    const porYm = new Map<string, ResultadoMes>([[mesSel.ym, mesSel]]);
+    for (const m of mesesACargar) {
+      if (m.ym === mesSeleccionYm) continue;
+      try {
+        const r = await cargarMesAgregados(m.year, m.month, m.ym, {
+          conDiferenciasValor: true,
+        });
+        porYm.set(m.ym, r);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`informe-mensual mes ${m.ym}:`, msg);
+        porYm.set(m.ym, {
+          ym: m.ym,
+          totales: { ...TOTALES_MES_CERO },
+          diferencias_valor: { ...DIFERENCIAS_VALOR_CERO },
+          difValorMap: new Map(),
+          filasSucursal: [],
+        });
+        if (!esTimeoutPostgres(msg) && !/Error al obtener|could not find function/i.test(msg)) {
+          // Otros errores inesperados: seguir con ceros; no abortar.
+        }
+      }
+    }
+
+    // Vales de toda la serie en una sola consulta a Onze, agrupados por mes.
+    const mesesOrdenados = [...mesesACargar].reverse();
+    const primerMes = mesesOrdenados[0];
+    const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1];
+    let valesPorMes = new Map<string, { vales: number; vales_pendientes: number }>();
+    if (primerMes && ultimoMes) {
+      const { fecha_inicio: desdeSerie } = rangoMesCalendarioYm(primerMes.year, primerMes.month);
+      const { fecha_fin: finSerie } = rangoMesCalendarioYm(ultimoMes.year, ultimoMes.month);
+      const res = await queryValesPorMes(
+        [...nombreSucursalById.keys()],
+        desdeSerie,
+        ymdAddDays(finSerie, 1)
+      );
+      if (res.ok) valesPorMes = res.data;
+      else console.warn('informe mensual (vales tendencia):', res.error);
+    }
+
+    for (const m of mesesOrdenados) {
+      const r = porYm.get(m.ym);
+      const vales = valesPorMes.get(m.ym);
+      trends.push({
+        mes: m.ym,
+        totales: {
+          ...(r?.totales ?? { ...TOTALES_MES_CERO }),
+          vales: vales?.vales ?? 0,
+          vales_pendientes: vales?.vales_pendientes ?? 0,
+        },
+        diferencias_valor:
+          m.ym === mesSeleccionYm
+            ? mesSel.diferencias_valor
+            : r?.diferencias_valor ?? { ...DIFERENCIAS_VALOR_CERO },
+      });
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const faltaRpc =
+      /function .* does not exist|42883|could not find function|permission denied for function/i.test(
+        msg
+      );
+    const timeout = esTimeoutPostgres(msg);
+    return NextResponse.json(
+      {
+        error: faltaRpc
+          ? 'No se pudo ejecutar la función admin_estadisticas_mensual_sucursal en Postgres.'
+          : timeout
+            ? 'La consulta del informe mensual tardó demasiado (timeout de Postgres).'
+            : 'Error al obtener estadísticas mensuales.',
+        detalle: msg,
+        ayuda: faltaRpc
+          ? [
+              'En Supabase: SQL Editor → ejecutá las migraciones del informe mensual (004, 009, 011).',
+              'Si la función ya existe pero sigue fallando: ejecutá también supabase/migrations/005_admin_informe_mensual_rpc_grants.sql (permisos EXECUTE para service_role).',
+            ].join(' ')
+          : timeout
+            ? 'Probá de nuevo en unos segundos. Si persiste, ejecutá en Supabase la migración 026_admin_informe_mensual_statement_timeout.sql.'
+            : undefined,
+      },
+      { status: 500 }
+    );
   }
-
-  trends.reverse();
-
   if (!seleccionMes) {
     return NextResponse.json({ error: 'Mes seleccionado fuera del rango de tendencias.' }, { status: 500 });
   }
 
-  const bajasStock = await cargarBajasStock(admin, trends, mesSeleccionYm);
+  let bajasStock;
+  try {
+    bajasStock = await cargarBajasStock(admin, trends, mesSeleccionYm);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    bajasStock = {
+      disponible: false as const,
+      error: msg,
+      trends: [],
+      mesSeleccionado: { filasSucursal: [], totales: BAJAS_STOCK_CERO },
+      detalle: [],
+      sucursales: [],
+    };
+  }
 
   return NextResponse.json({
     mesSeleccionado: mesSeleccionYm,
@@ -518,11 +696,11 @@ export async function GET(request: NextRequest) {
     bajasStock,
     leyenda: {
       productos_inventariados:
-        'Avance del padrón del trimestre (productos con vecesinventariado > 0 / base_productos). Mismo criterio que el progreso del dashboard. No cuenta líneas de controles de auditoría ni productos fuera del padrón.',
+        'Productos distintos inventariados en controles cerrados del mes (según fecha de cierre). El % es frente a la base del trimestre a recontar (FARMA/BIENESTAR/PSICOTRÓPICOS, sin «Sin padrón»).',
       inventario_diferencias:
-        'Líneas de inventario con diferencias en controles cerrados cuya fecha fin cayó en el mes (KPI superior). Con dif. en tabla: productos distintos con diferencia (excluye auditoría).',
+        'Líneas de inventario con diferencias en controles cerrados cuya fecha fin cayó en el mes (KPI superior). Con dif. en tabla: productos distintos con diferencia (excluye auditoría); el % es frente a inventariados del mes.',
       productos_mal_contados:
-        'Líneas con diferencia en controles de auditoría cerrados en el mes cuyo ajuste sucursal (auditado) tiene el mismo valor en cajas y unidades pero signo opuesto a la diferencia del auditor.',
+        'Líneas con diferencia en controles de auditoría cerrados en el mes cuyo ajuste sucursal (auditado) tiene el mismo valor en cajas y unidades pero signo opuesto a la diferencia del auditor. El % es frente a «Con dif.» de la sucursal.',
       inventario_diferencias_valor:
         'Valor neteado de diferencias solo en cajas (stock_real_cajas − stock_sist_cajas), en controles cerrados del mes. Por línea: Δ cajas × costo por caja. Se ignoran diferencias en unidades sueltas. Neto = positivo − negativo.',
       productos_cargados_vencimientos:

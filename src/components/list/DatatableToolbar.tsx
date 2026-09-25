@@ -4,6 +4,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
+import {
   calcularRangoPaginacion,
   OPCIONES_TAM_PAGINA_DATATABLE,
   type TamPaginaDatatable,
@@ -23,8 +26,14 @@ interface DatatableToolbarProps {
   hideSearch?: boolean;
   /** Ocultar selector de filas por página. */
   hidePageSize?: boolean;
-  /** Filtros adicionales (segunda fila de la toolbar). */
+  /** Filtros adicionales (accesibles con botón «Filtros»). */
   toolbarFilters?: ReactNode;
+  /** Badge de filtros activos en el botón. */
+  filtrosActivos?: number;
+  /** Columna de búsqueda (vacío = varias columnas / búsqueda amplia). */
+  searchColumn?: string;
+  onSearchColumnChange?: (value: string) => void;
+  searchColumnOptions?: Array<{ value: string; label: string }>;
 }
 
 export function DatatableToolbar({
@@ -40,6 +49,10 @@ export function DatatableToolbar({
   hideSearch = false,
   hidePageSize = false,
   toolbarFilters,
+  filtrosActivos = 0,
+  searchColumn = '',
+  onSearchColumnChange,
+  searchColumnOptions,
 }: DatatableToolbarProps) {
   const { inicio, fin, totalPaginas } = calcularRangoPaginacion(
     totalFilas,
@@ -49,6 +62,7 @@ export function DatatableToolbar({
   const pagina = Math.min(Math.max(paginaActual, 1), totalPaginas);
   const paginacionActiva = tamPagina !== 'all' && totalPaginas > 1;
   const [busquedaBorrador, setBusquedaBorrador] = useState(busquedaTexto);
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
 
   useEffect(() => {
     setBusquedaBorrador(busquedaTexto);
@@ -107,23 +121,49 @@ export function DatatableToolbar({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {toolbarFilters ? (
+            <FiltrosToggleButton
+              abierto={filtrosAbiertos}
+              onClick={() => setFiltrosAbiertos((v) => !v)}
+              activos={filtrosActivos}
+            />
+          ) : null}
           {!hideSearch ? (
-            <div className="relative min-w-[200px] flex-1 sm:max-w-xs lg:flex-none">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                type="search"
-                value={busquedaBorrador}
-                onChange={(e) => setBusquedaBorrador(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    aplicarBusqueda();
-                  }
-                }}
-                placeholder={searchPlaceholder}
-                aria-label={searchPlaceholder}
-                className="h-7 w-full rounded-md border border-gray-300 bg-white py-0.5 pl-7 pr-2 text-xs text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:h-8 sm:pl-8 sm:pr-3 sm:text-sm dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100 dark:placeholder:text-gray-500"
-              />
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:max-w-xl lg:flex-none">
+              {searchColumnOptions && onSearchColumnChange ? (
+                <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
+                  <span className="shrink-0 font-medium">Columna</span>
+                  <select
+                    value={searchColumn}
+                    onChange={(e) => onSearchColumnChange(e.target.value)}
+                    aria-label="Columna de búsqueda"
+                    className="h-7 max-w-[10rem] rounded-md border border-gray-300 bg-white px-1.5 text-xs text-gray-900 sm:h-8 sm:max-w-[12rem] sm:text-sm dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                  >
+                    {searchColumnOptions.map((o) => (
+                      <option key={o.value || '__all__'} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <div className="relative min-w-[180px] flex-1 sm:min-w-[200px]">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="search"
+                  value={busquedaBorrador}
+                  onChange={(e) => setBusquedaBorrador(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      aplicarBusqueda();
+                    }
+                  }}
+                  placeholder={searchPlaceholder}
+                  aria-label={searchPlaceholder}
+                  className="h-7 w-full rounded-md border border-gray-300 bg-white py-0.5 pl-7 pr-2 text-xs text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:h-8 sm:pl-8 sm:pr-3 sm:text-sm dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100 dark:placeholder:text-gray-500"
+                />
+              </div>
             </div>
           ) : null}
           {paginacionActiva ? (
@@ -155,7 +195,7 @@ export function DatatableToolbar({
           ) : null}
         </div>
       </div>
-      {toolbarFilters ? (
+      {toolbarFilters && filtrosAbiertos ? (
         <div className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-2 border-t border-gray-100 pt-2 dark:border-gray-800">
           {toolbarFilters}
         </div>

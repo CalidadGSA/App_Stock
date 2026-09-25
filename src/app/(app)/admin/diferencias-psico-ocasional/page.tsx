@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -14,6 +14,10 @@ import type {
   DiferenciaPsicoOcasionalSucursal,
 } from '@/app/api/admin/diferencias-psico-ocasional/route';
 import DiferenciasPsicoListMobile from '@/components/admin/DiferenciasPsicoListMobile';
+import {
+  CollapsibleFiltrosPanel,
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
 
 interface SucursalOption {
   id: string;
@@ -54,6 +58,7 @@ export default function DiferenciasPsicoOcasionalPage() {
   const [data, setData] = useState<ResumenData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
 
   useEffect(() => {
     async function cargarSucursales() {
@@ -110,58 +115,75 @@ export default function DiferenciasPsicoOcasionalPage() {
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-            Diferencias psicotrópicos / estupefacientes
-          </h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Inventarios ocasionales de sucursal ya cerrados.
-          </p>
+        <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              Diferencias psicotrópicos / estupefacientes
+            </h1>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              Inventarios ocasionales de sucursal ya cerrados.
+            </p>
+          </div>
+          <FiltrosToggleButton
+            abierto={filtrosAbiertos}
+            onClick={() => setFiltrosAbiertos((v) => !v)}
+            activos={(sucursalId ? 1 : 0) + (soloPendientes ? 1 : 0)}
+            className="shrink-0"
+          />
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Filtros</h2>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
-          <label className="flex w-full min-w-0 flex-col gap-1 text-sm sm:min-w-[200px]">
-            <span className="text-gray-600 dark:text-gray-400">Sucursal</span>
-            <select
-              value={sucursalId}
-              onChange={(e) => setSucursalId(e.target.value)}
-              className="h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+      <div className="relative min-h-0">
+        <CollapsibleFiltrosPanel
+          abierto={filtrosAbiertos}
+          onCerrar={() => setFiltrosAbiertos(false)}
+          descripcion="Filtrá por sucursal, fechas y estado de ajuste."
+        >
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
+            <label className="flex w-full min-w-0 flex-col gap-1 text-sm sm:min-w-[200px]">
+              <span className="text-gray-600 dark:text-gray-400">Sucursal</span>
+              <select
+                value={sucursalId}
+                onChange={(e) => setSucursalId(e.target.value)}
+                className="h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+              >
+                <option value="">Todas las sucursales</option>
+                {sucursales.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-gray-600 dark:text-gray-400">Desde</span>
+              <Input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-gray-600 dark:text-gray-400">Hasta</span>
+              <Input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+            </label>
+            <label className="flex items-center gap-2 pb-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={soloPendientes}
+                onChange={(e) => setSoloPendientes(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Solo sin ajustar
+            </label>
+            <Button
+              onClick={() => {
+                setFiltrosAbiertos(false);
+                void cargar();
+              }}
+              disabled={loading}
             >
-              <option value="">Todas las sucursales</option>
-              {sucursales.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.nombre}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-gray-600 dark:text-gray-400">Desde</span>
-            <Input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-gray-600 dark:text-gray-400">Hasta</span>
-            <Input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
-          </label>
-          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 pb-2">
-            <input
-              type="checkbox"
-              checked={soloPendientes}
-              onChange={(e) => setSoloPendientes(e.target.checked)}
-              className="rounded border-gray-300"
-            />
-            Solo sin ajustar
-          </label>
-          <Button onClick={() => void cargar()} disabled={loading}>
-            {loading ? 'Cargando…' : 'Aplicar'}
-          </Button>
-        </CardContent>
-      </Card>
+              {loading ? 'Cargando…' : 'Aplicar'}
+            </Button>
+          </div>
+        </CollapsibleFiltrosPanel>
+      </div>
 
       {loading && <PageSpinner />}
 

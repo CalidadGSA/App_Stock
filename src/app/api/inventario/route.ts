@@ -4,6 +4,7 @@ import { canSeeAllInventarioTipos, getOperadorRbacContext } from '@/lib/auth/rba
 import { nombreTipoControlInventario } from '@/lib/inventario/tipo-control';
 import {
   CATEGORIA_MACRO_SIN_PADRON,
+  esCategoriaMacro,
   esCategoriaMacroInventarioDiario,
   esCategoriaMacroSinPadron,
   filtrarQueryBaseProductosPorMacro,
@@ -12,9 +13,11 @@ import {
 import { obtenerProgresoTrimestreSucursal, trimestrePadronCompleto } from '@/lib/inventario/trimestre-base';
 import { leerVueltasPsicosSucursal } from '@/lib/inventario/vueltas-psicos-sucursal';
 import {
+  filtrarIdsSinConflictoMacroPadron,
   getFichasInventarioDiario,
   padronProductosDisponible,
 } from '@/lib/padron-productos-lookup';
+import { baseRequiereFiltroMacroPadron } from '@/lib/inventario/macro-base-legacy';
 import { quantioProductosDisponible } from '@/lib/quantio-productos-lookup';
 import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
 import {
@@ -26,9 +29,11 @@ import {
   filtroUsuarioIds,
   idsOperadoresAdminLike,
 } from '@/lib/auth/operadores-admin-like';
+import { listarOperadoresDeControlesInventario } from '@/lib/controles-operadores-opciones';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { fechaHoyArgentinaYmd } from '@/lib/utils';
+import { parsePaginationParams } from '@/lib/api/pagination';
+import { fechaHoyArgentinaYmd, parseYmdCalendario, rangoFechasArgentinaIso } from '@/lib/utils';
+import { getSucursalIdSesion } from '@/lib/sucursales/sucursal-session';
 
 async function seleccionarIdsInventarioDiario(
   admin: Awaited<ReturnType<typeof createAdminClient>>,
@@ -78,7 +83,6 @@ async function seleccionarIdsInventarioDiario(
     ];
 
     let lastError: string | null = null;
-    let foundRow = false;
     for (const a of attempts) {
       const { data, error } = await admin
         .from('cantidad_inventario')
@@ -97,7 +101,6 @@ async function seleccionarIdsInventarioDiario(
         ? data[0]
         : null) as Record<string, unknown> | null;
       if (!row) continue;
-      foundRow = true;
       const valorRaw =
         row[a.cantidadDiariaField] ??
         row[a.cantidadDiariaField.toLowerCase()] ??
@@ -173,7 +176,10 @@ async function seleccionarIdsInventarioDiario(
   const seleccionados: number[] = [];
   const vistos = new Set<number>();
 
-  // Fuente de verdad: base_productos (o base_productos_drogueria arriba). Sin filtro por padrón.
+  // Las bases hasta Q32026 se clasificaban por `cat_macro`, que mezcla categorías: para esas
+  // hay que revalidar contra el padrón. Desde Q42026 la base ya viene clasificada por proveedor.
+  const revalidarMacro = baseRequiereFiltroMacroPadron(trimestreActual);
+
   if (categoriaMacro === 'PSICOTROPICOS') {
     const vueltasMax = await leerVueltasPsicosSucursal(admin, sucursalNum);
 
@@ -201,8 +207,13 @@ async function seleccionarIdsInventarioDiario(
         .map((row) => Number(row.idproducto))
         .filter((n) => !Number.isNaN(n) && !vistos.has(n) && !idsExcluidos.has(n));
 
-      for (const id of candidatos) {
-        vistos.add(id);
+      for (const id of candidatos) vistos.add(id);
+
+      const validos = revalidarMacro
+        ? await filtrarIdsSinConflictoMacroPadron(candidatos, 'PSICOTROPICOS')
+        : candidatos;
+
+      for (const id of validos) {
         seleccionados.push(id);
         if (seleccionados.length === objetivo) break;
       }
@@ -257,8 +268,14 @@ async function seleccionarIdsInventarioDiario(
         .map((r: { idproducto: number }) => Number(r.idproducto))
         .filter((n) => !Number.isNaN(n) && !vistos.has(n) && !idsExcluidos.has(n));
 
-      for (const id of candidatos) {
-        vistos.add(id);
+      for (const id of candidatos) vistos.add(id);
+
+      const validos =
+        revalidarMacro && esCategoriaMacro(categoriaMacro)
+          ? await filtrarIdsSinConflictoMacroPadron(candidatos, categoriaMacro)
+          : candidatos;
+
+      for (const id of validos) {
         seleccionados.push(id);
         if (seleccionados.length === objetivo) break;
       }
@@ -289,19 +306,24 @@ export async function GET(request: NextRequest) {
   const rbac = await getOperadorRbacContext();
   if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
   const admin = await createAdminClient();
 
   const { searchParams } = new URL(request.url);
-  const page = parseInt(searchParams.get('page') ?? '1', 10);
-  const pageSize = parseInt(searchParams.get('pageSize') ?? '20', 10);
-  const desde = searchParams.get('desde');
-  const hasta = searchParams.get('hasta');
+  // Valida page/pageSize (NaN o tamaños enormes rompían `.range()` o traían toda la tabla).
+  const { page, pageSize } = parsePaginationParams(searchParams);
+  // Fechas inválidas se ignoran (antes rompían la consulta con 500).
+  const desde = parseYmdCalendario(searchParams.get('desde')) ? searchParams.get('desde') : null;
+  const hasta = parseYmdCalendario(searchParams.get('hasta')) ? searchParams.get('hasta') : null;
   const estado = searchParams.get('estado');
+  const operadorRaw = String(searchParams.get('operador') ?? '').trim();
+  const operadorId = operadorRaw ? parseInt(operadorRaw, 10) : NaN;
   const esAdmin = canSeeAllInventarioTipos(rbac);
+  const ocultarAdminLike = debeOcultarInventariosDeAdmin(rbac);
+  const idsAdminLike = ocultarAdminLike ? await idsOperadoresAdminLike(admin) : [];
+  const excluirAdminLike = ocultarAdminLike ? filtroUsuarioIds(idsAdminLike) : null;
 
   let query = admin
     .from('controles_inventario')
@@ -312,31 +334,35 @@ export async function GET(request: NextRequest) {
     query = query.in('tipo', ['diario', 'ocasional_sucursal']);
   }
 
-  if (debeOcultarInventariosDeAdmin(rbac)) {
-    const idsAdminLike = await idsOperadoresAdminLike(admin);
-    const excluir = filtroUsuarioIds(idsAdminLike);
-    if (excluir) {
-      query = query.not('usuario_id', 'in', excluir);
-    }
+  if (excluirAdminLike) {
+    query = query.not('usuario_id', 'in', excluirAdminLike);
   }
 
+  // Límites en días calendario Argentina (fecha_inicio es timestamptz).
   if (desde) {
-    query = query.gte('fecha_inicio', desde);
+    query = query.gte('fecha_inicio', rangoFechasArgentinaIso(desde, desde).desdeIso);
   }
   if (hasta) {
-    // sumar un día para incluir todo el día hasta
-    query = query.lte('fecha_inicio', `${hasta}T23:59:59.999Z`);
+    query = query.lte('fecha_inicio', rangoFechasArgentinaIso(hasta, hasta).hastaIso);
   }
   if (estado === 'en_progreso' || estado === 'cerrado') {
     query = query.eq('estado', estado);
+  }
+  if (Number.isFinite(operadorId) && operadorId > 0) {
+    query = query.eq('usuario_id', operadorId);
   }
 
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  const { data, error, count } = await query
-    .order('created_at', { ascending: false })
-    .range(from, to);
+  const [{ data, error, count }, operadores] = await Promise.all([
+    query.order('created_at', { ascending: false }).range(from, to),
+    listarOperadoresDeControlesInventario(admin, {
+      sucursalId,
+      esAdmin,
+      excluirAdminLike,
+    }),
+  ]);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({
@@ -344,6 +370,7 @@ export async function GET(request: NextRequest) {
     total: count ?? data?.length ?? 0,
     page,
     pageSize,
+    operadores,
   });
 }
 
@@ -352,15 +379,20 @@ export async function POST(request: NextRequest) {
   const operador = await getOperadorSession();
   if (!operador) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
 
-  const cookieStore = await cookies();
-  const sucursalId = cookieStore.get('sucursal_id')?.value;
+  const sucursalId = await getSucursalIdSesion();
   if (!sucursalId) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });
 
-  const body = await request.json() as {
+  type CrearBody = {
     descripcion?: string;
     categoria_macro?: CategoriaMacroInventarioDiario | null;
     confirm_override?: boolean;
   };
+  let body: CrearBody;
+  try {
+    body = (await request.json()) as CrearBody;
+  } catch {
+    return NextResponse.json({ error: 'JSON inválido' }, { status: 400 });
+  }
 
   const admin = await createAdminClient();
   const tipoObjetivo = 'diario';
@@ -370,13 +402,17 @@ export async function POST(request: NextRequest) {
   }
   const categoriaMacro = categoriaMacroRaw ?? null;
 
-  const { data: controlesAbiertosMismaCategoria, error: abiertosError } = await admin
+  let abiertosQuery = admin
     .from('controles_inventario')
     .select('id')
     .eq('sucursal_id', parseInt(sucursalId, 10))
     .eq('estado', 'en_progreso')
-    .eq('tipo', 'diario')
-    .eq('categoria_macro', categoriaMacro ?? null);
+    .eq('tipo', 'diario');
+  // `.eq(col, null)` genera `col=eq.null` y no matchea NULL en PostgREST; hay que usar `.is()`.
+  abiertosQuery = categoriaMacro
+    ? abiertosQuery.eq('categoria_macro', categoriaMacro)
+    : abiertosQuery.is('categoria_macro', null);
+  const { data: controlesAbiertosMismaCategoria, error: abiertosError } = await abiertosQuery;
 
   if (abiertosError) {
     return NextResponse.json({ error: abiertosError.message }, { status: 500 });

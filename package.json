@@ -10,6 +10,8 @@
     "cron:legacy": "node src/jobs/obrasSocialesSync.runner.js",
     "inventario:cierre": "node --import tsx scripts/run-inventario-cierre-once.cjs",
     "cron:diagnose": "node scripts/diagnose-legacy-cron.cjs",
+    "inventario:cierre:diagnose": "node scripts/diagnose-inventario-cierre-cron.cjs",
+    "onze:diagnose": "node scripts/diagnose-onze-stock.cjs",
     "devolver:masivo": "node --import tsx scripts/devolver-para-devolver-todas-sucursales.cjs",
     "build": "next build",
     "start": "next start",

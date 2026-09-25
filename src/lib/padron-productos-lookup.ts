@@ -3,10 +3,16 @@ import {
   getPadronPorProductos,
   isPadronDatabaseConfigured,
 } from '@/lib/padron-final-db';
-import { macroDesdePadron } from '@/lib/vencimientos-drogueria-lab';
+import {
+  macroDesdePadron,
+  macroDesdeProveedorMarrone,
+} from '@/lib/vencimientos-drogueria-lab';
 import type { CategoriaMacro } from '@/lib/inventario/categoria-macro';
 import { parseFraccionableValor } from '@/lib/inventario/fraccionable';
 import type { ProductoLegacy } from '@/types';
+import { normalizarTextoBusqueda } from '@/lib/text-normalize';
+import { getPreciosAlfabetaPlexdr } from '@/lib/legacy-db/plexdr-precios';
+import { getFichasMedicamento } from '@/lib/legacy-db/onze-medicamentos';
 
 export type PadronProductoFicha = {
   producto_id_sistema: string;
@@ -36,6 +42,8 @@ type ResolvedCols = {
   laboratorioCol: string | null;
   catMacroCol: string | null;
   activoCol: string | null;
+  /** Activación manual de GSA: vale por `activo` cuando el ERP dio de baja el producto. */
+  activoManualCol: string | null;
   fraccionableCol: string | null;
   refrigeracionCol: string | null;
 };
@@ -47,7 +55,12 @@ function quoteIdent(id: string): string {
 }
 
 function sanitizeIlikeTerm(raw: string): string {
-  return raw.replace(/\\/g, ' ').replace(/%/g, ' ').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  return normalizarTextoBusqueda(raw)
+    .replace(/\\/g, ' ')
+    .replace(/%/g, ' ')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function pickCol(map: Map<string, string>, candidates: string[]): string | null {
@@ -90,6 +103,7 @@ async function getResolvedCols(): Promise<ResolvedCols> {
     laboratorioCol: pickCol(map, ['nombrelab', 'laboratorio', 'laboratorionombre', 'lab_nombre']),
     catMacroCol: pickCol(map, ['cat_macro', 'catmacro', 'categoria_macro']),
     activoCol: pickCol(map, ['activo', 'habilitado', 'vigente']),
+    activoManualCol: pickCol(map, ['activomanual', 'activo_manual']),
     fraccionableCol: pickCol(map, ['fraccionable']),
     refrigeracionCol: pickCol(map, ['refrigeracion', 'refrigerado']),
   };
@@ -157,9 +171,27 @@ function selectList(cols: ResolvedCols): string {
   if (cols.laboratorioCol) parts.push(quoteIdent(cols.laboratorioCol));
   if (cols.catMacroCol) parts.push(quoteIdent(cols.catMacroCol));
   if (cols.activoCol) parts.push(quoteIdent(cols.activoCol));
+  if (cols.activoManualCol) parts.push(quoteIdent(cols.activoManualCol));
   if (cols.fraccionableCol) parts.push(quoteIdent(cols.fraccionableCol));
   if (cols.refrigeracionCol) parts.push(quoteIdent(cols.refrigeracionCol));
   return Array.from(new Set(parts)).join(', ');
+}
+
+/**
+ * Buscadores/escaneo: productos vigentes. Vale el `activo` que sincroniza Plex **o** el
+ * `activomanual` que carga GSA en el padrón (para usar en la app productos dados de baja
+ * en el ERP). Vacío si no existe ninguna de las dos columnas.
+ */
+function sqlFiltroActivoS(cols: ResolvedCols): string {
+  const condiciones: string[] = [];
+  if (cols.activoCol) {
+    condiciones.push(`upper(trim(${quoteIdent(cols.activoCol)}::text)) = 'S'`);
+  }
+  if (cols.activoManualCol) {
+    condiciones.push(`upper(trim(${quoteIdent(cols.activoManualCol)}::text)) = 'S'`);
+  }
+  if (condiciones.length === 0) return '';
+  return ` and (${condiciones.join(' or ')})`;
 }
 
 async function queryRows(sql: string, params: unknown[]): Promise<PadronProductoFicha[]> {
@@ -193,23 +225,12 @@ async function enrichFraccionableDesdeMedicamentos(
     const admin = await createAdminClient();
     const fraccionablePorId = new Map<number, number>();
 
-    const chunkSize = 500;
-    for (let i = 0; i < ids.length; i += chunkSize) {
-      const lote = ids.slice(i, i + chunkSize);
-      const { data, error } = await admin
-        .from('medicamentos')
-        .select('codplex, fraccionable')
-        .in('codplex', lote);
-      if (error) {
-        console.warn('[padron] fraccionable desde medicamentos:', error.message);
-        break;
-      }
-      for (const row of data ?? []) {
-        const id = Number((row as { codplex?: number }).codplex);
-        const fr = parseFraccionableValor((row as { fraccionable?: unknown }).fraccionable);
-        if (Number.isFinite(id) && fr != null) {
-          fraccionablePorId.set(id, fr);
-        }
+    const { fichas: fichasMedicamento } = await getFichasMedicamento(admin, ids);
+    for (const [codplex, f] of fichasMedicamento) {
+      const id = Number(codplex);
+      const fr = parseFraccionableValor(f.fraccionable);
+      if (Number.isFinite(id) && fr != null) {
+        fraccionablePorId.set(id, fr);
       }
     }
 
@@ -247,6 +268,7 @@ export async function getProductoPadronById(
     select ${selectList(cols)}
     from "padron_final"
     where ${quoteIdent(cols.idCol)}::text = $1
+    ${sqlFiltroActivoS(cols)}
     limit 1
   `;
   const rows = await queryRows(sql, [idStr]);
@@ -307,6 +329,7 @@ export async function getProductoPadronByBarcode(
     select ${selectList(cols)}
     from "padron_final"
     where (${conditions.join(' or ')})
+    ${sqlFiltroActivoS(cols)}
     limit 1
   `;
   const rows = await queryRows(sql, params);
@@ -330,8 +353,8 @@ function columnasBusquedaPadron(cols: ResolvedCols): string[] {
 }
 
 /**
- * Búsqueda en padron_final para inventarios ocasionales / auditoría.
- * Misma amplitud que el listado admin: varias columnas, sin filtrar por activo.
+ * Búsqueda en padron_final para inventarios ocasionales / auditoría / vencimientos.
+ * Solo productos con Activo = S.
  */
 export async function buscarProductosEnPadron(
   rawQ: string,
@@ -344,6 +367,7 @@ export async function buscarProductosEnPadron(
 
   const cols = await getResolvedCols();
   const select = selectList(cols);
+  const activoSql = sqlFiltroActivoS(cols);
   const p = getPadronPool();
   const seen = new Map<string, PadronProductoFicha>();
 
@@ -379,6 +403,7 @@ export async function buscarProductosEnPadron(
       select ${select}
       from "padron_final"
       where (${exactConds.join(' or ')})
+      ${activoSql}
       limit 25
     `;
     const exactRes = await p.query<Record<string, unknown>>(sqlExact, exactParams);
@@ -397,6 +422,7 @@ export async function buscarProductosEnPadron(
         select ${select}
         from "padron_final"
         where (${parts.join(' or ')})
+        ${activoSql}
         order by ${orderCol} asc nulls last
         limit $2
       `;
@@ -419,6 +445,30 @@ export async function filtrarIdsPorCategoriaMacroPadron(
     const p = padron.get(String(id));
     if (!p?.cat_macro) return false;
     return macroDesdePadron(p.cat_macro) === categoriaMacro;
+  });
+}
+
+/**
+ * Solo deja IDs cuyo `proveedormarrone` del padrón mapea a la macro del inventario.
+ * «Sin proveedor», vacío, valor desconocido o ausente en padrón → se excluyen
+ * (evita perfumes mal cargados en base_productos como Farma).
+ *
+ * Solo hace falta para las bases generadas hasta Q32026, que se clasificaban por `cat_macro`:
+ * ver `baseRequiereFiltroMacroPadron`. Desde Q42026 la base ya viene clasificada por proveedor.
+ */
+export async function filtrarIdsSinConflictoMacroPadron(
+  ids: number[],
+  categoriaMacro: CategoriaMacro
+): Promise<number[]> {
+  if (ids.length === 0) return [];
+  if (!padronProductosDisponible()) return ids;
+
+  const padron = await getPadronPorProductos(ids.map(String));
+  return ids.filter((id) => {
+    const p = padron.get(String(id));
+    if (!p) return false;
+    const macroPm = macroDesdeProveedorMarrone(p.proveedormarrone);
+    return macroPm === categoriaMacro;
   });
 }
 
@@ -480,16 +530,21 @@ export async function resolverStockLegacy(
   allowMissingStock: boolean
 ): Promise<
   | { ok: true; stock: NonNullable<Parameters<typeof fichaPadronAProductoLegacy>[1]> }
-  | { ok: false; failed: boolean }
+  | {
+      ok: false;
+      failed: true;
+      reason: 'no_sucursal' | 'bad_ids' | 'unconfigured' | 'timeout' | 'unavailable' | 'error';
+      detail?: string;
+    }
 > {
   if (!sucursalId) {
-    return { ok: false, failed: true };
+    return { ok: false, failed: true, reason: 'no_sucursal' };
   }
 
   const sucursalNum = parseInt(sucursalId, 10);
   const idProducto = Number(productoId);
   if (Number.isNaN(sucursalNum) || Number.isNaN(idProducto)) {
-    return { ok: false, failed: true };
+    return { ok: false, failed: true, reason: 'bad_ids' };
   }
 
   const MAX_ATTEMPTS = 3;
@@ -536,20 +591,38 @@ export async function resolverStockLegacy(
         console.warn(
           `[stock-live] timeout MySQL tras ${TIMEOUT_MS}ms (intento ${attempt + 1}/${MAX_ATTEMPTS}) producto=${productoId}`
         );
-      } else if (stockResult.status === 'unavailable') {
+        return { ok: false, failed: true, reason: 'timeout' };
+      }
+      if (stockResult.status === 'unavailable') {
+        const err = 'error' in stockResult ? stockResult.error : undefined;
+        const errMsg =
+          err instanceof Error
+            ? err.message
+            : err && typeof err === 'object' && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : String(err ?? '');
+        const errCode =
+          err && typeof err === 'object' && 'code' in err
+            ? String((err as { code: unknown }).code ?? '')
+            : '';
+        const detail = [errCode, errMsg].filter(Boolean).join(': ').slice(0, 200);
         console.warn(
           `[stock-live] MySQL unavailable (intento ${attempt + 1}/${MAX_ATTEMPTS}) producto=${productoId}`,
-          'error' in stockResult ? stockResult.error : undefined
+          detail || undefined
         );
+        if (/Configuración MySQL incompleta|no configurado/i.test(errMsg)) {
+          return { ok: false, failed: true, reason: 'unconfigured', detail };
+        }
+        return { ok: false, failed: true, reason: 'unavailable', detail };
       }
 
-      return { ok: false, failed: true };
+      return { ok: false, failed: true, reason: 'unavailable' };
     }
 
-    return { ok: false, failed: true };
+    return { ok: false, failed: true, reason: 'unavailable' };
   } catch (e) {
     console.error('Error obteniendo stock legacy para producto', productoId, e);
-    return { ok: false, failed: true };
+    return { ok: false, failed: true, reason: 'error' };
   }
 }
 
@@ -592,6 +665,30 @@ function mapMedicamentoAFicha(row: Record<string, unknown>): PadronProductoFicha
   };
 }
 
+/**
+ * Precio de venta al público (PVP) vigente por producto: `PrecioAlfabeta` de la lista más
+ * reciente de cada producto en `plexdr.productoscostos` (ver `getPreciosAlfabetaPlexdr`).
+ * Distinto del costo y de `productos_quantio.ultimoprecio` (costo de compra en la droguería).
+ */
+export async function getPreciosVentaPorProductos(
+  _admin: Awaited<ReturnType<typeof import('@/lib/supabase/server').createAdminClient>>,
+  ids: Array<number | string | null | undefined>
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const unicos = Array.from(
+    new Set(
+      ids
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    )
+  );
+  if (unicos.length === 0) return map;
+
+  const { precios } = await getPreciosAlfabetaPlexdr(unicos);
+  for (const [id, precio] of precios) map.set(id, precio);
+  return map;
+}
+
 async function getFichasDesdeMedicamentos(
   admin: Awaited<ReturnType<typeof import('@/lib/supabase/server').createAdminClient>>,
   ids: number[]
@@ -600,21 +697,24 @@ async function getFichasDesdeMedicamentos(
   if (unicos.length === 0) return [];
 
   const fichas: PadronProductoFicha[] = [];
-  const chunkSize = 500;
-  for (let i = 0; i < unicos.length; i += chunkSize) {
-    const lote = unicos.slice(i, i + chunkSize);
-    const { data, error } = await admin
-      .from('medicamentos')
-      .select('codplex, troquel, codebar, codebar2, codebar3, codebar4, producto, presentaci, fraccionable')
-      .in('codplex', lote);
-    if (error) {
-      console.warn('[inventario] fichas desde medicamentos:', error.message);
-      break;
-    }
-    for (const row of data ?? []) {
-      const ficha = mapMedicamentoAFicha(row as Record<string, unknown>);
-      if (ficha) fichas.push(ficha);
-    }
+  const { fichas: fichasOnze, codebarsSecundarios } = await getFichasMedicamento(admin, unicos);
+  for (const [codplex, f] of fichasOnze) {
+    // `codebar2/3/4` es lo que espera el mapper; en Onze los secundarios son una tabla aparte.
+    const secundarios = (codebarsSecundarios.get(codplex) ?? []).filter(
+      (c) => c !== (f.codebar ?? '')
+    );
+    const ficha = mapMedicamentoAFicha({
+      codplex,
+      troquel: f.troquel,
+      codebar: f.codebar,
+      codebar2: secundarios[0] ?? null,
+      codebar3: secundarios[1] ?? null,
+      codebar4: secundarios[2] ?? null,
+      producto: f.producto,
+      presentaci: f.presentaci,
+      fraccionable: f.fraccionable,
+    });
+    if (ficha) fichas.push(ficha);
   }
   return fichas;
 }

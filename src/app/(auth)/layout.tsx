@@ -1,37 +1,10 @@
  'use client';
 
-import { useEffect, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import { useModoOscuro } from '@/lib/ui/use-modo-oscuro';
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
-  const [modoOscuro, setModoOscuro] = useState(false);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const guardado = localStorage.getItem('theme');
-    if (guardado === 'dark') {
-      root.classList.add('dark');
-      setModoOscuro(true);
-      return;
-    }
-    if (guardado === 'light') {
-      root.classList.remove('dark');
-      setModoOscuro(false);
-      return;
-    }
-    const prefiereOscuro = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    root.classList.toggle('dark', prefiereOscuro);
-    setModoOscuro(prefiereOscuro);
-  }, []);
-
-  function toggleModoOscuro() {
-    const root = document.documentElement;
-    const actualmenteOscuro = root.classList.contains('dark');
-    const siguiente = !actualmenteOscuro;
-    setModoOscuro(siguiente);
-    root.classList.toggle('dark', siguiente);
-    localStorage.setItem('theme', siguiente ? 'dark' : 'light');
-  }
+  const { modoOscuro, toggleModoOscuro } = useModoOscuro();
 
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-950 dark:to-slate-900 px-4">

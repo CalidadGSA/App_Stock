@@ -57,6 +57,11 @@ export async function contarLineasMalContadasAuditoriaPeriodo(
     if (sucId != null) {
       q = q.eq('controles_inventario.sucursal_id', sucId);
     }
+    // Solo controles de auditoría (misma lógica que esDiferenciaDeControlAuditoria).
+    q = q.or(
+      'origen.eq.Auditoria,tipo.in.(auditoria,ocasional_auditoria,auditoria_integral,auditoria_sorpresa)',
+      { foreignTable: 'controles_inventario' }
+    );
 
     const { data, error } = await q;
     if (error) {

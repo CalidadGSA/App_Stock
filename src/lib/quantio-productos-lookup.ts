@@ -1,7 +1,9 @@
 import type { PadronProductoFicha } from '@/lib/padron-productos-lookup';
 import { getQuantioPool, isQuantioDatabaseConfigured } from '@/lib/legacy-db/quantio-mysql';
+import { getNombresLaboratoriosPorCodlab } from '@/lib/legacy-db/onze-catalogos';
 import type { ProductoLegacy } from '@/types';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { normalizarTextoBusqueda } from '@/lib/text-normalize';
 
 export type ProductoQuantioRow = {
   idproducto: number;
@@ -98,24 +100,8 @@ export async function getNombresLaboratorioPorIds(
   );
   if (unicos.length === 0) return out;
 
-  const chunkSize = 500;
-  for (let i = 0; i < unicos.length; i += chunkSize) {
-    const lote = unicos.slice(i, i + chunkSize);
-    const { data, error } = await admin
-      .from('laboratorios')
-      .select('codlab, laborato')
-      .in('codlab', lote);
-
-    if (error) {
-      console.warn('getNombresLaboratorioPorIds:', error.message);
-      continue;
-    }
-
-    for (const row of data ?? []) {
-      const id = Number((row as { codlab?: number }).codlab);
-      const nombre = String((row as { laborato?: string }).laborato ?? '').trim();
-      if (Number.isFinite(id) && nombre) out.set(id, nombre);
-    }
+  for (const [id, nombre] of await getNombresLaboratoriosPorCodlab(unicos)) {
+    if (nombre) out.set(id, nombre);
   }
 
   return out;
@@ -175,15 +161,21 @@ export function fichaQuantioABusqueda(ficha: PadronProductoFicha) {
   };
 }
 
+/** Se consulta en cada escaneo de droguería: recordar por un rato que el catálogo existe. */
+const DISPONIBLE_CACHE_TTL_MS = 60_000;
+let disponibleCache: { expiresAt: number } | null = null;
+
 export async function quantioProductosDisponible(
   admin?: SupabaseClient
 ): Promise<boolean> {
   if (admin) {
-    const { count, error } = await admin
-      .from('productos_quantio')
-      .select('*', { count: 'exact', head: true })
-      .limit(1);
-    if (!error && (count ?? 0) > 0) return true;
+    if (disponibleCache && disponibleCache.expiresAt > Date.now()) return true;
+    // `count: 'exact'` recorría toda la tabla en cada llamada; alcanza con saber si hay una fila.
+    const { data, error } = await admin.from('productos_quantio').select('idproducto').limit(1);
+    if (!error && (data?.length ?? 0) > 0) {
+      disponibleCache = { expiresAt: Date.now() + DISPONIBLE_CACHE_TTL_MS };
+      return true;
+    }
   }
   return isQuantioDatabaseConfigured();
 }
@@ -205,6 +197,25 @@ async function getProductoQuantioLiveById(id: number): Promise<ProductoQuantioRo
   );
   const row = (rows as Record<string, unknown>[])[0];
   return row ? mapMysqlRow(row) : null;
+}
+
+/** Producto de un código de barras secundario (`plexdr.productoscodebars`). */
+async function getProductoIdPorCodebarQuantio(codebar: string): Promise<number | null> {
+  if (!isQuantioDatabaseConfigured()) return null;
+  const code = String(codebar ?? '').trim();
+  if (!code) return null;
+  try {
+    const pool = getQuantioPool();
+    const [rows] = await pool.query(
+      'SELECT MIN(IDProducto) AS idproducto FROM productoscodebars WHERE codebar = ?',
+      [code]
+    );
+    const id = Number((rows as Array<{ idproducto: number | null }>)[0]?.idproducto ?? 0);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  } catch (e) {
+    console.warn('[quantio] búsqueda por codebar:', e instanceof Error ? e.message : e);
+    return null;
+  }
 }
 
 async function getProductoQuantioLiveByBarcode(barcode: string): Promise<ProductoQuantioRow | null> {
@@ -271,16 +282,9 @@ export async function getProductoQuantioByBarcode(
     return fichaDesdeRow(row, labs);
   }
 
-  const { data: mapRow } = await admin
-    .from('productoscodebars')
-    .select('idproducto')
-    .eq('codebar', code)
-    .order('idproducto', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (mapRow && typeof mapRow.idproducto === 'number') {
-    const ficha = await getProductoQuantioById(admin, mapRow.idproducto);
+  const idPorCodebar = await getProductoIdPorCodebarQuantio(code);
+  if (idPorCodebar != null) {
+    const ficha = await getProductoQuantioById(admin, idPorCodebar);
     if (ficha) return ficha;
   }
 
@@ -308,7 +312,7 @@ export async function buscarProductosQuantio(
   q: string,
   limit = 40
 ): Promise<PadronProductoFicha[]> {
-  const term = q.trim();
+  const term = normalizarTextoBusqueda(q).trim();
   if (term.length < 2) return [];
 
   const safe = term.replace(/%/g, '').replace(/_/g, '');

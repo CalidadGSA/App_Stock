@@ -3,12 +3,20 @@ import {
   getPadronPool,
   isPadronDatabaseConfigured,
 } from '@/lib/padron-final-db';
+import { normalizarTextoBusqueda } from '@/lib/text-normalize';
+import {
+  mensajeColumnasSincronizadas,
+  origenPadronSincronizado,
+  type OrigenPadronSincronizado,
+} from '@/lib/padron-columnas-sincronizadas';
 
 export type PadronColumnMeta = {
   name: string;
   dataType: string;
   isNullable: boolean;
   ordinalPosition: number;
+  /** Sistema que sincroniza la columna (null = editable desde la app). */
+  syncedFrom: OrigenPadronSincronizado | null;
 };
 
 export type PadronMeta = {
@@ -40,6 +48,7 @@ const LIST_DEFAULT_CANDIDATES = [
   'nombrelab',
   'laboratorio',
   'activo',
+  'activomanual',
 ];
 
 const SEARCH_CANDIDATES = [
@@ -88,6 +97,7 @@ async function getColumnsDetailed(p: Pool): Promise<PadronColumnMeta[]> {
     dataType: String(r.data_type),
     isNullable: r.is_nullable === 'YES',
     ordinalPosition: Number(r.ordinal_position),
+    syncedFrom: origenPadronSincronizado(String(r.column_name)),
   }));
 }
 
@@ -242,6 +252,8 @@ export type ListPadronOpts = {
   page?: number;
   pageSize?: number;
   q?: string;
+  /** Si se indica una columna válida, busca solo ahí; si no, en las columnas candidatas. */
+  searchColumn?: string | null;
   columns?: string[];
   sortBy?: string | null;
   sortDir?: PadronSortDir;
@@ -286,6 +298,32 @@ export async function listPadron(opts: ListPadronOpts = {}) {
 
 const MAX_PADRON_EXPORT_ROWS = 100_000;
 
+/**
+ * WHERE de búsqueda (mismo criterio que el listado). `startIndex` permite ubicar los
+ * placeholders después de otros parámetros (la edición masiva usa $1..$n para el SET).
+ */
+function buildPadronWhere(
+  meta: PadronMeta,
+  opts: Pick<ListPadronOpts, 'q' | 'searchColumn'>,
+  startIndex = 0
+): { whereSql: string; params: unknown[] } {
+  const colSet = new Set(meta.columns.map((c) => c.name));
+  const params: unknown[] = [];
+  const term = normalizarTextoBusqueda(opts.q).trim();
+  if (term.length < 2) return { whereSql: '', params };
+
+  const requestedCol = String(opts.searchColumn ?? '').trim();
+  const searchCols =
+    requestedCol && colSet.has(requestedCol) ? [requestedCol] : pickSearchColumns(meta);
+  if (searchCols.length === 0) return { whereSql: '', params };
+
+  const like = `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
+  params.push(like);
+  const idx = startIndex + params.length;
+  const parts = searchCols.map((c) => `${quoteIdent(c)}::text ilike $${idx}`);
+  return { whereSql: `where (${parts.join(' or ')})`, params };
+}
+
 function buildPadronListQuery(meta: PadronMeta, opts: ListPadronOpts) {
   const colSet = new Set(meta.columns.map((c) => c.name));
   const defaultCols =
@@ -300,21 +338,7 @@ function buildPadronListQuery(meta: PadronMeta, opts: ListPadronOpts) {
   }
   selectCols = Array.from(new Set(selectCols));
 
-  const params: unknown[] = [];
-  let whereSql = '';
-
-  const term = String(opts.q ?? '').trim();
-  if (term.length >= 2) {
-    const searchCols = pickSearchColumns(meta);
-    const like = `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
-    params.push(like);
-    const parts = searchCols.map(
-      (c) => `${quoteIdent(c)}::text ilike $${params.length}`
-    );
-    if (parts.length > 0) {
-      whereSql = `where (${parts.join(' or ')})`;
-    }
-  }
+  const { whereSql, params } = buildPadronWhere(meta, opts);
 
   const sortCol = resolveSortColumn(meta, opts.sortBy);
   const sortDir: PadronSortDir = opts.sortDir === 'desc' ? 'desc' : 'asc';
@@ -407,62 +431,46 @@ function buildRowFromPayload(
   meta: PadronMeta,
   payload: Record<string, unknown>,
   opts: { includePk: boolean }
-): { cols: string[]; values: unknown[] } {
+): { cols: string[]; values: unknown[]; ignoradas: string[] } {
   const colByName = new Map(meta.columns.map((c) => [c.name, c]));
   const cols: string[] = [];
   const values: unknown[] = [];
+  const ignoradas: string[] = [];
 
   for (const [key, raw] of Object.entries(payload)) {
     const col = colByName.get(key);
     if (!col) continue;
     if (!opts.includePk && key === meta.primaryKey) continue;
+    // Las columnas que escribe un sync no se tocan desde la app: el front las manda
+    // igual (envía la fila entera) y acá se descartan en silencio.
+    if (col.syncedFrom) {
+      ignoradas.push(col.name);
+      continue;
+    }
     cols.push(col.name);
     values.push(normalizeCellValue(raw, col));
   }
 
-  return { cols, values };
+  return { cols, values, ignoradas };
 }
 
-export async function createPadronRow(payload: Record<string, unknown>) {
-  const meta = await getPadronMeta();
-  const pkVal = payload[meta.primaryKey];
-  if (pkVal == null || String(pkVal).trim() === '') {
-    throw new Error(`El campo ${meta.primaryKey} es obligatorio`);
-  }
-
-  const { cols, values } = buildRowFromPayload(meta, payload, { includePk: true });
-  if (cols.length === 0) {
-    throw new Error('No hay campos válidos para insertar');
-  }
-
-  const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
-  const sql = `
-    insert into "padron_final" (${cols.map(quoteIdent).join(', ')})
-    values (${placeholders})
-    returning ${quoteIdent(meta.primaryKey)}::text as pk
-  `;
-
-  const p = getPadronPool();
-  try {
-    const res = await p.query<{ pk: string }>(sql, values);
-    return { pk: res.rows[0]?.pk ?? String(pkVal) };
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes('duplicate') || msg.includes('unique')) {
-      throw new Error('Ya existe un registro con esa clave primaria');
-    }
-    throw e;
-  }
-}
+/**
+ * Alta de productos: solo por el ERP (Plex). `padron_final` se puebla con el sync de
+ * plexdr, así que crear filas desde la app dejaría registros que el sync no reconoce.
+ */
 
 export async function updatePadronRow(
   pkValue: string,
   payload: Record<string, unknown>
 ) {
   const meta = await getPadronMeta();
-  const { cols, values } = buildRowFromPayload(meta, payload, { includePk: false });
+  const { cols, values, ignoradas } = buildRowFromPayload(meta, payload, { includePk: false });
   if (cols.length === 0) {
-    throw new Error('No hay campos para actualizar');
+    throw new Error(
+      ignoradas.length > 0
+        ? mensajeColumnasSincronizadas(ignoradas)
+        : 'No hay campos para actualizar'
+    );
   }
 
   const setSql = cols.map((c, i) => `${quoteIdent(c)} = $${i + 1}`).join(', ');
@@ -480,20 +488,84 @@ export async function updatePadronRow(
   if (!res.rows[0]) {
     throw new Error('Registro no encontrado');
   }
-  return { pk: res.rows[0].pk };
+  return { pk: res.rows[0].pk, ignoradas };
 }
 
-export async function deletePadronRow(pkValue: string) {
+export type BulkUpdatePadronParams = {
+  /** Valores nuevos por columna (solo columnas editables). */
+  valores: Record<string, unknown>;
+  /** Modo explícito: productos elegidos en la tabla. */
+  pks?: string[];
+  /** Modo búsqueda: todos los que matchean (exige término de 2+ caracteres). */
+  filtro?: { q?: string; searchColumn?: string | null };
+};
+
+export type BulkUpdatePadronResult = {
+  actualizados: number;
+  alcance: number;
+  columnas: string[];
+  ignoradas: string[];
+};
+
+/**
+ * Actualiza una o varias columnas editables en muchos productos a la vez.
+ * Nunca toca columnas sincronizadas (las descarta `buildRowFromPayload`).
+ */
+export async function bulkUpdatePadron(
+  params: BulkUpdatePadronParams
+): Promise<BulkUpdatePadronResult> {
   const meta = await getPadronMeta();
-  const p = getPadronPool();
-  const sql = `
-    delete from "padron_final"
-    where ${quoteIdent(meta.primaryKey)}::text = $1
-    returning ${quoteIdent(meta.primaryKey)}::text as pk
-  `;
-  const res = await p.query<{ pk: string }>(sql, [String(pkValue).trim()]);
-  if (!res.rows[0]) {
-    throw new Error('Registro no encontrado');
+  const { cols, values, ignoradas } = buildRowFromPayload(meta, params.valores, {
+    includePk: false,
+  });
+  if (cols.length === 0) {
+    throw new Error(
+      ignoradas.length > 0
+        ? mensajeColumnasSincronizadas(ignoradas)
+        : 'Elegí al menos una columna editable para modificar'
+    );
   }
-  return { pk: res.rows[0].pk };
+
+  const pks = Array.from(
+    new Set((params.pks ?? []).map((v) => String(v ?? '').trim()).filter(Boolean))
+  );
+  // WHERE: o los productos elegidos, o el resultado de la búsqueda (nunca la tabla entera).
+  // Se arma dos veces porque en el UPDATE los placeholders van después de los del SET.
+  const buildWhere = (startIndex: number): { sql: string; params: unknown[] } => {
+    if (pks.length > 0) {
+      return {
+        sql: `where ${quoteIdent(meta.primaryKey)}::text = any($${startIndex + 1}::text[])`,
+        params: [pks],
+      };
+    }
+    const built = buildPadronWhere(meta, params.filtro ?? {}, startIndex);
+    if (!built.whereSql) {
+      throw new Error(
+        'Indicá productos o una búsqueda de al menos 2 caracteres: no se permite modificar todo el padrón'
+      );
+    }
+    return { sql: built.whereSql, params: built.params };
+  };
+
+  const whereCount = buildWhere(0);
+  const whereUpdate = buildWhere(values.length);
+
+  const p = getPadronPool();
+
+  const countRes = await p.query<{ total: number }>(
+    `select count(*)::int as total from "padron_final" ${whereCount.sql}`,
+    whereCount.params
+  );
+  const alcance = Number(countRes.rows[0]?.total ?? 0);
+  if (alcance === 0) {
+    return { actualizados: 0, alcance: 0, columnas: cols, ignoradas };
+  }
+
+  const setSql = cols.map((c, i) => `${quoteIdent(c)} = $${i + 1}`).join(', ');
+  const res = await p.query(`update "padron_final" set ${setSql} ${whereUpdate.sql}`, [
+    ...values,
+    ...whereUpdate.params,
+  ]);
+
+  return { actualizados: res.rowCount ?? 0, alcance, columnas: cols, ignoradas };
 }

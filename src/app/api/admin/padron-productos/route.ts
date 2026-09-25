@@ -1,9 +1,5 @@
 import { requirePermission } from '@/lib/auth/rbac';
-import {
-  createPadronRow,
-  getPadronRow,
-  listPadron,
-} from '@/lib/padron-final-crud';
+import { listPadron } from '@/lib/padron-final-crud';
 import { isPadronDatabaseConfigured } from '@/lib/padron-final-db';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -28,6 +24,7 @@ export async function GET(request: NextRequest) {
   const page = parseInt(searchParams.get('page') ?? '1', 10);
   const pageSize = parseInt(searchParams.get('pageSize') ?? '25', 10);
   const q = searchParams.get('q') ?? '';
+  const searchColumn = searchParams.get('searchColumn') ?? searchParams.get('qCol') ?? '';
   const columnsParam = searchParams.get('columns');
   const columns = columnsParam
     ? columnsParam.split(',').map((c) => c.trim()).filter(Boolean)
@@ -37,7 +34,15 @@ export async function GET(request: NextRequest) {
   const sortDir = sortDirParam === 'desc' ? 'desc' : 'asc';
 
   try {
-    const result = await listPadron({ page, pageSize, q, columns, sortBy, sortDir });
+    const result = await listPadron({
+      page,
+      pageSize,
+      q,
+      searchColumn: searchColumn || null,
+      columns,
+      sortBy,
+      sortDir,
+    });
     return NextResponse.json({
       data: result.data,
       total: result.total,
@@ -54,27 +59,8 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/** POST — alta de registro */
-export async function POST(request: NextRequest) {
-  const guard = await requirePermission('admin.padron_productos');
-  if (!guard.ok) return guard.response;
-
-  if (!isPadronDatabaseConfigured()) return padronUnavailable();
-
-  let body: Record<string, unknown>;
-  try {
-    body = (await request.json()) as Record<string, unknown>;
-  } catch {
-    return NextResponse.json({ error: 'JSON inválido' }, { status: 400 });
-  }
-
-  try {
-    const created = await createPadronRow(body);
-    const row = await getPadronRow(created.pk);
-    return NextResponse.json({ data: row }, { status: 201 });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Error al crear registro';
-    const status = msg.includes('obligatorio') || msg.includes('Ya existe') ? 400 : 500;
-    return NextResponse.json({ error: msg }, { status });
-  }
-}
+/**
+ * Sin POST: el alta de productos se hace solo en el ERP (Plex). `padron_final` se puebla
+ * con el sync de plexdr, así que una fila creada acá quedaría fuera de esa fuente.
+ * Next responde 405 a POST al no exportar el handler.
+ */

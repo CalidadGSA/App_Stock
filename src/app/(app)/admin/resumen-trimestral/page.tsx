@@ -19,7 +19,6 @@ import {
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { PageSpinner } from '@/components/ui/spinner';
 import {
-  formatDate,
   formatPorcentaje,
   formatRangoFechasLargo,
   porcentajeDesdeRatio,
@@ -30,6 +29,10 @@ import type {
 } from '@/app/api/admin/resumen-trimestral/route';
 import type { TrimestreDbOpcion } from '@/lib/inventario/trimestre-periodo';
 import ResumenTrimestralListMobile from '@/components/admin/ResumenTrimestralListMobile';
+import {
+  CollapsibleFiltrosPanel,
+  FiltrosToggleButton,
+} from '@/components/list/CollapsibleFiltros';
 
 function parseAnioUrl(value: string | null): number | null {
   const n = parseInt(String(value ?? ''), 10);
@@ -73,6 +76,8 @@ interface ResumenTrimestralData {
     unidades_vencidos_vendidas: number;
     unidades_vencidos_vendidas_global?: number;
     productos_cargados_vencimientos: number;
+    vales: number;
+    vales_pendientes: number;
   };
   sucursales: ResumenTrimestralSucursalRow[];
 }
@@ -95,6 +100,7 @@ type SortKey = keyof Pick<
   | 'por_vencer_61_90_dias'
   | 'productos_vencidos_trimestre'
   | 'unidades_vencidos_vendidas'
+  | 'vales'
 >;
 
 type SortDir = 'asc' | 'desc';
@@ -163,6 +169,7 @@ function ResumenTrimestralContent() {
   );
   const [sortKey, setSortKey] = useState<SortKey>('sucursal_nombre');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
 
   function alternarOrden(key: SortKey) {
     if (sortKey === key) {
@@ -187,17 +194,29 @@ function ResumenTrimestralContent() {
         const res = await fetch(
           `/api/admin/resumen-trimestral${qs ? `?${qs}` : ''}`
         );
-        const json = await res.json();
+        const text = await res.text();
+        let json: { error?: string; detalle?: string; data?: ResumenTrimestralData | null } = {};
+        try {
+          json = text ? (JSON.parse(text) as typeof json) : {};
+        } catch {
+          setError(
+            res.ok
+              ? 'Respuesta inválida del servidor'
+              : `Error al cargar el resumen (${res.status}). Probá de nuevo.`
+          );
+          return;
+        }
         if (res.status === 403) {
           router.replace('/dashboard');
           return;
         }
         if (!res.ok) {
-          setError(json.error ?? 'Error al cargar el resumen');
+          const partes = [json.error, json.detalle].filter(Boolean);
+          setError(partes.join('\n\n') || 'Error al cargar el resumen');
           return;
         }
-        const payload = json.data as ResumenTrimestralData | null;
-        setData(payload ?? null);
+        const payload = json.data ?? null;
+        setData(payload);
         if (payload?.seleccion) {
           setAnioSel(payload.seleccion.anio);
           setCuatrimestreSel(payload.seleccion.cuatrimestre);
@@ -209,8 +228,12 @@ function ResumenTrimestralContent() {
             scroll: false,
           });
         }
-      } catch {
-        setError('Error al cargar el resumen trimestral');
+      } catch (e) {
+        setError(
+          e instanceof Error && /failed to fetch|network|abort/i.test(e.message)
+            ? 'No se pudo conectar con el servidor (¿está corriendo npm run dev?).'
+            : 'Error al cargar el resumen trimestral. Probá de nuevo en unos segundos.'
+        );
       } finally {
         setLoading(false);
       }
@@ -301,24 +324,28 @@ function ResumenTrimestralContent() {
     );
   }
 
-  function celdaDiferencia(conDif: number, inventariados: number) {
-    if (inventariados <= 0) {
-      return <span className="tabular-nums">{conDif}</span>;
+  function celdaConPorcentaje(numerador: number, denominador: number) {
+    if (denominador <= 0) {
+      return <span className="tabular-nums">{numerador}</span>;
     }
-    const pct = formatPorcentaje(porcentajeDesdeRatio(conDif, inventariados));
+    const pct = formatPorcentaje(porcentajeDesdeRatio(numerador, denominador));
     return (
       <span className="inline-flex flex-col items-end leading-tight tabular-nums">
-        <span>{conDif}</span>
+        <span>{numerador}</span>
         <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">({pct}%)</span>
       </span>
     );
+  }
+
+  function celdaDiferencia(conDif: number, inventariados: number) {
+    return celdaConPorcentaje(conDif, inventariados);
   }
 
   const periodoCerrado =
     Boolean(data.fecha_fin) && data.hoy > data.fecha_fin;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="relative flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <button
@@ -351,7 +378,19 @@ function ResumenTrimestralContent() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
+        <FiltrosToggleButton
+          abierto={filtrosAbiertos}
+          onClick={() => setFiltrosAbiertos((v) => !v)}
+          activos={anioSel != null || cuatrimestreSel != null ? 1 : 0}
+        />
+      </div>
+
+      <CollapsibleFiltrosPanel
+        abierto={filtrosAbiertos}
+        onCerrar={() => setFiltrosAbiertos(false)}
+        descripcion="Seleccioná año y trimestre del resumen."
+      >
+        <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Año</label>
             <select
@@ -384,14 +423,17 @@ function ResumenTrimestralContent() {
           </div>
           <button
             type="button"
-            onClick={aplicarPeriodo}
+            onClick={() => {
+              setFiltrosAbiertos(false);
+              aplicarPeriodo();
+            }}
             disabled={loading || anioSel == null || cuatrimestreSel == null}
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {loading ? 'Cargando…' : 'Aplicar'}
           </button>
         </div>
-      </div>
+      </CollapsibleFiltrosPanel>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
         <Card>
@@ -625,6 +667,7 @@ function ResumenTrimestralContent() {
                       {encabezadoOrdenable('por_vencer_61_90_dias', '61–90', 'right')}
                       {encabezadoOrdenable('productos_vencidos_trimestre', 'Vencidos', 'right')}
                       {encabezadoOrdenable('unidades_vencidos_vendidas', 'Vendidos', 'right')}
+                      {encabezadoOrdenable('vales', 'Vales', 'right')}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -687,7 +730,10 @@ function ResumenTrimestralContent() {
                                 : 'text-gray-500'
                             }
                           >
-                            {row.productos_mal_contados}
+                            {celdaConPorcentaje(
+                              row.productos_mal_contados,
+                              row.productos_con_diferencia
+                            )}
                           </span>
                         </td>
                         <td className="px-2 py-2.5 text-right align-top tabular-nums text-gray-700 dark:text-gray-200">
@@ -735,6 +781,21 @@ function ResumenTrimestralContent() {
                             {row.unidades_vencidos_vendidas}
                           </span>
                         </td>
+                        <td
+                          className="px-2 py-2.5 text-right align-top tabular-nums text-gray-700 dark:text-gray-200"
+                          title={
+                            row.vales_pendientes > 0
+                              ? `${row.vales_pendientes} sin entregar del todo`
+                              : undefined
+                          }
+                        >
+                          {row.vales.toLocaleString('es-AR')}
+                          {row.vales_pendientes > 0 ? (
+                            <span className="ml-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                              ({row.vales_pendientes})
+                            </span>
+                          ) : null}
+                        </td>
                       </tr>
                     ))}
                     <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold dark:border-gray-600 dark:bg-gray-900/60 lg:text-sm">
@@ -752,7 +813,7 @@ function ResumenTrimestralContent() {
                               : ''
                           }
                         >
-                          {malContados}
+                          {celdaConPorcentaje(malContados, difTotal)}
                         </span>
                       </td>
                       <td className="px-2 py-2 text-right tabular-nums">
@@ -777,6 +838,14 @@ function ResumenTrimestralContent() {
                       <td className="px-2 py-2 text-right tabular-nums">
                         {data.totales.unidades_vencidos_vendidas_global ??
                           data.totales.unidades_vencidos_vendidas}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {data.totales.vales.toLocaleString('es-AR')}
+                        {data.totales.vales_pendientes > 0 ? (
+                          <span className="ml-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                            ({data.totales.vales_pendientes})
+                          </span>
+                        ) : null}
                       </td>
                     </tr>
                   </tbody>

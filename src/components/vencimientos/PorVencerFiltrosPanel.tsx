@@ -3,22 +3,21 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { fechaHoyArgentinaYmd } from '@/lib/utils';
 import type { VistaPorVencerList } from '@/lib/vencimientos-por-vencer-list';
 import {
   FiltroVencimientoMesAnio,
   VENCIMIENTOS_FILTROS_GRID_CLASS,
 } from '@/components/vencimientos/FiltroVencimientoMesAnio';
+import {
+  calcularPeriodoParaRangeKey,
+  opcionesRangePeriodo,
+  type RangePeriodoKey,
+} from '@/lib/vencimientos/por-vencer-periodo-meses';
 
 type MesVencOption = { readonly value: number; readonly label: string };
 
-type RangeKey =
-  | 'all'
-  | '30_all'
-  | '60_all'
-  | '90_all'
-  | '30_only'
-  | '60_only'
-  | '90_only';
+type RangeKey = RangePeriodoKey;
 
 interface PorVencerFiltrosPanelProps {
   abierto: boolean;
@@ -28,7 +27,7 @@ interface PorVencerFiltrosPanelProps {
   catMacroFiltro: string;
   categoriaFiltro: string;
   laboratorioFiltro: string;
-  soloVentaPosterior: boolean;
+  soloConVentas: boolean;
   mesVencValido: number | null | undefined;
   anioVencValido: number | null | undefined;
   mesesVencOpts: readonly MesVencOption[];
@@ -48,7 +47,7 @@ export function PorVencerFiltrosPanel({
   catMacroFiltro,
   categoriaFiltro,
   laboratorioFiltro,
-  soloVentaPosterior,
+  soloConVentas,
   mesVencValido,
   anioVencValido,
   mesesVencOpts,
@@ -123,32 +122,11 @@ export function PorVencerFiltrosPanel({
                 value={rangeKey}
                 onChange={(e) => {
                   const nextKey = e.target.value as RangeKey;
-                  let nextDays = 30;
-                  let nextDaysMin = 0;
-                  if (nextKey === 'all') {
-                    nextDays = 365;
-                    nextDaysMin = 0;
-                  }
-                  if (nextKey === '60_all') {
-                    nextDays = 60;
-                    nextDaysMin = 0;
-                  }
-                  if (nextKey === '90_all') {
-                    nextDays = 90;
-                    nextDaysMin = 0;
-                  }
-                  if (nextKey === '60_only') {
-                    nextDays = 60;
-                    nextDaysMin = 31;
-                  }
-                  if (nextKey === '30_only') {
-                    nextDays = 30;
-                    nextDaysMin = 1;
-                  }
-                  if (nextKey === '90_only') {
-                    nextDays = 90;
-                    nextDaysMin = 61;
-                  }
+                  const { days: nextDays, daysMin: nextDaysMin } = calcularPeriodoParaRangeKey(
+                    fechaHoyArgentinaYmd(),
+                    nextKey,
+                    vistaSelect === 'vencidos'
+                  );
                   const params = new URLSearchParams(searchParams.toString());
                   params.set('days', String(nextDays));
                   params.set('daysMin', String(nextDaysMin));
@@ -156,13 +134,11 @@ export function PorVencerFiltrosPanel({
                 }}
                 className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 sm:min-w-[120px] dark:border-gray-700 dark:bg-slate-900 dark:text-gray-100"
               >
-                <option value="all">Todos</option>
-                <option value="30_all">Todos hasta 30 días</option>
-                <option value="60_all">Todos hasta 60 días</option>
-                <option value="90_all">Todos hasta 90 días</option>
-                <option value="30_only">Solo a 30 días</option>
-                <option value="60_only">Solo a 60 días</option>
-                <option value="90_only">Solo a 90 días</option>
+                {opcionesRangePeriodo(vistaSelect === 'vencidos').map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="flex flex-col gap-1">
@@ -252,21 +228,21 @@ export function PorVencerFiltrosPanel({
             />
             <div className="flex min-w-0 flex-col gap-1">
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Venta posterior
+                Con ventas
               </span>
               <label className="flex min-h-[4.125rem] cursor-pointer items-center gap-2 text-sm leading-snug text-gray-800 dark:text-gray-200">
                 <input
                   type="checkbox"
                   className="h-4 w-4 shrink-0 rounded border-gray-300"
-                  checked={soloVentaPosterior}
+                  checked={soloConVentas}
                   onChange={(e) => {
                     const p = new URLSearchParams(searchParams.toString());
-                    if (e.target.checked) p.set('solo_venta_posterior', '1');
-                    else p.delete('solo_venta_posterior');
+                    if (e.target.checked) p.set('solo_con_ventas', '1');
+                    else p.delete('solo_con_ventas');
                     router.replace(`/vencimientos/por-vencer?${p.toString()}`);
                   }}
                 />
-                Solo venta posterior a la carga
+                Solo con ventas registradas
               </label>
             </div>
             <div className="flex items-end">

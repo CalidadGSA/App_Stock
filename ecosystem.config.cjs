@@ -5,8 +5,10 @@
  *   pm2 save
  *
  * Variables: solo .env.local en la raíz (como en desarrollo).
- * Diagnóstico: npm run cron:diagnose
+ * Diagnóstico cron: npm run cron:diagnose
+ * Diagnóstico MySQL Onze (stock): npm run onze:diagnose
  * Sync manual:  npm run sync:now
+ * Tras cambiar .env.local: pm2 reload ecosystem.config.cjs --update-env
  */
 const fs = require('fs');
 const path = require('path');

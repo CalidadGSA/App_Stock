@@ -1,6 +1,6 @@
 'use client';
 
-import { formatDate, formatDateTime } from '@/lib/utils';
+import { formatDate, formatDateTime, formatMoneda } from '@/lib/utils';
 
 export type FilaImpresionVencimientoCompacta = {
   id: string;
@@ -12,6 +12,7 @@ export type FilaImpresionVencimientoCompacta = {
   fecha_registro?: string | null;
   cantidad: number;
   cantidad_vendida_acumulada?: number;
+  monto?: number | null;
 };
 
 /** Una fila por línea de vencimiento (para devolver / por vencer). Solo visible al imprimir. */
@@ -35,6 +36,7 @@ export function TablaImpresionVencimientosCompacta({
           <th className="px-1 py-0.5 text-left font-semibold whitespace-nowrap">Carga</th>
           <th className="px-1 py-0.5 text-right font-semibold whitespace-nowrap">Rest.</th>
           <th className="px-1 py-0.5 text-right font-semibold whitespace-nowrap">Vend.</th>
+          <th className="px-1 py-0.5 text-right font-semibold whitespace-nowrap">Monto</th>
         </tr>
       </thead>
       <tbody>
@@ -53,6 +55,9 @@ export function TablaImpresionVencimientosCompacta({
             </td>
             <td className="px-1 py-0.5 align-middle text-right tabular-nums whitespace-nowrap">
               {Number(r.cantidad_vendida_acumulada ?? 0).toFixed(0)}
+            </td>
+            <td className="px-1 py-0.5 align-middle text-right tabular-nums whitespace-nowrap">
+              {r.monto != null ? formatMoneda(r.monto) : '—'}
             </td>
           </tr>
         ))}

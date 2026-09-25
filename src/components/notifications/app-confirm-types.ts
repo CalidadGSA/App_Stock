@@ -8,7 +8,22 @@ export type AppConfirmOptions = {
   variant?: AppConfirmVariant;
 };
 
-export type PendingAppConfirm = AppConfirmOptions & {
-  id: string;
-  resolve: (value: boolean) => void;
+/** Resultado de un confirm con hasta 3 acciones. */
+export type AppConfirmChoice = 'cancel' | 'confirm' | 'alt';
+
+export type AppConfirmChoiceOptions = AppConfirmOptions & {
+  /** Segunda acción afirmativa (ej. «Cerrar y marcar no controlados»). */
+  altConfirmLabel: string;
 };
+
+export type PendingAppConfirm =
+  | (AppConfirmOptions & {
+      id: string;
+      mode: 'boolean';
+      resolve: (value: boolean) => void;
+    })
+  | (AppConfirmChoiceOptions & {
+      id: string;
+      mode: 'choice';
+      resolve: (value: AppConfirmChoice) => void;
+    });

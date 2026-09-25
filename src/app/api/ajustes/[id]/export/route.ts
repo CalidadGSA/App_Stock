@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/server';
 import { requirePermission } from '@/lib/auth/rbac';
 import { serializarCsvAjuste, type FormatoCsvAjuste } from '@/lib/csv-ajuste';
+import { esSucursalDrogueria } from '@/lib/sucursales/drogueria';
 import { NextRequest, NextResponse } from 'next/server';
 
 /** GET /api/ajustes/[id]/export - re-exportar el CSV de un ajuste existente (solo admin) */
@@ -23,7 +24,7 @@ export async function GET(
 
   const { data: ajuste, error: ajusteError } = await admin
     .from('ajustes')
-    .select('id, archivo_nombre')
+    .select('id, archivo_nombre, sucursal_id')
     .eq('id', id)
     .maybeSingle();
 
@@ -53,7 +54,11 @@ export async function GET(
     diferencia_cajas: r.diferencia_cajas ?? 0,
     diferencia_unidades: r.diferencia_unidades ?? 0,
   }));
-  const csv = serializarCsvAjuste(filas, formato);
+  const omitirUnidades = await esSucursalDrogueria(
+    admin,
+    Number((ajuste as { sucursal_id?: number }).sucursal_id)
+  );
+  const csv = serializarCsvAjuste(filas, formato, { omitirUnidades });
 
   const filename = ajuste.archivo_nombre as string;
 

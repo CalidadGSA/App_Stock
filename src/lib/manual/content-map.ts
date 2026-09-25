@@ -1,4 +1,4 @@
-import type { ManualBlock, ManualPageDef } from '@/lib/manual/types';
+import type { ManualPageDef } from '@/lib/manual/types';
 
 /** Contenido por ítem del menú lateral (id en app-nav). */
 export const MANUAL_NAV_CONTENT: Record<string, ManualPageDef> = {
@@ -26,6 +26,37 @@ export const MANUAL_NAV_CONTENT: Record<string, ManualPageDef> = {
         title: 'Modo mantenimiento',
         text: 'Si la base de datos de Plex está desactualizada, la app puede entrar en mantenimiento. Los operadores de sucursal no podrán iniciar inventarios diarios hasta que finalice la sincronización.',
         variant: 'warning',
+      },
+    ],
+  },
+  kpis: {
+    id: 'kpis',
+    label: 'KPIs mensuales',
+    eyebrow: 'Panel principal',
+    title: 'KPIs mensuales',
+    blocks: [
+      {
+        type: 'paragraph',
+        text: 'Dos indicadores del mes para la sucursal activa, visibles para todos los usuarios. Elegí el mes arriba a la derecha; los administradores además pueden elegir otra sucursal.',
+      },
+      {
+        type: 'steps',
+        steps: [
+          {
+            title: 'Diferencias de inventario vs stock valorizado',
+            text: 'Suma en pesos (a costo) de las diferencias en cajas de todos los controles cerrados en el mes, de cualquier origen: sobrante (positivo), faltante (negativo) y neto, con detalle por tipo de control. Se compara con el stock valorizado de la sucursal (onze_center a costo de lista). Para meses ya cerrados se usa el último valor guardado de ese mes; si dice «aprox.» es porque no había registro y se usa el stock de hoy.',
+          },
+          {
+            title: 'Bajas y altas de stock vs facturación',
+            text: 'Operaciones de stock de Onze agrupadas por motivo (Vencido, Devolución, Roto, Ajustes, etc.), con signo: las altas suman y las bajas restan. Cada baja cuenta en el mes en que se cargó la operación, igual que en el informe mensual. Se muestran a costo (si la línea no trae costo, se calcula como precio × 0,65) y a precio de venta. Se comparan con la facturación neta del mes: FV/TF/TK menos las notas de crédito que anulan esas ventas.',
+          },
+        ],
+      },
+      {
+        type: 'callout',
+        title: 'Si aparece «Onze no disponible»',
+        text: 'Las bajas, la facturación y el stock valorizado se leen en vivo de onze_center. Si la base no responde, el KPI de diferencias se muestra igual y el resto queda marcado como no disponible; volvé a intentar más tarde.',
+        variant: 'info',
       },
     ],
   },
@@ -256,8 +287,8 @@ export const MANUAL_NAV_CONTENT: Record<string, ManualPageDef> = {
       },
       {
         type: 'callout',
-        title: 'Verificación de ventas',
-        text: 'Si se vendió un producto después de la carga, el sistema emite un aviso para que se marque como vendido si corresponde.',
+        title: 'Marcar vendido (manual)',
+        text: 'Usá «Vendido» para descontar unidades vendidas de una línea e «Arreglar vendido» si te equivocaste. Cuando lo vendido alcanza lo cargado, la línea queda liquidada. El botón «Quitar» sirve solo para corregir un error de carga (no es una venta).',
         variant: 'info',
       },
     ],
@@ -295,11 +326,7 @@ export const MANUAL_NAV_CONTENT: Record<string, ManualPageDef> = {
       {
         type: 'steps',
         steps: [
-          { title: 'Revisar listado', text: 'Filtrá por bulto/droguería si corresponde.' },
-          {
-            title: 'Marcar vendido',
-            text: 'Si ya se vendió todo o parte, registrá la cantidad vendida.',
-          },
+          { title: 'Revisar listado', text: 'Filtrá por bulto/droguería si corresponde. Las ventas posteriores a la carga ya están descontadas al entrar.' },
           {
             title: 'Devolver',
             text: 'Usá «Devolver todos» por sucursal. Si se vendió menos del 50 % de la carga original, la observación es obligatoria.',
@@ -435,6 +462,48 @@ export const MANUAL_NAV_CONTENT: Record<string, ManualPageDef> = {
           'Se pueden seleccionar columnas especificas o todas.',
           'Se puede exportar el padron completo o segun las columnas seleccionadas en un archivo Excel.',
           'Se puede buscar un productopor código de barras, troquel o descripción.',
+          'Los productos se dan de alta solo en el ERP (Plex): desde la app se editan, no se crean.',
+        ],
+      },
+      {
+        type: 'callout',
+        title: 'De dónde sale el PVP',
+        text: 'Los montos en pesos que muestra la app (resumen de diferencias, por vencer, vencidos y consolidado) usan el PVP vigente de Plex: la lista de precios más reciente de cada producto (PrecioAlfabeta). Si ese dato no está disponible se usa el precio del catálogo como respaldo.',
+        variant: 'info',
+      },
+      {
+        type: 'callout',
+        title: 'Fraccionados',
+        text: 'Los montos de diferencias tienen en cuenta las unidades sueltas: se convierten a fracción de caja según las unidades por envase del producto. Por ejemplo, una diferencia de 10 comprimidos de una caja de 30 vale un tercio de la caja, no una caja entera ni cero.',
+        variant: 'info',
+      },
+      {
+        type: 'callout',
+        title: 'Activar un producto dado de baja en el ERP',
+        text: 'La columna «activo» la sincroniza Plex y no se puede editar. Para usar en esta app un producto que el ERP dio de baja, poné «activomanual» en S: la app lo considera vigente si activo = S o activomanual = S (escaneo, buscadores, inventarios y vencimientos). Para desactivarlo de nuevo, volvé a dejarlo en N. Se puede hacer de a uno o con la edición masiva.',
+        variant: 'tip',
+      },
+      {
+        type: 'callout',
+        title: 'Campos bloqueados',
+        text: 'Los campos que vienen de Plex (plexdr) u Onze Center aparecen con candado y no se pueden editar: el sync del padrón los sobrescribe. Solo se editan los campos propios de GSA (categoria, cat_macro, temporada, formato, sub_categoria, comisiones_vc, cronica, etc.).',
+        variant: 'info',
+      },
+      {
+        type: 'steps',
+        steps: [
+          {
+            title: 'Edición masiva: elegir los productos',
+            text: 'Tildá productos con el casillero de cada fila (la selección se mantiene al cambiar de página) o hacé una búsqueda y usá «todos los resultados», que incluye las páginas que no estás viendo.',
+          },
+          {
+            title: 'Elegir columnas y valores',
+            text: 'Abrí «Edición masiva», seleccioná una o varias columnas editables y escribí el nuevo valor de cada una. «Dejar vacío» borra el contenido de esa columna.',
+          },
+          {
+            title: 'Confirmar',
+            text: 'Antes de aplicar se muestra cuántos productos se van a modificar y con qué valores. El cambio se aplica a todas las coincidencias de la búsqueda, aunque sean miles, y no se puede deshacer: revisá bien el número antes de confirmar.',
+          },
         ],
       },
     ],

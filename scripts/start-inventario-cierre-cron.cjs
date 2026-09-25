@@ -33,9 +33,14 @@ if (!cron.validate(expr)) {
   return;
 }
 
+const appDir = path.join(__dirname, '..');
+
 function runCierreJob() {
   const script = path.join(__dirname, 'run-inventario-cierre-once.cjs');
+  // cwd fija en la raíz del proyecto: `--import tsx` y `.env.local` se resuelven desde ahí
+  // aunque PM2/Windows hayan arrancado el proceso desde otra carpeta.
   const child = spawn(process.execPath, ['--import', 'tsx', script], {
+    cwd: appDir,
     stdio: 'inherit',
     env: process.env,
   });
@@ -45,6 +50,8 @@ function runCierreJob() {
   child.on('exit', (code, signal) => {
     if (code !== 0 && code !== null) {
       console.error(`❌ Cierre inventarios terminó (code=${code}, signal=${signal})`);
+    } else {
+      console.log(`✅ Cierre inventarios + snapshot KPIs terminó OK (${new Date().toISOString()})`);
     }
   });
 }

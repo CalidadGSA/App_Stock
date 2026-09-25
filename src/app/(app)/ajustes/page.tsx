@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -11,8 +11,10 @@ import AjustesDiferenciasListMobile from '@/components/ajustes/AjustesDiferencia
 import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 import {
   claveDupAjuste,
+  fechaReferenciaDiferenciaAjuste,
   idsDuplicadosMasViejosADescartar,
 } from '@/lib/inventario/ajustes-duplicados';
+import { formatDateTime } from '@/lib/utils';
 
 interface SucursalOption {
   id: string;
@@ -159,29 +161,38 @@ export default function AjustesPage() {
         setError(json.error ?? 'Error al cargar diferencias');
         return;
       }
-      const items: DiferenciaItem[] = (json.data ?? []).map((r: any) => {
-        const sistC = r.stock_sist_cajas ?? 0;
-        const sistU = r.stock_sist_unidades ?? 0;
-        const realC = r.stock_real_cajas ?? 0;
-        const realU = r.stock_real_unidades ?? 0;
-        return {
-          id: r.id,
-          producto_id_sistema: r.producto_id_sistema,
-          codigo_barras: r.codigo_barras,
-          descripcion: r.descripcion,
-          presentacion: r.presentacion ?? null,
-          laboratorio: r.laboratorio ?? null,
-          stock_sist_cajas: r.stock_sist_cajas,
-          stock_sist_unidades: r.stock_sist_unidades,
-          stock_real_cajas: r.stock_real_cajas,
-          stock_real_unidades: r.stock_real_unidades,
-          origen: r.controles_inventario?.origen ?? null,
-          fecha_registro: r.fecha_registro ?? null,
-          fecha_fin_control: r.controles_inventario?.fecha_fin ?? null,
-          diffCajas: realC - sistC,
-          diffUnidades: realU - sistU,
-        };
-      });
+      /** Fila de `controles_inventario_detalle` como la devuelve la API (con el join del control). */
+      type DiferenciaApiRow = Omit<DiferenciaItem, 'diffCajas' | 'diffUnidades' | 'origen' | 'fecha_fin_control'> & {
+        controles_inventario?: { origen?: string | null; fecha_fin?: string | null } | null;
+      };
+      const items: DiferenciaItem[] = ((json.data ?? []) as DiferenciaApiRow[])
+        .map((r) => {
+          const sistC = r.stock_sist_cajas ?? 0;
+          const sistU = r.stock_sist_unidades ?? 0;
+          const realC = r.stock_real_cajas ?? 0;
+          const realU = r.stock_real_unidades ?? 0;
+          return {
+            id: r.id,
+            producto_id_sistema: r.producto_id_sistema,
+            codigo_barras: r.codigo_barras,
+            descripcion: r.descripcion,
+            presentacion: r.presentacion ?? null,
+            laboratorio: r.laboratorio ?? null,
+            stock_sist_cajas: r.stock_sist_cajas,
+            stock_sist_unidades: r.stock_sist_unidades,
+            stock_real_cajas: r.stock_real_cajas,
+            stock_real_unidades: r.stock_real_unidades,
+            origen: r.controles_inventario?.origen ?? null,
+            fecha_registro: r.fecha_registro ?? null,
+            fecha_fin_control: r.controles_inventario?.fecha_fin ?? null,
+            diffCajas: realC - sistC,
+            diffUnidades: realU - sistU,
+          };
+        })
+        .sort(
+          (a: DiferenciaItem, b: DiferenciaItem) =>
+            fechaReferenciaDiferenciaAjuste(b) - fechaReferenciaDiferenciaAjuste(a)
+        );
       setDiferencias(items);
     } catch {
       setError('Error al cargar diferencias');
@@ -540,6 +551,9 @@ export default function AjustesPage() {
                     <th className="px-4 py-2 text-left font-medium text-gray-600">
                       Origen
                     </th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-600">
+                      Confirmado
+                    </th>
                     <th className="px-4 py-2 text-right font-medium text-gray-600">
                       Sist. (cajas/unid.)
                     </th>
@@ -579,6 +593,9 @@ export default function AjustesPage() {
                       </td>
                       <td className="px-4 py-2 text-xs text-gray-700">
                         {d.origen === 'Auditoria' ? 'Auditoría' : 'Sucursal'}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap text-xs text-gray-700">
+                        {formatDateTime(d.fecha_registro ?? d.fecha_fin_control)}
                       </td>
                       <td className="px-4 py-2 text-right text-xs text-gray-700">
                         {(d.stock_sist_cajas ?? 0).toString()} /{' '}

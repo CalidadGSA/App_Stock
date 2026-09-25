@@ -17,7 +17,6 @@ type EditableRow = VueltasPsicosSucursalRow & {
 export default function VueltasPsicosAdminPage() {
   const router = useRouter();
   const [rows, setRows] = useState<EditableRow[]>([]);
-  const [defaultVueltas, setDefaultVueltas] = useState(4);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -38,7 +37,6 @@ export default function VueltasPsicosAdminPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Error al cargar sucursales');
       const data = (json.data ?? []) as VueltasPsicosSucursalRow[];
-      setDefaultVueltas(Number(json.default) || 4);
       setRows(
         data.map((r) => ({
           ...r,

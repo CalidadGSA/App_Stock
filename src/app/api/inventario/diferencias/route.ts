@@ -51,13 +51,34 @@ export async function GET(request: NextRequest) {
     query = query.eq('controles_inventario.origen', origen);
   }
 
-  const { data, error } = await query;
+  const { data, error } = await query
+    .order('fecha_registro', { ascending: false });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ data: data ?? [] });
+  type Row = {
+    fecha_registro?: string | null;
+    controles_inventario?:
+      | { fecha_fin?: string | null }
+      | { fecha_fin?: string | null }[]
+      | null;
+  };
+
+  const rows = [...((data as Row[]) ?? [])].sort((a, b) => {
+    const ctrlA = Array.isArray(a.controles_inventario)
+      ? a.controles_inventario[0]
+      : a.controles_inventario;
+    const ctrlB = Array.isArray(b.controles_inventario)
+      ? b.controles_inventario[0]
+      : b.controles_inventario;
+    const ta = Date.parse(String(a.fecha_registro ?? ctrlA?.fecha_fin ?? '')) || 0;
+    const tb = Date.parse(String(b.fecha_registro ?? ctrlB?.fecha_fin ?? '')) || 0;
+    return tb - ta;
+  });
+
+  return NextResponse.json({ data: rows });
 }
 
 /** DELETE /api/inventario/diferencias?id=detalle_id - marcar una diferencia como descartada (no exportar) */
@@ -75,11 +96,12 @@ export async function DELETE(request: NextRequest) {
 
   const admin = await createAdminClient();
 
-  // En lugar de borrar la fila, la marcamos como ajustada sin tocar el estado de negocio,
-  // para que deje de aparecer en ajustes pero quede historial.
+  // En lugar de borrar la fila, la marcamos como ajustada (para que deje de aparecer en
+  // ajustes) y con estado 'descartado' para dejar registro de que no fue realmente
+  // exportada/corregida (no debe habilitar la línea para una futura auditoría).
   const { error } = await admin
     .from('controles_inventario_detalle')
-    .update({ ajustado: 1 })
+    .update({ ajustado: 1, estado: 'descartado' })
     .eq('id', detalleId);
 
   if (error) {

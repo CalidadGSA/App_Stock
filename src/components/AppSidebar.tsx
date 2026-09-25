@@ -11,6 +11,8 @@ import {
 import { cn } from '@/lib/utils';
 import { useMaintenanceStatus } from '@/components/MaintenanceGuard';
 import SidebarSystemSection from '@/components/SidebarSystemSection';
+import SidebarLegacySyncButton from '@/components/SidebarLegacySyncButton';
+import { isSuperAdminRole } from '@/lib/auth/roles';
 
 interface AppSidebarProps {
   rol: RolOperador;
@@ -89,6 +91,11 @@ export default function AppSidebar({
                 </li>
               );
             })}
+            {section.id === 'administracion' && isSuperAdminRole(rol) ? (
+              <li key="admin-sync-legacy">
+                <SidebarLegacySyncButton onAfterClick={onMobileClose} />
+              </li>
+            ) : null}
           </ul>
         </div>
       ))}
