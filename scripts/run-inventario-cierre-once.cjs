@@ -36,17 +36,20 @@ async function main() {
     console.log('Snapshot stock valorizado:', JSON.stringify(snap));
 
     // Avance de inventario del mes (KPI esperado vs real): mismo criterio de cierre de mes.
-    const { tomarSnapshotAvanceDiario } = await import('../src/lib/kpis/avance-inventario.ts');
-    const { esSucursalDrogueriaPorId } = await import('../src/lib/sucursales/drogueria.ts');
-    const { calendarioActualArgentina } = await import(
-      '../src/lib/vencimientos-mes-anio-filtro.ts'
+    const { tomarSnapshotAvanceConCierreDeMes } = await import(
+      '../src/lib/kpis/avance-inventario.ts'
     );
-    const guardados = await tomarSnapshotAvanceDiario(
+    const { esSucursalDrogueriaPorId } = await import('../src/lib/sucursales/drogueria.ts');
+    const { fechaHoyArgentinaYmd } = await import('../src/lib/utils.ts');
+    const avance = await tomarSnapshotAvanceConCierreDeMes(
       admin,
       ids.map((id) => ({ id, esDrogueria: esSucursalDrogueriaPorId(id) })),
-      calendarioActualArgentina().ym
+      fechaHoyArgentinaYmd()
     );
-    console.log('Snapshot avance inventario:', guardados, 'sucursales');
+    console.log(
+      'Snapshot avance inventario:',
+      `mes en curso ${avance.mesActual} sucursales · cierre del mes anterior ${avance.mesAnterior}`
+    );
   } catch (e) {
     console.error('Snapshots de KPIs fallaron:', e instanceof Error ? e.message : e);
   } finally {

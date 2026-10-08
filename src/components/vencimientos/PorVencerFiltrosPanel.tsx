@@ -223,14 +223,20 @@ export function PorVencerFiltrosPanel({
                 const p = new URLSearchParams(searchParams.toString());
                 if (v) p.set('anio_venc', v);
                 else p.delete('anio_venc');
+                // El mes elegido puede no tener datos en el año nuevo: se limpia para no
+                // dejar seleccionado un mes que ya no aparece en las opciones.
+                p.delete('mes_venc');
                 router.replace(`/vencimientos/por-vencer?${p.toString()}`);
               }}
             />
             <div className="flex min-w-0 flex-col gap-1">
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Con ventas
+                Probables vendidos
               </span>
-              <label className="flex min-h-[4.125rem] cursor-pointer items-center gap-2 text-sm leading-snug text-gray-800 dark:text-gray-200">
+              <label
+                className="flex min-h-[4.125rem] cursor-pointer items-center gap-2 text-sm leading-snug text-gray-800 dark:text-gray-200"
+                title="Deja solo las líneas donde lo facturado después de la carga alcanza para cubrir lo pendiente. Sirve para salir a verificarlas y marcarlas como vendidas."
+              >
                 <input
                   type="checkbox"
                   className="h-4 w-4 shrink-0 rounded border-gray-300"
@@ -242,7 +248,7 @@ export function PorVencerFiltrosPanel({
                     router.replace(`/vencimientos/por-vencer?${p.toString()}`);
                   }}
                 />
-                Solo con ventas registradas
+                Solo con venta post. carga
               </label>
             </div>
             <div className="flex items-end">

@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageSpinner } from '@/components/ui/spinner';
+import PermisosOperadorPanel from '@/components/admin/PermisosOperadorPanel';
 
 interface RoleListItem {
   id: number;
@@ -38,6 +39,8 @@ export default function RolesPermisosPage() {
   const [roles, setRoles] = useState<RoleListItem[]>([]);
   const [operadores, setOperadores] = useState<OperadorRow[]>([]);
   const [rolFiltro, setRolFiltro] = useState('');
+  /** Operador cuyo detalle de permisos se está viendo. */
+  const [permisosDe, setPermisosDe] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -305,6 +308,15 @@ export default function RolesPermisosPage() {
                         )}
                       </p>
                     </div>
+                    <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setPermisosDe(op.idoperador)}
+                      title="Agregar o quitar permisos solo a este usuario"
+                    >
+                      Permisos
+                    </Button>
                     <select
                       value={op.app_role_id ?? ''}
                       disabled={savingId === op.idoperador}
@@ -320,6 +332,7 @@ export default function RolesPermisosPage() {
                           </option>
                         ))}
                     </select>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -327,6 +340,17 @@ export default function RolesPermisosPage() {
           </CardContent>
         </Card>
       )}
+
+      {permisosDe != null && (
+        <PermisosOperadorPanel
+          idoperador={permisosDe}
+          onCerrar={() => {
+            setPermisosDe(null);
+            void cargarOperadores();
+          }}
+        />
+      )}
+
     </div>
   );
 }

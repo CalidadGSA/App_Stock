@@ -9,6 +9,7 @@
     "sync:operadores-medicamentos": "node -e \"require('./src/load-env'); require('./src/jobs/obrasSocialesSync.job').runOperadoresMedicamentosSyncBatch().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})\"",
     "cron:legacy": "node src/jobs/obrasSocialesSync.runner.js",
     "inventario:cierre": "node --import tsx scripts/run-inventario-cierre-once.cjs",
+    "valorizar:controles": "node --import tsx scripts/valorizar-controles-cerrados.cjs",
     "cron:diagnose": "node scripts/diagnose-legacy-cron.cjs",
     "inventario:cierre:diagnose": "node scripts/diagnose-inventario-cierre-cron.cjs",
     "onze:diagnose": "node scripts/diagnose-onze-stock.cjs",

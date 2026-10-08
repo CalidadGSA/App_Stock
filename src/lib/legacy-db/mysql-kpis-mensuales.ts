@@ -387,3 +387,125 @@ export async function queryValesPorMes(
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** Bajas/altas por motivo de varias sucursales, en una sola consulta (para el tablero). */
+export async function queryBajasPorSucursalYMotivo(
+  sucursalIds: number[],
+  desdeYmd: string,
+  hastaExclusivoYmd: string
+): Promise<OnzeResult<Map<number, BajaPorMotivo[]>>> {
+  const p = await pool();
+  if (!p.ok) return p;
+  if (sucursalIds.length === 0) return { ok: true, data: new Map() };
+  try {
+    const q = p.data.query(
+      `SELECT
+         o.Sucursal AS sucursal_id,
+         m.idMotivoOpStock AS motivo_id,
+         m.descripcion,
+         m.alta_baja,
+         COUNT(DISTINCT o.IDOperacion) AS operaciones,
+         COUNT(*) AS lineas,
+         SUM(d.Cantidad) AS cajas,
+         SUM(d.Unidades) AS unidades,
+         SUM(${SQL_CAJAS_EQUIV_DETALLE} * ${sqlCostoConFallback('d.Costo', 'd.Precio')}) AS valor_costo,
+         SUM(${SQL_CAJAS_EQUIV_DETALLE} * COALESCE(d.Precio, 0)) AS valor_pvp
+       FROM stock_operaciones o
+       INNER JOIN stock_operaciones_detalle d ON d.IDOperacion = o.IDOperacion
+       INNER JOIN stock_operaciones_motivos m ON m.idMotivoOpStock = o.idMotivoOpStock
+       WHERE o.Sucursal IN (?) AND o.FechaHora >= ? AND o.FechaHora < ?
+       GROUP BY o.Sucursal, m.idMotivoOpStock, m.descripcion, m.alta_baja`,
+      [sucursalIds, desdeYmd, hastaExclusivoYmd]
+    ) as Promise<[Array<Record<string, unknown>>, unknown]>;
+    const [rows] = await conTimeout(q, timeoutMs(), 'Onze bajas por sucursal');
+
+    const out = new Map<number, BajaPorMotivo[]>();
+    for (const r of rows) {
+      const suc = num(r.sucursal_id);
+      const lista = out.get(suc) ?? [];
+      lista.push({
+        motivo_id: num(r.motivo_id),
+        descripcion: String(r.descripcion ?? '').trim() || `Motivo ${num(r.motivo_id)}`,
+        alta_baja: String(r.alta_baja ?? 'B').toUpperCase() === 'A' ? 'A' : 'B',
+        operaciones: num(r.operaciones),
+        lineas: num(r.lineas),
+        cajas: num(r.cajas),
+        unidades: num(r.unidades),
+        valor_costo: num(r.valor_costo),
+        valor_pvp: num(r.valor_pvp),
+      });
+      out.set(suc, lista);
+    }
+    return { ok: true, data: out };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Facturación neta de varias sucursales, en una sola consulta (para el tablero). */
+export async function queryFacturacionPorSucursal(
+  sucursalIds: number[],
+  desdeYmd: string,
+  hastaExclusivoYmd: string
+): Promise<OnzeResult<Map<number, FacturacionMes>>> {
+  const p = await pool();
+  if (!p.ok) return p;
+  if (sucursalIds.length === 0) return { ok: true, data: new Map() };
+  try {
+    const tipos = ONZE_TIPOS_SALIDA;
+    const qVentas = p.data.query(
+      `SELECT Sucursal AS sucursal_id, COUNT(*) AS comprobantes, SUM(TotalComprobante) AS total
+       FROM factcabecera
+       WHERE Tipo IN (?) AND Sucursal IN (?) AND Emision >= ? AND Emision < ?
+       GROUP BY Sucursal`,
+      [tipos, sucursalIds, desdeYmd, hastaExclusivoYmd]
+    ) as Promise<[Array<Record<string, unknown>>, unknown]>;
+
+    const qNc = p.data.query(
+      `SELECT fc.Sucursal AS sucursal_id,
+              COUNT(DISTINCT fc.IDComprobante) AS comprobantes,
+              SUM(fl.Total) AS total
+       FROM factlineas fl
+       INNER JOIN factcabecera fc ON fc.IDComprobante = fl.IDComprobante
+       INNER JOIN factcabecera r ON r.IDGlobal = fl.RefIDGlobal AND r.Tipo IN (?)
+       WHERE fc.Tipo = 'NC' AND fc.Sucursal IN (?) AND fc.Emision >= ? AND fc.Emision < ?
+       GROUP BY fc.Sucursal`,
+      [tipos, sucursalIds, desdeYmd, hastaExclusivoYmd]
+    ) as Promise<[Array<Record<string, unknown>>, unknown]>;
+
+    const [[ventas], [ncs]] = await conTimeout(
+      Promise.all([qVentas, qNc]),
+      timeoutMs(),
+      'Onze facturación por sucursal'
+    );
+
+    const out = new Map<number, FacturacionMes>();
+    for (const r of ventas) {
+      const suc = num(r.sucursal_id);
+      out.set(suc, {
+        ventas_brutas: num(r.total),
+        comprobantes: num(r.comprobantes),
+        notas_credito: 0,
+        notas_credito_comprobantes: 0,
+        neta: num(r.total),
+      });
+    }
+    for (const r of ncs) {
+      const suc = num(r.sucursal_id);
+      const actual = out.get(suc) ?? {
+        ventas_brutas: 0,
+        comprobantes: 0,
+        notas_credito: 0,
+        notas_credito_comprobantes: 0,
+        neta: 0,
+      };
+      actual.notas_credito = num(r.total);
+      actual.notas_credito_comprobantes = num(r.comprobantes);
+      actual.neta = actual.ventas_brutas - actual.notas_credito;
+      out.set(suc, actual);
+    }
+    return { ok: true, data: out };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}

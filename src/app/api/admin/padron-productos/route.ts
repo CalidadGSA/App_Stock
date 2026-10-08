@@ -1,5 +1,5 @@
 import { requirePermission } from '@/lib/auth/rbac';
-import { listPadron } from '@/lib/padron-final-crud';
+import { listPadron, parsePadronFiltros } from '@/lib/padron-final-crud';
 import { isPadronDatabaseConfigured } from '@/lib/padron-final-db';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
       pageSize,
       q,
       searchColumn: searchColumn || null,
+      filtros: parsePadronFiltros(searchParams.get('filters')),
       columns,
       sortBy,
       sortDir,

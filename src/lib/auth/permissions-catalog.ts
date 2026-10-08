@@ -8,7 +8,10 @@ export interface PermissionDefinition {
 }
 
 export const PERMISSIONS_CATALOG: PermissionDefinition[] = [
-  { codigo: 'dashboard.view', nombre: 'Ver dashboard', descripcion: 'Acceso al panel principal', categoria: 'general', orden: 10 },
+  { codigo: 'dashboard.view', nombre: 'Ver dashboard', descripcion: 'Acceso al panel principal y al manual de usuario', categoria: 'general', orden: 10 },
+  { codigo: 'kpis.mensuales', nombre: 'KPIs mensuales', descripcion: 'Indicadores mensuales de la sucursal', categoria: 'general', orden: 12 },
+  { codigo: 'stock.psicotropicos', nombre: 'Psicotrópicos en stock', descripcion: 'Consulta de psicotrópicos con existencia', categoria: 'general', orden: 14 },
+  { codigo: 'sesiones.revocar', nombre: 'Cerrar sesión en otros dispositivos', descripcion: 'Invalidar las sesiones abiertas del propio usuario', categoria: 'general', orden: 16 },
   { codigo: 'inventario.diario', nombre: 'Inventario diario', descripcion: 'Crear controles de inventario diario', categoria: 'inventario', orden: 20 },
   { codigo: 'inventario.ocasional', nombre: 'Inventario ocasional', descripcion: 'Inventarios ocasionales de sucursal', categoria: 'inventario', orden: 30 },
   { codigo: 'inventario.auditoria', nombre: 'Auditoría de inventario', descripcion: 'Controles de auditoría', categoria: 'inventario', orden: 40 },
@@ -22,6 +25,7 @@ export const PERMISSIONS_CATALOG: PermissionDefinition[] = [
   { codigo: 'vencimientos.vencidos', nombre: 'Vencidos', descripcion: 'Productos vencidos', categoria: 'vencimientos', orden: 110 },
   { codigo: 'vencimientos.devoluciones', nombre: 'Devoluciones', descripcion: 'Devoluciones de vencimientos', categoria: 'vencimientos', orden: 120 },
   { codigo: 'vencimientos.descuentos', nombre: 'Descuentos', descripcion: 'Gestión de descuentos por vencimiento', categoria: 'vencimientos', orden: 130 },
+  { codigo: 'admin.tablero', nombre: 'Tablero de sucursales', descripcion: 'Resumen mensual de todas las sucursales en una pantalla', categoria: 'administracion', orden: 195 },
   { codigo: 'admin.resumen_trimestral', nombre: 'Resumen trimestral', descripcion: 'Progreso trimestral por sucursal', categoria: 'administracion', orden: 200 },
   { codigo: 'admin.informe_mensual_sucursales', nombre: 'Informe mensual sucursales', descripcion: 'Vencidos cargados/vendidos y diferencias inventario por mes', categoria: 'administracion', orden: 205 },
   { codigo: 'admin.diferencias_psico', nombre: 'Dif. psico / estupefacientes', descripcion: 'Diferencias en controlados', categoria: 'administracion', orden: 210 },
@@ -55,13 +59,13 @@ export const ALL_PERMISSION_CODES = PERMISSIONS_CATALOG.map((p) => p.codigo);
 export const LEGACY_ROLE_PERMISSIONS: Record<string, readonly string[]> = {
   superadmin: ALL_PERMISSION_CODES,
   admin: ALL_PERMISSION_CODES.filter(
-    (c) =>
-      c !== 'admin.maintenance' &&
-      c !== 'inventario.diario' &&
-      c !== 'vencimientos.nuevo',
+    (c) => !['admin.base_productos', 'admin.sync', 'admin.maintenance'].includes(c),
   ),
-  operador_sucursal: [
+  responsable_de_sucursal: [
     'dashboard.view',
+    'kpis.mensuales',
+    'stock.psicotropicos',
+    'sesiones.revocar',
     'inventario.diario',
     'inventario.ocasional',
     'inventario.lista',
@@ -72,9 +76,98 @@ export const LEGACY_ROLE_PERMISSIONS: Record<string, readonly string[]> = {
     'vencimientos.vencidos',
     'vencimientos.devoluciones',
   ],
+  operador_sucursal: [
+    'dashboard.view',
+    'sesiones.revocar',
+    'inventario.diario',
+    'inventario.ocasional',
+    'inventario.lista',
+    'inventario.diferencias_resumen',
+    'vencimientos.nuevo',
+    'vencimientos.lista',
+    'vencimientos.por_vencer',
+  ],
 };
 
 export function legacyPermissionsForRol(rol: string | undefined): Set<string> {
   const list = LEGACY_ROLE_PERMISSIONS[rol ?? 'operador_sucursal'] ?? LEGACY_ROLE_PERMISSIONS.operador_sucursal;
   return new Set(list);
+}
+
+/**
+ * Roles predeterminados: qué permisos trae cada uno al crearse o al restablecerlo.
+ *
+ * Es la fuente de verdad que usa la migración de roles y el botón «restablecer» de la pantalla
+ * de Roles. Los permisos de cada operador se pueden ajustar después uno por uno, sin tocar el
+ * rol (ver `operador_permisos`).
+ */
+export interface RolPredeterminado {
+  codigo: string;
+  nombre: string;
+  descripcion: string;
+  /** `null` = todos los permisos del catálogo. */
+  permisos: string[] | null;
+}
+
+const TODOS = null;
+
+export const ROLES_PREDETERMINADOS: RolPredeterminado[] = [
+  {
+    codigo: 'superadmin',
+    nombre: 'Superadministrador',
+    descripcion: 'Acceso total, incluido mantenimiento y sincronización.',
+    permisos: TODOS,
+  },
+  {
+    codigo: 'admin',
+    nombre: 'Administrador',
+    descripcion: 'Todo menos generar bases de inventario, sincronizar la app y mantenimiento.',
+    permisos: PERMISSIONS_CATALOG.map((p) => p.codigo).filter(
+      (c) => !['admin.base_productos', 'admin.sync', 'admin.maintenance'].includes(c)
+    ),
+  },
+  {
+    codigo: 'responsable_de_sucursal',
+    nombre: 'Responsable',
+    descripcion:
+      'Operación de la sucursal más KPIs, psicotrópicos en stock, productos para devolver e historial de devoluciones.',
+    permisos: [
+      'dashboard.view',
+      'kpis.mensuales',
+      'stock.psicotropicos',
+      'sesiones.revocar',
+      'inventario.diario',
+      'inventario.ocasional',
+      'inventario.lista',
+      'inventario.diferencias_resumen',
+      'vencimientos.nuevo',
+      'vencimientos.lista',
+      'vencimientos.por_vencer',
+      'vencimientos.vencidos',
+      'vencimientos.devoluciones',
+    ],
+  },
+  {
+    codigo: 'operador_sucursal',
+    nombre: 'Operador de sucursal',
+    descripcion: 'Operación diaria de inventario y vencimientos de su sucursal.',
+    permisos: [
+      'dashboard.view',
+      'sesiones.revocar',
+      'inventario.diario',
+      'inventario.ocasional',
+      'inventario.lista',
+      'inventario.diferencias_resumen',
+      'vencimientos.nuevo',
+      'vencimientos.lista',
+      'vencimientos.por_vencer',
+    ],
+  },
+];
+
+/** Permisos que le corresponden al rol según la definición de arriba. */
+export function permisosDeRolPredeterminado(codigo: string): string[] {
+  const rol = ROLES_PREDETERMINADOS.find((r) => r.codigo === codigo);
+  if (!rol) return [];
+  return rol.permisos ?? PERMISSIONS_CATALOG.map((p) => p.codigo);
 }

@@ -1,5 +1,9 @@
 import { requirePermission } from '@/lib/auth/rbac';
-import { bulkUpdatePadron, type BulkUpdatePadronParams } from '@/lib/padron-final-crud';
+import {
+  bulkUpdatePadron,
+  parsePadronFiltros,
+  type BulkUpdatePadronParams,
+} from '@/lib/padron-final-crud';
 import { isPadronDatabaseConfigured } from '@/lib/padron-final-db';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -8,11 +12,12 @@ type BulkBody = {
   pks?: unknown;
   q?: string;
   searchColumn?: string | null;
+  filtros?: unknown;
 };
 
 /**
  * POST — modifica una o varias columnas editables en muchos productos a la vez.
- * Alcance: los `pks` enviados, o el resultado de la búsqueda (`q` + `searchColumn`).
+ * Alcance: los `pks` enviados, o el resultado de la búsqueda (`q` + `searchColumn` + `filtros`).
  * Las columnas sincronizadas desde plexdr / onze_center se rechazan.
  */
 export async function POST(request: NextRequest) {
@@ -48,10 +53,11 @@ export async function POST(request: NextRequest) {
     ? body.pks.map((v) => String(v ?? '').trim()).filter(Boolean)
     : [];
 
+  const filtros = parsePadronFiltros(body.filtros);
   const params: BulkUpdatePadronParams = {
     valores,
     pks,
-    filtro: { q: String(body.q ?? ''), searchColumn: body.searchColumn ?? null },
+    filtro: { q: String(body.q ?? ''), searchColumn: body.searchColumn ?? null, filtros },
   };
 
   try {
@@ -63,7 +69,11 @@ export async function POST(request: NextRequest) {
       columnas: res.columnas,
       alcance: res.alcance,
       actualizados: res.actualizados,
-      modo: pks.length > 0 ? `seleccion(${pks.length})` : `busqueda(${body.searchColumn || 'amplia'}:${body.q ?? ''})`,
+      modo:
+        pks.length > 0
+          ? `seleccion(${pks.length})`
+          : `busqueda(${body.searchColumn || 'amplia'}:${body.q ?? ''})`,
+      filtros: pks.length > 0 ? undefined : filtros,
     });
     return NextResponse.json(res);
   } catch (e: unknown) {

@@ -71,7 +71,14 @@ export const APP_NAV_SECTIONS: AppNavSection[] = [
         label: 'KPIs mensuales',
         href: '/kpis',
         icon: Gauge,
-        permission: 'dashboard.view',
+        permission: 'kpis.mensuales',
+      },
+      {
+        id: 'stock-psicotropicos',
+        label: 'Psicotrópicos en stock',
+        href: '/stock/psicotropicos',
+        icon: Pill,
+        permission: 'stock.psicotropicos',
       },
       {
         id: 'manual',
@@ -260,6 +267,13 @@ export const APP_NAV_SECTIONS: AppNavSection[] = [
         href: '/admin/padron-productos',
         icon: Table2,
         permission: 'admin.padron_productos',
+      },
+      {
+        id: 'tablero-sucursales',
+        label: 'Tablero sucursales',
+        href: '/admin/tablero',
+        icon: LayoutDashboard,
+        permission: 'admin.tablero',
       },
       {
         id: 'incidencias',

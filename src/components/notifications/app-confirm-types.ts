@@ -27,3 +27,24 @@ export type PendingAppConfirm =
       mode: 'choice';
       resolve: (value: AppConfirmChoice) => void;
     });
+
+/** Pedido de un número con el diálogo de la app, en vez de `window.prompt`. */
+export type AppPromptNumeroOptions = {
+  title?: string;
+  message: string;
+  /** Texto chico debajo del campo (p. ej. el detalle de la línea). */
+  detalle?: string;
+  label?: string;
+  valorInicial?: number;
+  min?: number;
+  max?: number;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: AppConfirmVariant;
+};
+
+export type PendingAppPromptNumero = AppPromptNumeroOptions & {
+  id: string;
+  /** `null` = canceló. */
+  resolve: (value: number | null) => void;
+};

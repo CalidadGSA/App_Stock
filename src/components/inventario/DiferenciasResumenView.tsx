@@ -312,6 +312,34 @@ export default function DiferenciasResumenView({
     router.push(`${cfg.basePath}?${qs.toString()}`);
   }
 
+  /**
+   * Las fechas se aplican solas: no hace falta un botón.
+   *
+   * Se espera a que el usuario deje de tipear porque un `input[type=date]` emite valores
+   * intermedios mientras se escribe el año («0002-01-05»), y recargar con esos sería inútil.
+   */
+  useEffect(() => {
+    if (!desdeInput || !hastaInput) return;
+    if (desdeInput === desdeActual && hastaInput === hastaActual) return;
+
+    const t = window.setTimeout(() => {
+      // Año incompleto: todavía está escribiendo.
+      if (desdeInput < '2000-01-01' || hastaInput < '2000-01-01') return;
+
+      if (hastaInput < desdeInput) {
+        setError('La fecha «Hasta» no puede ser anterior a «Desde».');
+        return;
+      }
+      setError('');
+      const qs = new URLSearchParams(searchParams.toString());
+      qs.set('desdeActual', desdeInput);
+      qs.set('hastaActual', hastaInput);
+      router.push(`${cfg.basePath}?${qs.toString()}`);
+    }, 600);
+
+    return () => window.clearTimeout(t);
+  }, [desdeInput, hastaInput, desdeActual, hastaActual, searchParams, router, cfg.basePath]);
+
   function encabezadoOrdenable(
     col: OrdenColumnaDiferenciasResumen,
     label: string,
@@ -339,20 +367,6 @@ export default function DiferenciasResumenView({
     );
   }
 
-  function aplicarFechas() {
-    if (!desdeInput || !hastaInput) {
-      setError('Indicá fecha desde y hasta.');
-      return;
-    }
-    if (hastaInput < desdeInput) {
-      setError('La fecha "Hasta" no puede ser anterior a "Desde".');
-      return;
-    }
-    const qs = new URLSearchParams(searchParams.toString());
-    qs.set('desdeActual', desdeInput);
-    qs.set('hastaActual', hastaInput);
-    router.push(`${cfg.basePath}?${qs.toString()}`);
-  }
 
   async function exportarPdf() {
     if (total === 0) return;
@@ -588,11 +602,6 @@ export default function DiferenciasResumenView({
                   onChange={(e) => setHastaInput(e.target.value)}
                   className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
-              </div>
-              <div className="flex items-end">
-                <Button size="sm" variant="secondary" onClick={aplicarFechas} disabled={loading}>
-                  Aplicar fechas
-                </Button>
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-gray-700">Categoría macro</label>

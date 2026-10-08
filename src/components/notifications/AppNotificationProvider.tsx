@@ -14,15 +14,19 @@ import type {
   AppConfirmChoice,
   AppConfirmChoiceOptions,
   AppConfirmOptions,
+  AppPromptNumeroOptions,
   PendingAppConfirm,
+  PendingAppPromptNumero,
 } from './app-confirm-types';
 import { AppNotificationHost } from './AppNotificationHost';
 import { AppConfirmDialog } from './AppConfirmDialog';
+import { AppPromptNumeroDialog } from './AppPromptNumeroDialog';
 
 type NotifyFn = (input: AppNotifyInput) => string;
 
 type ConfirmFn = (options: AppConfirmOptions | string) => Promise<boolean>;
 type ConfirmChoiceFn = (options: AppConfirmChoiceOptions) => Promise<AppConfirmChoice>;
+type PromptNumeroFn = (options: AppPromptNumeroOptions) => Promise<number | null>;
 
 type AppNotifyApi = {
   notify: NotifyFn;
@@ -34,6 +38,8 @@ type AppNotifyApi = {
   confirm: ConfirmFn;
   /** Confirmación con 3 acciones: cancelar / confirmar / alternativa. */
   confirmChoice: ConfirmChoiceFn;
+  /** Pide una cantidad con el diálogo de la app (reemplaza a `window.prompt`). */
+  promptNumero: PromptNumeroFn;
 };
 
 const DEFAULT_DURATION: Record<AppNotificationVariant, number> = {
@@ -55,6 +61,7 @@ function makeId(): string {
 export function AppNotificationProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [pendingConfirm, setPendingConfirm] = useState<PendingAppConfirm | null>(null);
+  const [pendingNumero, setPendingNumero] = useState<PendingAppPromptNumero | null>(null);
   const timersRef = useRef<Map<string, number>>(new Map());
 
   const dismiss = useCallback((id: string) => {
@@ -122,6 +129,19 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const promptNumero = useCallback<PromptNumeroFn>((options) => {
+    return new Promise<number | null>((resolve) => {
+      setPendingNumero({ id: makeId(), ...options, resolve });
+    });
+  }, []);
+
+  const answerNumero = useCallback((value: number | null) => {
+    setPendingNumero((current) => {
+      current?.resolve(value);
+      return null;
+    });
+  }, []);
+
   const answerConfirm = useCallback((value: boolean | AppConfirmChoice) => {
     setPendingConfirm((current) => {
       if (!current) return null;
@@ -146,8 +166,9 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
       dismiss,
       confirm,
       confirmChoice,
+      promptNumero,
     }),
-    [notify, dismiss, confirm, confirmChoice]
+    [notify, dismiss, confirm, confirmChoice, promptNumero]
   );
 
   return (
@@ -155,6 +176,7 @@ export function AppNotificationProvider({ children }: { children: ReactNode }) {
       {children}
       <AppNotificationHost items={items} onDismiss={dismiss} />
       <AppConfirmDialog confirm={pendingConfirm} onAnswer={answerConfirm} />
+      <AppPromptNumeroDialog pedido={pendingNumero} onAnswer={answerNumero} />
     </AppNotificationContext.Provider>
   );
 }

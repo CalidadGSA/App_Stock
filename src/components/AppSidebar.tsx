@@ -100,7 +100,7 @@ export default function AppSidebar({
         </div>
       ))}
       <div className="mt-auto">
-        <SidebarSystemSection rol={rol} onAfterClick={onMobileClose} />
+        <SidebarSystemSection rol={rol} permissions={permissions} onAfterClick={onMobileClose} />
       </div>
     </nav>
   );

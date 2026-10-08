@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -126,6 +126,32 @@ export default function AjustesPage() {
     void cargarSucursales();
   }, []);
 
+  // Referencia a la última versión: el efecto de abajo no debe re-dispararse por la función.
+  const cargarDiferenciasRef = useRef<
+    (opts?: {
+      sucursalId?: string;
+      origenFiltro?: 'todos' | 'Sucursal' | 'Auditoria';
+    }) => Promise<void>
+  >(async () => {});
+
+  /**
+   * Los filtros se aplican solos: no hace falta un botón.
+   *
+   * Se espera a que termine de tipear porque un `input[type=date]` emite valores intermedios
+   * mientras se escribe el año («0002-01-05»). Si el rango queda al revés, `cargarDiferencias`
+   * muestra el aviso igual que antes.
+   */
+  useEffect(() => {
+    if (!sucursalId || !desde || !hasta) return;
+    if (desde < '2000-01-01' || hasta < '2000-01-01') return;
+
+    const t = window.setTimeout(() => {
+      void cargarDiferenciasRef.current({ sucursalId, origenFiltro });
+    }, 500);
+
+    return () => window.clearTimeout(t);
+  }, [sucursalId, desde, hasta, origenFiltro]);
+
   async function cargarDiferencias(opts?: {
     sucursalId?: string;
     origenFiltro?: 'todos' | 'Sucursal' | 'Auditoria';
@@ -200,6 +226,11 @@ export default function AjustesPage() {
       setLoadingDiferencias(false);
     }
   }
+
+  useEffect(() => {
+    cargarDiferenciasRef.current = cargarDiferencias;
+  });
+
 
   async function handleEliminarDiferencia(id: string) {
     setError('');
@@ -404,15 +435,6 @@ export default function AjustesPage() {
                     <option value="Auditoria">Auditoría</option>
                   </select>
                 </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="w-full sm:w-auto"
-                  onClick={() => void cargarDiferencias()}
-                  disabled={loadingDiferencias}
-                >
-                  Ver diferencias
-                </Button>
               </div>
               {error && (
                 <p className="text-sm text-red-600">

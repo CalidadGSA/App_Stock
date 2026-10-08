@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -22,6 +22,7 @@ import { PageSpinner } from '@/components/ui/spinner';
 import PadronProductoEditor from '@/components/padron/PadronProductoEditor';
 import PadronEdicionMasiva from '@/components/padron/PadronEdicionMasiva';
 import PadronListMobile from '@/components/padron/PadronListMobile';
+import PadronFiltroColumna from '@/components/padron/PadronFiltroColumna';
 import {
   COLUMNAS_PADRON_CON_CATALOGO,
   evaluarValor,
@@ -42,7 +43,7 @@ import {
   type TamPaginaDatatable,
   TAM_PAGINA_DATATABLE_DEFAULT,
 } from '@/components/list/datatable-pagination';
-import type { PadronMeta, PadronSortDir } from '@/lib/padron-final-crud';
+import type { PadronFiltrosColumna, PadronMeta, PadronSortDir } from '@/lib/padron-final-crud';
 
 type Row = Record<string, unknown>;
 
@@ -72,6 +73,8 @@ export default function PadronProductosPage() {
   const [showColPicker, setShowColPicker] = useState(false);
   const [sortBy, setSortBy] = useState('producto');
   const [sortDir, setSortDir] = useState<PadronSortDir>('asc');
+  /** Filtros tipo Excel por columna visible. */
+  const [filtros, setFiltros] = useState<PadronFiltrosColumna>({});
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editPk, setEditPk] = useState<string | null>(null);
@@ -118,6 +121,72 @@ export default function PadronProductosPage() {
     return cols.includes(pk) ? cols : [pk, ...cols];
   }, [meta, visibleCols, todasLasColumnas]);
 
+  /** Solo filtran las columnas que están a la vista: una oculta no puede recortar el listado. */
+  const filtrosVigentes = useMemo(() => {
+    const visibles = new Set(tableColumns);
+    const out: PadronFiltrosColumna = {};
+    for (const [col, valores] of Object.entries(filtros)) {
+      if (visibles.has(col) && valores.length > 0) out[col] = valores;
+    }
+    return out;
+  }, [filtros, tableColumns]);
+  const hayFiltros = Object.keys(filtrosVigentes).length > 0;
+  const filtrosJson = hayFiltros ? JSON.stringify(filtrosVigentes) : '';
+
+  function aplicarFiltro(col: string, valores: string[] | null) {
+    setFiltros((prev) => {
+      const next = { ...prev };
+      if (valores === null) delete next[col];
+      else next[col] = valores;
+      return next;
+    });
+    setPage(1);
+  }
+
+  function quitarFiltros() {
+    setFiltros({});
+    setPage(1);
+  }
+
+  const checkHeaderRef = useRef<HTMLInputElement>(null);
+  const checkFilaRefs = useRef<Array<HTMLInputElement | null>>([]);
+
+  function enfocarCheck(indice: number) {
+    if (indice < 0) {
+      checkHeaderRef.current?.focus();
+      return;
+    }
+    const el = checkFilaRefs.current[Math.min(indice, rows.length - 1)];
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.closest('tr')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  /**
+   * Flechas para moverse entre casilleros (Espacio tilda, nativo del checkbox).
+   * Con Shift, la fila de destino también queda tildada para seleccionar de corrido.
+   * `indice` -1 es el casillero del encabezado.
+   */
+  function onKeyDownCheck(e: KeyboardEvent<HTMLInputElement>, indice: number) {
+    const ultimo = rows.length - 1;
+    let destino: number | null = null;
+    if (e.key === 'ArrowDown') destino = Math.min(indice + 1, ultimo);
+    else if (e.key === 'ArrowUp') destino = Math.max(indice - 1, -1);
+    else if (e.key === 'Home') destino = 0;
+    else if (e.key === 'End') destino = ultimo;
+    if (destino === null || ultimo < 0) return;
+
+    e.preventDefault();
+    if (e.shiftKey && destino >= 0 && meta) {
+      const pks = [indice, destino]
+        .filter((i) => i >= 0)
+        .map((i) => String(rows[i]?.[meta.primaryKey] ?? ''))
+        .filter(Boolean);
+      setSeleccionados((prev) => Array.from(new Set([...prev, ...pks])));
+    }
+    enfocarCheck(destino);
+  }
+
   const columnasSeleccionables = useMemo(() => {
     if (!meta) return [];
     return [...meta.columns].sort((a, b) =>
@@ -143,6 +212,7 @@ export default function PadronProductosPage() {
       });
       if (q.trim()) params.set('q', q.trim());
       if (searchColumn) params.set('searchColumn', searchColumn);
+      if (filtrosJson) params.set('filters', filtrosJson);
       if (tableColumns.length > 0) {
         params.set('columns', tableColumns.join(','));
       }
@@ -176,9 +246,9 @@ export default function PadronProductosPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, q, searchColumn, tableColumns, sortBy, sortDir, router, visibleCols.length]);
+  }, [page, pageSize, q, searchColumn, filtrosJson, tableColumns, sortBy, sortDir, router, visibleCols.length]);
 
-  useEffect(() => {
+  const recargarCatalogos = useCallback(() => {
     fetch('/api/admin/padron-productos/valores', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j: { catalogos?: Record<string, ValorCatalogo[]> }) => {
@@ -186,6 +256,10 @@ export default function PadronProductosPage() {
       })
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    recargarCatalogos();
+  }, [recargarCatalogos]);
 
   useEffect(() => {
     void cargar();
@@ -221,10 +295,10 @@ export default function PadronProductosPage() {
   }
 
   /** Valores de clasificación que no existen todavía en el padrón. */
-  function valoresNuevosAlGuardar(): Array<{ columna: string; valor: string }> {
+  function valoresNuevos(valores: Record<string, unknown>): Array<{ columna: string; valor: string }> {
     const nuevos: Array<{ columna: string; valor: string }> = [];
     for (const columna of COLUMNAS_PADRON_CON_CATALOGO) {
-      const valor = String(formValues[columna] ?? '').trim();
+      const valor = String(valores[columna] ?? '').trim();
       if (!valor) continue;
       const res = evaluarValor(valor, catalogos[columna] ?? []);
       if (res?.tipo === 'nuevo') nuevos.push({ columna, valor });
@@ -232,10 +306,9 @@ export default function PadronProductosPage() {
     return nuevos;
   }
 
-  async function guardar() {
-    if (!meta) return;
-
-    const nuevos = valoresNuevosAlGuardar();
+  /** Pide confirmación si algún valor de clasificación no existe todavía. */
+  async function confirmarValoresNuevos(valores: Record<string, unknown>): Promise<boolean> {
+    const nuevos = valoresNuevos(valores);
     if (nuevos.length > 0) {
       const detalle = nuevos
         .map(({ columna, valor }) => {
@@ -260,8 +333,14 @@ export default function PadronProductosPage() {
         cancelLabel: 'Volver a revisar',
         variant: 'warning',
       });
-      if (!ok) return;
+      if (!ok) return false;
     }
+    return true;
+  }
+
+  async function guardar() {
+    if (!meta) return;
+    if (!(await confirmarValoresNuevos(formValues))) return;
 
     setSaving(true);
     setError('');
@@ -284,12 +363,7 @@ export default function PadronProductosPage() {
       cerrarDrawer();
       await cargar();
       // Un valor recién creado tiene que aparecer como existente la próxima vez.
-      fetch('/api/admin/padron-productos/valores', { cache: 'no-store' })
-        .then((r) => r.json())
-        .then((j: { catalogos?: Record<string, ValorCatalogo[]> }) => {
-          if (j.catalogos) setCatalogos(j.catalogos);
-        })
-        .catch(() => undefined);
+      recargarCatalogos();
     } catch {
       setError('Error al guardar');
     } finally {
@@ -432,6 +506,7 @@ export default function PadronProductosPage() {
       const params = new URLSearchParams({ sortBy, sortDir });
       if (q.trim()) params.set('q', q.trim());
       if (searchColumn) params.set('searchColumn', searchColumn);
+      if (filtrosJson) params.set('filters', filtrosJson);
       if (tableColumns.length > 0) {
         params.set('columns', tableColumns.join(','));
       }
@@ -542,7 +617,7 @@ export default function PadronProductosPage() {
       <Card className={DATATABLE_CARD_CLASS}>
         <CardHeader className="shrink-0">
           <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 size="sm"
                 variant="outline"
@@ -551,6 +626,42 @@ export default function PadronProductosPage() {
                 <Columns3 className="h-4 w-4 mr-1" />
                 Columnas ({tableColumns.length || meta?.listDefaults.length || 0})
               </Button>
+              {hayFiltros && (
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="text-gray-500">Filtros:</span>
+                  {Object.entries(filtrosVigentes).map(([col, valores]) => (
+                    <span
+                      key={col}
+                      className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 py-0.5 pl-2 pr-1 text-blue-900"
+                      title={valores.map((v) => (v === '' ? '(Vacías)' : v)).join(', ')}
+                    >
+                      <span className="font-medium">{col}</span>
+                      <span className="max-w-[220px] truncate text-blue-800">
+                        {valores.length === 1
+                          ? valores[0] === ''
+                            ? '(Vacías)'
+                            : valores[0]
+                          : `${valores.length} valores`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => aplicarFiltro(col, null)}
+                        className="rounded-full p-0.5 hover:bg-blue-100"
+                        aria-label={`Quitar filtro de ${col}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={quitarFiltros}
+                    className="ml-1 text-gray-600 underline-offset-2 hover:underline"
+                  >
+                    Quitar todos
+                  </button>
+                </div>
+              )}
             </div>
 
             {showColPicker && meta && (
@@ -648,11 +759,13 @@ export default function PadronProductosPage() {
                   <tr>
                     <th className="w-8 px-3 py-2">
                       <input
+                        ref={checkHeaderRef}
                         type="checkbox"
                         aria-label="Seleccionar todos los de esta página"
-                        title="Seleccionar todos los de esta página"
+                        title="Seleccionar todos los de esta página (flechas para moverse, Espacio para tildar)"
                         checked={todosLaPaginaTildados}
                         onChange={(e) => toggleSeleccionPagina(e.target.checked)}
+                        onKeyDown={(e) => onKeyDownCheck(e, -1)}
                       />
                     </th>
                     {tableColumns.map((col) => (
@@ -660,17 +773,25 @@ export default function PadronProductosPage() {
                         key={col}
                         className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-gray-600"
                       >
-                        <button
-                          type="button"
-                          onClick={() => onSortColumn(col)}
-                          className={`inline-flex items-center hover:text-blue-700 ${
-                            isSortedColumn(col) ? 'text-blue-700' : ''
-                          }`}
-                          title="Ordenar por esta columna"
-                        >
-                          {col}
-                          {sortIcon(col)}
-                        </button>
+                        <span className="inline-flex items-center">
+                          <button
+                            type="button"
+                            onClick={() => onSortColumn(col)}
+                            className={`inline-flex items-center hover:text-blue-700 ${
+                              isSortedColumn(col) ? 'text-blue-700' : ''
+                            }`}
+                            title="Ordenar por esta columna"
+                          >
+                            {col}
+                            {sortIcon(col)}
+                          </button>
+                          <PadronFiltroColumna
+                            columna={col}
+                            filtroActual={filtrosVigentes[col]}
+                            contexto={{ q, searchColumn, filtros: filtrosVigentes }}
+                            onAplicar={(valores) => aplicarFiltro(col, valores)}
+                          />
+                        </span>
                       </th>
                     ))}
                     <th className="sticky right-0 bg-gray-50 px-3 py-2 text-right text-xs font-medium text-gray-600">
@@ -679,20 +800,26 @@ export default function PadronProductosPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {rows.map((row) => {
+                  {rows.map((row, indice) => {
                     const pk = meta ? String(row[meta.primaryKey] ?? '') : '';
                     const tildado = seleccionadosSet.has(pk);
                     return (
                       <tr
                         key={pk}
-                        className={tildado ? 'bg-blue-50/60' : 'hover:bg-gray-50'}
+                        className={`scroll-mt-10 focus-within:shadow-[inset_3px_0_0_0_#2563eb] ${
+                          tildado ? 'bg-blue-50/60' : 'hover:bg-gray-50'
+                        }`}
                       >
                         <td className="px-3 py-2">
                           <input
+                            ref={(el) => {
+                              checkFilaRefs.current[indice] = el;
+                            }}
                             type="checkbox"
                             aria-label={`Seleccionar ${pk}`}
                             checked={tildado}
                             onChange={() => toggleSeleccion(pk)}
+                            onKeyDown={(e) => onKeyDownCheck(e, indice)}
                           />
                         </td>
                         {tableColumns.map((col) => (
@@ -736,8 +863,10 @@ export default function PadronProductosPage() {
         <PadronEdicionMasiva
           meta={meta}
           seleccionados={seleccionados}
-          filtro={{ q, searchColumn }}
+          filtro={{ q, searchColumn, filtros: filtrosVigentes }}
           totalBusqueda={total}
+          catalogos={catalogos}
+          confirmarValoresNuevos={confirmarValoresNuevos}
           onCerrar={() => setMasivaOpen(false)}
           confirmar={(mensaje) =>
             notify.confirm({
@@ -757,6 +886,7 @@ export default function PadronProductosPage() {
               } (${r.columnas.join(', ')})`
             );
             void cargar();
+            recargarCatalogos();
           }}
         />
       )}

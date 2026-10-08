@@ -288,15 +288,37 @@ function KpisMensualesContenido() {
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <Ratio
-                  label="Neto / stock valorizado"
-                  value={d.ratios.diferencias_neto_sobre_stock_pct}
-                  hint="|neto| sobre stock a costo"
+                  label="Faltante / inventariado"
+                  value={d.ratios.faltantes_sobre_controlado_pct}
+                  hint="faltante sobre lo efectivamente inventariado, a costo"
                 />
                 <Ratio
-                  label="Bruto / stock valorizado"
-                  value={d.ratios.diferencias_bruto_sobre_stock_pct}
-                  hint="sobrante + faltante"
+                  label="Neto / inventariado"
+                  value={d.ratios.neto_sobre_controlado_pct}
+                  hint="|neto| sobre lo efectivamente inventariado"
                 />
+              </div>
+
+              <div className="rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Scale className="h-4 w-4 text-gray-500" />
+                    <p className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                      Valorizado de lo inventariado
+                    </p>
+                  </div>
+                  <p className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                    {d.controlado.disponible ? formatMoneda(d.controlado.stock_controlado_costo) : '—'}
+                  </p>
+                </div>
+                <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  {d.controlado.disponible
+                    ? `${d.controlado.lineas_controladas.toLocaleString('es-AR')} líneas en ${d.controlado.controles.toLocaleString('es-AR')} controles cerrados del mes` +
+                      (d.controlado.sin_valorizar > 0
+                        ? ` · ${d.controlado.sin_valorizar} sin valorizar`
+                        : '')
+                    : 'Falta aplicar la migración 033 en Supabase.'}
+                </p>
               </div>
 
               <div className="rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700">

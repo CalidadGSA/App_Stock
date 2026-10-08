@@ -248,12 +248,45 @@ function normalizeCellValue(
   return s;
 }
 
+/**
+ * Filtros tipo Excel: por columna, los valores admitidos (comparados sin espacios en los
+ * extremos). `''` representa las celdas vacías o nulas.
+ */
+export type PadronFiltrosColumna = Record<string, string[]>;
+
+const MAX_VALORES_POR_FILTRO = 5_000;
+
+/** Acepta el JSON del query string o el objeto del body; descarta lo que no sea string[]. */
+export function parsePadronFiltros(raw: unknown): PadronFiltrosColumna {
+  let obj: unknown = raw;
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return {};
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+
+  const out: PadronFiltrosColumna = {};
+  for (const [col, valores] of Object.entries(obj as Record<string, unknown>)) {
+    if (!Array.isArray(valores) || valores.length === 0) continue;
+    out[col] = Array.from(new Set(valores.map((v) => String(v ?? '').trim()))).slice(
+      0,
+      MAX_VALORES_POR_FILTRO
+    );
+  }
+  return out;
+}
+
 export type ListPadronOpts = {
   page?: number;
   pageSize?: number;
   q?: string;
   /** Si se indica una columna válida, busca solo ahí; si no, en las columnas candidatas. */
   searchColumn?: string | null;
+  filtros?: PadronFiltrosColumna;
   columns?: string[];
   sortBy?: string | null;
   sortDir?: PadronSortDir;
@@ -298,30 +331,116 @@ export async function listPadron(opts: ListPadronOpts = {}) {
 
 const MAX_PADRON_EXPORT_ROWS = 100_000;
 
+/** Valor de la celda tal como lo comparan los filtros: texto sin espacios en los extremos. */
+function exprValorFiltro(col: string): string {
+  return `coalesce(btrim(${quoteIdent(col)}::text), '')`;
+}
+
+function escaparLike(term: string): string {
+  return term.replace(/[%_\\]/g, (c) => `\\${c}`);
+}
+
 /**
- * WHERE de búsqueda (mismo criterio que el listado). `startIndex` permite ubicar los
- * placeholders después de otros parámetros (la edición masiva usa $1..$n para el SET).
+ * WHERE de búsqueda + filtros por columna (mismo criterio en listado, export y edición
+ * masiva). `startIndex` permite ubicar los placeholders después de otros parámetros (la
+ * edición masiva usa $1..$n para el SET). `excluirFiltro` omite el filtro de esa columna:
+ * el desplegable de una columna muestra sus valores según los demás filtros, como Excel.
  */
 function buildPadronWhere(
   meta: PadronMeta,
-  opts: Pick<ListPadronOpts, 'q' | 'searchColumn'>,
+  opts: Pick<ListPadronOpts, 'q' | 'searchColumn' | 'filtros'> & { excluirFiltro?: string },
   startIndex = 0
 ): { whereSql: string; params: unknown[] } {
   const colSet = new Set(meta.columns.map((c) => c.name));
   const params: unknown[] = [];
+  const conds: string[] = [];
+  const placeholder = (valor: unknown) => {
+    params.push(valor);
+    return `$${startIndex + params.length}`;
+  };
+
   const term = normalizarTextoBusqueda(opts.q).trim();
-  if (term.length < 2) return { whereSql: '', params };
+  if (term.length >= 2) {
+    const requestedCol = String(opts.searchColumn ?? '').trim();
+    const searchCols =
+      requestedCol && colSet.has(requestedCol) ? [requestedCol] : pickSearchColumns(meta);
+    if (searchCols.length > 0) {
+      const ph = placeholder(`%${escaparLike(term)}%`);
+      conds.push(`(${searchCols.map((c) => `${quoteIdent(c)}::text ilike ${ph}`).join(' or ')})`);
+    }
+  }
 
-  const requestedCol = String(opts.searchColumn ?? '').trim();
-  const searchCols =
-    requestedCol && colSet.has(requestedCol) ? [requestedCol] : pickSearchColumns(meta);
-  if (searchCols.length === 0) return { whereSql: '', params };
+  for (const [col, valores] of Object.entries(opts.filtros ?? {})) {
+    if (!colSet.has(col) || col === opts.excluirFiltro || valores.length === 0) continue;
+    const expr = exprValorFiltro(col);
+    const noVacios = valores.filter((v) => v !== '');
+    const partes: string[] = [];
+    if (noVacios.length > 0) partes.push(`${expr} = any(${placeholder(noVacios)}::text[])`);
+    if (valores.includes('')) partes.push(`${expr} = ''`);
+    conds.push(`(${partes.join(' or ')})`);
+  }
 
-  const like = `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
-  params.push(like);
-  const idx = startIndex + params.length;
-  const parts = searchCols.map((c) => `${quoteIdent(c)}::text ilike $${idx}`);
-  return { whereSql: `where (${parts.join(' or ')})`, params };
+  return { whereSql: conds.length > 0 ? `where ${conds.join(' and ')}` : '', params };
+}
+
+export type ValorFiltroColumna = { valor: string; usos: number };
+
+const MAX_VALORES_DESPLEGABLE = 1_000;
+
+/**
+ * Valores distintos de una columna, con cuántos productos tiene cada uno, para el
+ * desplegable de filtro. Respeta la búsqueda y los filtros de las otras columnas.
+ */
+export async function listPadronValoresColumna(opts: {
+  columna: string;
+  q?: string;
+  searchColumn?: string | null;
+  filtros?: PadronFiltrosColumna;
+  /** Texto para acotar los valores del desplegable. */
+  buscar?: string;
+}): Promise<{ valores: ValorFiltroColumna[]; truncado: boolean }> {
+  const meta = await getPadronMeta();
+  const col = meta.columns.find((c) => c.name === opts.columna);
+  if (!col) throw new Error(`Columna inexistente: ${opts.columna}`);
+
+  const { whereSql, params } = buildPadronWhere(meta, {
+    q: opts.q,
+    searchColumn: opts.searchColumn,
+    filtros: opts.filtros,
+    excluirFiltro: col.name,
+  });
+
+  const expr = exprValorFiltro(col.name);
+  let sql = whereSql;
+  const buscar = String(opts.buscar ?? '').trim();
+  if (buscar) {
+    params.push(`%${escaparLike(buscar)}%`);
+    sql = `${sql ? `${sql} and` : 'where'} ${expr} ilike $${params.length}`;
+  }
+  params.push(MAX_VALORES_DESPLEGABLE + 1);
+
+  // Los números se ordenan por valor, no alfabéticamente (todas las columnas son text).
+  const esNumero = `${expr} ~ '^-?[0-9]+([.,][0-9]+)?$'`;
+  const { rows } = await getPadronPool().query<{ valor: string; usos: number }>(
+    `select ${expr} as valor, count(*)::int as usos
+     from "padron_final"
+     ${sql}
+     group by 1
+     order by (${expr} = '') asc,
+              (${esNumero}) desc,
+              case when ${esNumero} then replace(${expr}, ',', '.')::numeric end asc,
+              1 asc
+     limit $${params.length}`,
+    params
+  );
+
+  return {
+    valores: rows.slice(0, MAX_VALORES_DESPLEGABLE).map((r) => ({
+      valor: String(r.valor ?? ''),
+      usos: Number(r.usos ?? 0),
+    })),
+    truncado: rows.length > MAX_VALORES_DESPLEGABLE,
+  };
 }
 
 function buildPadronListQuery(meta: PadronMeta, opts: ListPadronOpts) {
@@ -496,8 +615,8 @@ export type BulkUpdatePadronParams = {
   valores: Record<string, unknown>;
   /** Modo explícito: productos elegidos en la tabla. */
   pks?: string[];
-  /** Modo búsqueda: todos los que matchean (exige término de 2+ caracteres). */
-  filtro?: { q?: string; searchColumn?: string | null };
+  /** Modo búsqueda: todos los que matchean (exige búsqueda de 2+ caracteres o un filtro). */
+  filtro?: { q?: string; searchColumn?: string | null; filtros?: PadronFiltrosColumna };
 };
 
 export type BulkUpdatePadronResult = {
@@ -541,7 +660,7 @@ export async function bulkUpdatePadron(
     const built = buildPadronWhere(meta, params.filtro ?? {}, startIndex);
     if (!built.whereSql) {
       throw new Error(
-        'Indicá productos o una búsqueda de al menos 2 caracteres: no se permite modificar todo el padrón'
+        'Indicá productos, una búsqueda de al menos 2 caracteres o un filtro de columna: no se permite modificar todo el padrón'
       );
     }
     return { sql: built.whereSql, params: built.params };

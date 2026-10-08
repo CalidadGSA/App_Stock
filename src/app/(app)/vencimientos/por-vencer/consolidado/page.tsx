@@ -84,6 +84,9 @@ export default function PorVencerConsolidadoPage() {
   const [sucursales, setSucursales] = useState<Array<{ sucursal: number; nombrefantasia: string }>>([]);
   const [catMacros, setCatMacros] = useState<string[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
+  /** Años y meses con líneas (los meses, del año elegido); vacío = todavía no cargó. */
+  const [aniosConDatos, setAniosConDatos] = useState<number[]>([]);
+  const [mesesConDatos, setMesesConDatos] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [autorizado, setAutorizado] = useState<boolean | null>(null);
@@ -124,8 +127,22 @@ export default function PorVencerConsolidadoPage() {
     mesVencValido,
     anioVencValido,
   ]);
-  const mesesVencOpts = MESES_CALENDARIO;
-  const aniosVencOpts = useMemo(() => opcionesAnioVencimiento(3, 5), []);
+  const aniosGenerados = useMemo(() => opcionesAnioVencimiento(3, 5), []);
+  /**
+   * Solo los años y meses con líneas (los meses, del año elegido). Mientras no haya respuesta
+   * se ofrece el rango completo, para no dejar los filtros vacíos en la primera carga.
+   */
+  const aniosVencOpts = useMemo(
+    () => (aniosConDatos.length > 0 ? aniosConDatos : aniosGenerados),
+    [aniosConDatos, aniosGenerados]
+  );
+  const mesesVencOpts = useMemo(
+    () =>
+      mesesConDatos.length > 0
+        ? MESES_CALENDARIO.filter((m) => mesesConDatos.includes(m.value))
+        : MESES_CALENDARIO,
+    [mesesConDatos]
+  );
 
   const desdeHastaLabel = useMemo(
     () => etiquetaPeriodoParaRangeKey(rangeKey, vistaSelect === 'vencidos'),
@@ -315,6 +332,8 @@ export default function PorVencerConsolidadoPage() {
         montoTotal?: number;
         cat_macros?: string[];
         categorias?: string[];
+        anios_venc?: number[];
+        meses_venc?: number[];
         sucursales?: Array<{ sucursal: number; nombrefantasia: string }>;
         totales?: typeof totalesApi;
         error?: string;
@@ -344,6 +363,8 @@ export default function PorVencerConsolidadoPage() {
       }
       setCatMacros(json.cat_macros ?? []);
       setCategorias(json.categorias ?? []);
+      setAniosConDatos(json.anios_venc ?? []);
+      setMesesConDatos(json.meses_venc ?? []);
       setSucursales(json.sucursales ?? []);
     } catch {
       setError('Error al cargar consolidado');

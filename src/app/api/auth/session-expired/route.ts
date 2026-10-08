@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 import { AUTH_COOKIE_NAMES, cookieSecureFlag } from '@/lib/auth/cookie-config';
 import { OPERADOR_COOKIE_NAME } from '@/lib/auth/session';
+import { urlPublica } from '@/lib/http/url-publica';
 
 /**
  * GET /api/auth/session-expired
@@ -31,9 +32,7 @@ export async function GET(request: NextRequest) {
   });
   cookieStore.delete(OPERADOR_COOKIE_NAME);
 
-  const url = request.nextUrl.clone();
-  url.pathname = '/login';
-  url.search = '';
+  const url = urlPublica(request, '/login');
   url.searchParams.set('expirado', '1');
   return NextResponse.redirect(url);
 }

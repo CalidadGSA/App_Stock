@@ -11,9 +11,12 @@ import { useAppNotify } from '@/components/notifications/AppNotificationProvider
 
 export default function SidebarSystemSection({
   rol,
+  permissions,
   onAfterClick,
 }: {
   rol: RolOperador;
+  /** Permisos efectivos del operador (incluye los ajustes individuales). */
+  permissions?: string[];
   onAfterClick?: () => void;
 }) {
   const notify = useAppNotify();
@@ -23,6 +26,8 @@ export default function SidebarSystemSection({
   const [revokingSessions, setRevokingSessions] = useState(false);
 
   const esSuperadmin = isSuperAdminRole(rol);
+  // El superadmin siempre puede; para el resto depende del permiso.
+  const puedeRevocarSesiones = esSuperadmin || (permissions ?? []).includes('sesiones.revocar');
   const rendimientoActivo = pathname === '/admin/rendimiento' || pathname.startsWith('/admin/rendimiento/');
 
   useEffect(() => {
@@ -148,6 +153,7 @@ export default function SidebarSystemSection({
             </Link>
           </li>
         ) : null}
+        {puedeRevocarSesiones ? (
         <li>
           <button
             type="button"
@@ -162,6 +168,7 @@ export default function SidebarSystemSection({
             </span>
           </button>
         </li>
+        ) : null}
         {esSuperadmin ? (
           <li>
             <button

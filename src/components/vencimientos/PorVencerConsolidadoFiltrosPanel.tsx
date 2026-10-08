@@ -231,7 +231,8 @@ export function PorVencerConsolidadoFiltrosPanel({
                 router.push(`/vencimientos/por-vencer/consolidado?${p.toString()}`);
               }}
               onAnioChange={(v) => {
-                push({ anio_venc: v });
+                // El mes elegido puede no tener datos en el año nuevo: se limpia.
+                push({ anio_venc: v, mes_venc: '' });
               }}
             />
             <div className="flex items-end">

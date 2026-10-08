@@ -1,5 +1,5 @@
 import { requirePermission } from '@/lib/auth/rbac';
-import { getPadronMeta, listPadronForExport } from '@/lib/padron-final-crud';
+import { getPadronMeta, listPadronForExport, parsePadronFiltros } from '@/lib/padron-final-crud';
 import { isPadronDatabaseConfigured } from '@/lib/padron-final-db';
 import { buildPadronExcelBuffer, padronExportFileName } from '@/lib/padron-export-excel';
 import { NextRequest, NextResponse } from 'next/server';
@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
     const result = await listPadronForExport({
       q,
       searchColumn: searchColumn || null,
+      filtros: parsePadronFiltros(searchParams.get('filters')),
       columns: columnNames,
       sortBy,
       sortDir,

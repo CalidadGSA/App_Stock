@@ -326,6 +326,38 @@ export async function guardarSnapshot(
   if (error) console.warn('kpi avance inventario (guardar snapshot):', error.message);
 }
 
+/**
+ * Para el cron diario: guarda el avance del mes en curso y, los primeros días del mes, también
+ * el del mes anterior.
+ *
+ * Sin esa segunda pasada la foto del mes queda tomada *durante* el último día y pierde todo lo
+ * que se cuente después de esa hora. Como el trimestre ya cerrado no cambia, volver a guardarlo
+ * al día siguiente deja el valor definitivo.
+ */
+export async function tomarSnapshotAvanceConCierreDeMes(
+  admin: SupabaseClient,
+  sucursales: Array<{ id: number; esDrogueria: boolean }>,
+  hoyYmd: string
+): Promise<{ mesActual: number; mesAnterior: number }> {
+  const ymActual = hoyYmd.slice(0, 7);
+  const mesActual = await tomarSnapshotAvanceDiario(admin, sucursales, ymActual);
+
+  // Los primeros días del mes se vuelve a cerrar el anterior, por si quedó contando gente.
+  const diaDelMes = parseInt(hoyYmd.slice(8, 10), 10);
+  if (!Number.isFinite(diaDelMes) || diaDelMes > DIAS_PARA_CERRAR_MES_ANTERIOR) {
+    return { mesActual, mesAnterior: 0 };
+  }
+
+  const [anio, mes] = ymActual.split('-').map((x) => parseInt(x, 10));
+  const anterior = mes > 1 ? `${anio}-${String(mes - 1).padStart(2, '0')}` : `${anio - 1}-12`;
+  const mesAnterior = await tomarSnapshotAvanceDiario(admin, sucursales, anterior);
+
+  return { mesActual, mesAnterior };
+}
+
+/** Cuántos días del mes nuevo se sigue reescribiendo la foto del mes anterior. */
+const DIAS_PARA_CERRAR_MES_ANTERIOR = 5;
+
 /** Para el cron diario: deja el avance del mes en curso de varias sucursales. */
 export async function tomarSnapshotAvanceDiario(
   admin: SupabaseClient,

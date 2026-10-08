@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAppNotify } from '@/components/notifications/AppNotificationProvider';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -94,6 +95,72 @@ function compararValoresSort(
   return sortDir === 'asc' ? cmp : -cmp;
 }
 
+type VentaPosterior = { unidades: number; ultima_fecha: string; dias: number };
+
+/** Suma las ventas posteriores de todas las líneas de una fila agrupada. */
+function sumarVentasPosteriores(
+  items: Array<{ id: string }>,
+  mapa: Record<string, VentaPosterior>
+): VentaPosterior | undefined {
+  let unidades = 0;
+  let dias = 0;
+  let ultima = '';
+  for (const i of items) {
+    const v = mapa[i.id];
+    if (!v) continue;
+    unidades += v.unidades;
+    dias += v.dias;
+    if (v.ultima_fecha > ultima) ultima = v.ultima_fecha;
+  }
+  return unidades > 0 ? { unidades, ultima_fecha: ultima, dias } : undefined;
+}
+
+/**
+ * Avisa que el producto se facturó después del día en que se cargó.
+ *
+ * Casi todas las líneas con unos meses de antigüedad tienen alguna venta posterior —es la
+ * rotación normal del producto— así que un badge plano no distingue nada. Se gradúa comparando
+ * contra lo que todavía figura pendiente: si lo facturado alcanza para cubrirlo, lo más probable
+ * es que esas unidades ya no estén y se marca fuerte. Si no, queda como dato suave.
+ */
+function BadgeVendidoDespues({
+  venta,
+  restante,
+}: {
+  venta?: VentaPosterior;
+  restante: number;
+}) {
+  if (!venta || venta.unidades <= 0) return null;
+
+  const pendiente = Math.max(0, Number(restante) || 0);
+  const cubierto = pendiente > 0 && venta.unidades >= pendiente;
+  const detalle =
+    `Se facturaron ${venta.unidades} unidad${venta.unidades === 1 ? '' : 'es'} en ` +
+    `${venta.dias} día${venta.dias === 1 ? '' : 's'} posteriores a la carga. ` +
+    `Última venta: ${formatDate(venta.ultima_fecha)}.` +
+    (pendiente > 0 ? ` Pendiente en la lista: ${pendiente}.` : '');
+
+  if (cubierto) {
+    return (
+      <span
+        className="inline-flex w-fit items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+        title={`${detalle} Alcanzan para cubrir lo pendiente: probablemente ya se vendió.`}
+      >
+        Probablemente vendido
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className="inline-flex w-fit items-center rounded-full border border-gray-300 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+      title={detalle}
+    >
+      Ventas post. carga : {venta.unidades}
+    </span>
+  );
+}
+
 interface PorVencerItem {
   id: string;
   control_id: string;
@@ -123,6 +190,10 @@ export default function PorVencerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [items, setItems] = useState<PorVencerItem[]>([]);
+  /** Líneas que tuvieron ventas facturadas después del día en que se cargaron. */
+  const [ventasPosteriores, setVentasPosteriores] = useState<
+    Record<string, { unidades: number; ultima_fecha: string; dias: number }>
+  >({});
   const [itemsImpresion, setItemsImpresion] = useState<PorVencerItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -131,6 +202,7 @@ export default function PorVencerPage() {
   const [gruposExpandidos, setGruposExpandidos] = useState<Record<string, boolean>>({});
   const [obsLocal, setObsLocal] = useState<Record<string, string>>({});
   const [guardandoObsId, setGuardandoObsId] = useState<string | null>(null);
+  const notify = useAppNotify();
   const [sortKey, setSortKey] = useState<SortKeyPorVencer>('vencimiento');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [totalFilas, setTotalFilas] = useState(0);
@@ -139,6 +211,10 @@ export default function PorVencerPage() {
   const [catMacrosDisponibles, setCatMacrosDisponibles] = useState<string[]>([]);
   const [categoriasDisponibles, setCategoriasDisponibles] = useState<string[]>([]);
   const [laboratoriosDisponibles, setLaboratoriosDisponibles] = useState<string[]>([]);
+  /** Años con líneas en el período; vacío = todavía no cargó. */
+  const [aniosConDatos, setAniosConDatos] = useState<number[]>([]);
+  /** Meses con datos para el año elegido (o para cualquier año, si no hay uno elegido). */
+  const [mesesConDatos, setMesesConDatos] = useState<number[]>([]);
   const [busquedaAplicada, setBusquedaAplicada] = useState('');
   const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
   const [exportando, setExportando] = useState(false);
@@ -151,6 +227,37 @@ export default function PorVencerPage() {
     if (raw === 'vendidos' || raw === 'vencidos' || raw === 'vendido_parcial') return raw;
     return 'por_vencer';
   }
+
+  /**
+   * Marca las líneas que ya se vendieron después de cargarlas. Va aparte del listado para no
+   * demorarlo: si la base legacy no responde, la pantalla funciona igual sin los badges.
+   */
+  useEffect(() => {
+    const ids = items.map((i) => i.id).filter(Boolean);
+    if (ids.length === 0) {
+      setVentasPosteriores({});
+      return;
+    }
+
+    let vigente = true;
+    const t = window.setTimeout(() => {
+      void fetch('/api/vencimientos/por-vencer/ventas-posteriores', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ detalle_ids: ids }),
+      })
+        .then((r) => r.json())
+        .then((j: { ok?: boolean; por_detalle?: Record<string, { unidades: number; ultima_fecha: string; dias: number }> }) => {
+          if (vigente && j?.ok) setVentasPosteriores(j.por_detalle ?? {});
+        })
+        .catch(() => undefined);
+    }, 250);
+
+    return () => {
+      vigente = false;
+      window.clearTimeout(t);
+    };
+  }, [items]);
 
   function invalidarCachePorVencer() {
     cachePorVistaRef.current.clear();
@@ -175,8 +282,26 @@ export default function PorVencerPage() {
     Number.isFinite(mesVencFiltro) ? mesVencFiltro : undefined,
     anioVencValido ?? null
   );
-  const mesesVencOpts = MESES_CALENDARIO;
-  const aniosVencOpts = useMemo(() => opcionesAnioVencimiento(3, 5), []);
+  const aniosGenerados = useMemo(() => opcionesAnioVencimiento(3, 5), []);
+  /**
+   * Solo los años que tienen líneas, del más cercano al más lejano. Mientras no haya respuesta
+   * se usa el rango generado, para que el filtro no quede vacío en la primera carga.
+   */
+  const aniosVencOpts = useMemo(
+    () => (aniosConDatos.length > 0 ? aniosConDatos : aniosGenerados),
+    [aniosConDatos, aniosGenerados]
+  );
+  /**
+   * Solo los meses con datos (del año elegido, si hay uno). Mientras no haya respuesta todavía
+   * se ofrecen los 12, para no dejar el filtro vacío en la primera carga.
+   */
+  const mesesVencOpts = useMemo(
+    () =>
+      mesesConDatos.length > 0
+        ? MESES_CALENDARIO.filter((m) => mesesConDatos.includes(m.value))
+        : MESES_CALENDARIO,
+    [mesesConDatos]
+  );
 
   const {
     paginaActual,
@@ -361,6 +486,8 @@ export default function PorVencerPage() {
         cat_macros?: string[];
         categorias?: string[];
         laboratorios?: string[];
+        anios_venc?: number[];
+        meses_venc?: number[];
         error?: string;
       };
       if (!res.ok) {
@@ -379,6 +506,8 @@ export default function PorVencerPage() {
       setCatMacrosDisponibles(json.cat_macros ?? []);
       setCategoriasDisponibles(json.categorias ?? []);
       setLaboratoriosDisponibles(json.laboratorios ?? []);
+      setAniosConDatos(json.anios_venc ?? []);
+      setMesesConDatos(json.meses_venc ?? []);
       setObsLocal({});
     } catch {
       setError('Error al cargar productos por vencer');
@@ -568,13 +697,16 @@ export default function PorVencerPage() {
       setError('El registro no tiene cantidad disponible para marcar como vendido.');
       return;
     }
-    const ingresado = window.prompt(`¿Cuántas unidades se vendieron? (1 a ${max})`, '1');
-    if (ingresado == null) return;
-    const cantidad = parseInt(ingresado, 10);
-    if (!Number.isFinite(cantidad) || cantidad <= 0 || cantidad > max) {
-      setError(`Ingresá una cantidad válida entre 1 y ${max}.`);
-      return;
-    }
+    const cantidad = await notify.promptNumero({
+      title: 'Marcar como vendido',
+      message: '¿Cuántas unidades se vendieron?',
+      label: 'Unidades vendidas',
+      valorInicial: 1,
+      min: 1,
+      max,
+      confirmLabel: 'Marcar vendido',
+    });
+    if (cantidad == null) return;
     setError('');
     try {
       const params = new URLSearchParams({
@@ -624,16 +756,18 @@ export default function PorVencerPage() {
       setError('Esta línea no tiene ventas registradas para corregir.');
       return;
     }
-    const ingresado = window.prompt(
-      `Cantidad vendida correcta (0 a ${totalLinea}).\nCargada en la línea: ${totalLinea} · Registrada vendida: ${vendida} · Restante: ${rest}`,
-      String(vendida)
-    );
-    if (ingresado == null) return;
-    const nuevaVendida = parseInt(ingresado, 10);
-    if (!Number.isFinite(nuevaVendida) || nuevaVendida < 0 || nuevaVendida > totalLinea) {
-      setError(`Ingresá una cantidad válida entre 0 y ${totalLinea}.`);
-      return;
-    }
+    const nuevaVendida = await notify.promptNumero({
+      title: 'Corregir cantidad vendida',
+      message: '¿Cuál es la cantidad vendida correcta?',
+      detalle: `Cargada en la línea: ${totalLinea} · Registrada vendida: ${vendida} · Restante: ${rest}`,
+      label: 'Cantidad vendida',
+      valorInicial: vendida,
+      min: 0,
+      max: totalLinea,
+      confirmLabel: 'Corregir',
+      variant: 'warning',
+    });
+    if (nuevaVendida == null) return;
     setError('');
     try {
       const res = await fetch('/api/vencimientos/por-vencer/ajustar-vendido', {
@@ -681,16 +815,18 @@ export default function PorVencerPage() {
       setError('Sin cantidad para quitar.');
       return;
     }
-    const ingresado = window.prompt(
-      `¿Cuántas unidades quitás? (error de carga, máx ${max})`,
-      String(max)
-    );
-    if (ingresado == null) return;
-    const cantidad = parseInt(ingresado, 10);
-    if (!Number.isFinite(cantidad) || cantidad <= 0 || cantidad > max) {
-      setError(`Cantidad entre 1 y ${max}.`);
-      return;
-    }
+    const cantidad = await notify.promptNumero({
+      title: 'Quitar unidades cargadas',
+      message: '¿Cuántas unidades quitás de la carga?',
+      detalle: 'Usalo cuando se cargó de más por error.',
+      label: 'Unidades a quitar',
+      valorInicial: max,
+      min: 1,
+      max,
+      confirmLabel: 'Quitar',
+      variant: 'danger',
+    });
+    if (cantidad == null) return;
     setError('');
     try {
       const res = await fetch('/api/vencimientos/por-vencer/reducir-carga', {
@@ -989,6 +1125,10 @@ export default function PorVencerPage() {
                               <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
                                 {dias < 0 ? 'Vencido' : `En ${dias} día${dias !== 1 ? 's' : ''}`}
                               </span>
+                              <BadgeVendidoDespues
+                                venta={ventasPosteriores[r.id]}
+                                restante={Number(r.cantidad) || 0}
+                              />
                               <span className="text-[10px] text-gray-500 xl:hidden">
                                 Carga: {formatDateTime(r.fecha_registro)}
                               </span>
@@ -1127,6 +1267,10 @@ export default function PorVencerPage() {
                               <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-medium ${color}`}>
                                 {dias < 0 ? 'Vencido' : `En ${dias} día${dias !== 1 ? 's' : ''}`}
                               </span>
+                              <BadgeVendidoDespues
+                                venta={sumarVentasPosteriores(fila.items, ventasPosteriores)}
+                                restante={restG}
+                              />
                             </div>
                           </td>
                           <td className="px-3 py-2 align-top text-right text-xs font-semibold text-gray-900 dark:text-gray-100">

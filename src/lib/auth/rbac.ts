@@ -43,6 +43,36 @@ type AppRoleConPermisos = {
   app_role_permissions: Array<{ permission_codigo: string }> | null;
 };
 
+/**
+ * Suma y resta los permisos cargados para ese operador en particular (`operador_permisos`).
+ * Permite darle acceso a un módulo suelto, o sacárselo, sin tener que cambiarle el rol.
+ *
+ * Si la tabla todavía no existe (migración 034 sin aplicar) no hace nada.
+ */
+async function aplicarAjustesDelOperador(
+  admin: Awaited<ReturnType<typeof createAdminClient>>,
+  idoperador: number,
+  permissions: Set<string>,
+): Promise<void> {
+  const { data, error } = await admin
+    .from('operador_permisos')
+    .select('permission_codigo, concedido')
+    .eq('idoperador', idoperador);
+
+  if (error) {
+    if (!/operador_permisos|schema cache|does not exist/i.test(error.message)) {
+      console.warn('rbac: no se pudieron leer los permisos del operador:', error.message);
+    }
+    return;
+  }
+
+  for (const row of (data ?? []) as Array<{ permission_codigo: string; concedido: boolean }>) {
+    const codigo = String(row.permission_codigo);
+    if (row.concedido) permissions.add(codigo);
+    else permissions.delete(codigo);
+  }
+}
+
 async function loadPermissionsForOperador(
   idoperador: number,
   rolEnum: RolOperador | undefined,
@@ -101,6 +131,8 @@ async function loadPermissionsForOperador(
     const permissions = new Set(
       (role.app_role_permissions ?? []).map((p) => String(p.permission_codigo)),
     );
+
+    await aplicarAjustesDelOperador(admin, idoperador, permissions);
 
     return {
       rolDb,

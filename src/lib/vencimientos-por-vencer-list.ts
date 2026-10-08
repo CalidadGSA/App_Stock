@@ -148,6 +148,10 @@ export type PorVencerListPayload = {
   page: number;
   pageSize: number;
   cat_macros: string[];
+  /** Años de vencimiento con líneas en el período; el filtro solo ofrece estos. */
+  anios_venc?: number[];
+  /** Meses con líneas, condicionado al año elegido; el filtro solo ofrece estos. */
+  meses_venc?: number[];
   categorias: string[];
   laboratorios: string[];
   sucursales?: Array<{ sucursal: number; nombrefantasia: string }>;
@@ -439,9 +443,63 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
     )
   ).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
 
+  // Años de vencimiento que realmente tienen líneas, para no ofrecer opciones vacías.
+  // Sale de lo que ya se trajo, así que no agrega ninguna consulta.
+  const aniosVenc = Array.from(
+    new Set(
+      itemsForPipeline
+        .map((i) => parseInt(String(i.fecha_vencimiento ?? '').slice(0, 4), 10))
+        .filter((a) => Number.isFinite(a) && a >= 2000 && a <= 2100)
+    )
+  ).sort((a, b) => a - b);
+
+  // Meses con líneas, condicionado al año elegido (si hay uno): mismo criterio que los años,
+  // sin consulta adicional. Cuando hay año elegido, `limitesMesAnioVencimiento` ya ensanchó la
+  // consulta a ese año completo, así que `itemsForPipeline` cubre los 12 meses para filtrarlos.
+  const itemsParaMeses = anioVenc
+    ? itemsForPipeline.filter(
+        (i) => parseInt(String(i.fecha_vencimiento ?? '').slice(0, 4), 10) === anioVenc
+      )
+    : itemsForPipeline;
+  const mesesVenc = Array.from(
+    new Set(
+      itemsParaMeses
+        .map((i) => parseInt(String(i.fecha_vencimiento ?? '').slice(5, 7), 10))
+        .filter((m) => Number.isFinite(m) && m >= 1 && m <= 12)
+    )
+  ).sort((a, b) => a - b);
+
   if (soloConVentasDetectadas) {
-    // Modo manual: ventas = historial acumulado (no sync auto).
-    candidatos = candidatos.filter((i) => Number(i.cantidad_vendida_acumulada ?? 0) > 0);
+    // Se consulta la facturación real y se dejan las líneas donde lo vendido después de la carga
+    // alcanza para cubrir lo que todavía figura pendiente: los «probablemente vendidos».
+    const sucursalParaVentas = consolidado
+      ? Number.isFinite(sucursalFiltroNum) && sucursalFiltroNum > 0
+        ? sucursalFiltroNum
+        : null
+      : parseInt(sucursalCookie!, 10);
+
+    if (sucursalParaVentas == null) {
+      // En consolidado sin sucursal elegida no hay a qué base legacy preguntarle.
+      candidatos = [];
+    } else {
+      const { detectarVentasPosteriores } = await import(
+        '@/lib/vencimientos/ventas-posteriores'
+      );
+      const res = await detectarVentasPosteriores(
+        admin,
+        sucursalParaVentas,
+        candidatos.map((i) => String(i.id))
+      );
+      if (res.ok) {
+        candidatos = candidatos.filter((i) => {
+          const v = res.porDetalle[String(i.id)];
+          if (!v) return false;
+          const pendiente = Math.max(0, Number(i.cantidad) || 0);
+          return pendiente > 0 && v.unidades >= pendiente;
+        });
+      }
+      // Si la base legacy no responde, se deja el listado como está en vez de vaciarlo.
+    }
   }
 
   const paginado = modoListaDescuentos
@@ -609,6 +667,8 @@ export async function getPorVencerListPayload(args: GetPorVencerListArgs): Promi
       cat_macros: catMacros,
       categorias,
       laboratorios,
+      anios_venc: aniosVenc,
+      meses_venc: mesesVenc,
       sucursales,
       consolidado,
       days,

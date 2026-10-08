@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import {
   getOperadorRbacContext,
+  hasPermission,
   isSuperAdminContext,
   type OperadorRbacContext,
 } from '@/lib/auth/rbac';
@@ -30,6 +31,9 @@ function puedeElegirSucursal(ctx: OperadorRbacContext): boolean {
 export async function GET(request: NextRequest) {
   const rbac = await getOperadorRbacContext();
   if (!rbac) return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+  if (!hasPermission(rbac, 'kpis.mensuales')) {
+    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
+  }
 
   const sucursalSesion = await getSucursalSession();
   if (!sucursalSesion) return NextResponse.json({ error: 'Sucursal no seleccionada' }, { status: 400 });

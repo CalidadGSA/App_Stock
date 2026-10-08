@@ -9,6 +9,7 @@ import {
   cookieSecureFlag,
   SUCURSAL_COOKIE_NAME,
 } from '@/lib/auth/cookie-config';
+import { urlPublica } from '@/lib/http/url-publica';
 
 function clearAuthCookies(response: NextResponse) {
   const secure = cookieSecureFlag();
@@ -26,9 +27,7 @@ function clearAuthCookies(response: NextResponse) {
 }
 
 function redirectToLogin(request: NextRequest, opts?: { expirado?: boolean }) {
-  const url = request.nextUrl.clone();
-  url.pathname = '/login';
-  url.searchParams.delete('expirado');
+  const url = urlPublica(request, '/login');
   if (opts?.expirado) url.searchParams.set('expirado', '1');
   return clearAuthCookies(NextResponse.redirect(url));
 }
@@ -72,10 +71,7 @@ export async function middleware(request: NextRequest) {
       return clearAuthCookies(NextResponse.next({ request }));
     }
     if (sucursalId) {
-      const url = request.nextUrl.clone();
-      url.pathname = '/dashboard';
-      url.search = '';
-      return NextResponse.redirect(url);
+      return NextResponse.redirect(urlPublica(request, '/dashboard'));
     }
     return NextResponse.next({ request });
   }

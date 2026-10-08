@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { valorizarYGuardarControl } from '@/lib/inventario/valorizar-control';
 import {
   CATEGORIA_MACRO_SIN_PADRON,
   esCategoriaMacroSinPadron,
@@ -82,6 +83,10 @@ export async function cerrarControlInventario(
   if (closeErr) {
     return { ok: false, controlId, code: 'error', message: closeErr.message };
   }
+
+  // Valorizar lo controlado para los KPIs. Si falla, el control igual queda cerrado:
+  // se puede recalcular después con scripts/valorizar-controles-cerrados.cjs.
+  await valorizarYGuardarControl(admin, controlId, fechaCierre);
 
   const { error: detalleCloseError } = await admin
     .from('controles_inventario_detalle')

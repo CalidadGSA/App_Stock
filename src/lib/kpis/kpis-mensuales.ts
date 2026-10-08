@@ -43,6 +43,12 @@ import {
   cargarAvanceInventario,
   type AvanceInventarioKpi,
 } from '@/lib/kpis/avance-inventario';
+import { claseMotivoBaja, type ClaseMotivoBaja } from '@/lib/legacy-db/motivos-baja';
+import {
+  sumarValorizacionPorSucursal,
+  valorizacionVacia,
+  type ValorizacionSucursalMes,
+} from '@/lib/inventario/valorizar-control';
 import { calendarioActualArgentina } from '@/lib/vencimientos-mes-anio-filtro';
 import { fechaHoyArgentinaYmd, parseYm, rangoFechasArgentinaIso, ymdAddDays } from '@/lib/utils';
 
@@ -72,6 +78,17 @@ export interface StockValorizadoKpi {
   tomado_at: string | null;
 }
 
+export interface BajasPorClase {
+  /** Vencidos, roturas, uso interno: plata que no vuelve. */
+  perdida: number;
+  /** Devoluciones al proveedor o a depósito. */
+  recuperable: number;
+  /** Correcciones administrativas de stock. */
+  ajuste: number;
+  /** Motivos que todavía no están clasificados. */
+  otros: number;
+}
+
 export interface BajasKpi {
   estado: EstadoFuente;
   error?: string;
@@ -81,7 +98,11 @@ export interface BajasKpi {
   pvp: MontoSigno;
   lineas: number;
   operaciones: number;
-  por_motivo: BajaPorMotivo[];
+  por_motivo: Array<BajaPorMotivo & { clase: ClaseMotivoBaja }>;
+  /** Solo las bajas (alta_baja = 'B'), a PVP, separadas por clase de motivo. */
+  pvp_por_clase: BajasPorClase;
+  /** Lo mismo a costo. */
+  costo_por_clase: BajasPorClase;
 }
 
 export interface FacturacionKpi extends FacturacionMes {
@@ -103,15 +124,26 @@ export interface KpisMensualesSucursal {
   facturacion: FacturacionKpi;
   vales: ValesKpi;
   avance_inventario: AvanceInventarioKpi;
+  /**
+   * Stock teórico a costo de los productos efectivamente inventariados en el mes, sumado de
+   * los controles cerrados. Es el denominador de los ratios de diferencias.
+   */
+  controlado: ValorizacionSucursalMes & { disponible: boolean };
   ratios: {
-    /** |neto diferencias| / stock valorizado a costo (%). */
+    /** Faltantes / valorizado de lo inventariado (%). El indicador principal. */
+    faltantes_sobre_controlado_pct: number | null;
+    /** |neto| / valorizado de lo inventariado (%). */
+    neto_sobre_controlado_pct: number | null;
+    /** |neto diferencias| / stock valorizado a costo (%). Criterio anterior. */
     diferencias_neto_sobre_stock_pct: number | null;
     /** (positivo + negativo) / stock valorizado a costo (%). */
     diferencias_bruto_sobre_stock_pct: number | null;
     /** |neto bajas a PVP| / facturación neta (%). */
     bajas_neto_sobre_facturacion_pct: number | null;
-    /** bajas (B) a PVP / facturación neta (%). */
+    /** bajas (B) a PVP / facturación neta (%). Incluye devoluciones recuperables. */
     bajas_sobre_facturacion_pct: number | null;
+    /** Solo pérdidas efectivas a PVP / facturación neta (%). Es el indicador a mirar. */
+    perdidas_sobre_facturacion_pct: number | null;
   };
 }
 
@@ -401,29 +433,47 @@ async function cargarStockValorizado(
   };
 }
 
+function clasesVacias(): BajasPorClase {
+  return { perdida: 0, recuperable: 0, ajuste: 0, otros: 0 };
+}
+
 function agregarBajas(rows: BajaPorMotivo[]): BajasKpi {
   const costo = signo();
   const pvp = signo();
+  const pvpPorClase = clasesVacias();
+  const costoPorClase = clasesVacias();
   let lineas = 0;
   let operaciones = 0;
-  for (const r of rows) {
+
+  const conClase = rows.map((r) => ({
+    ...r,
+    clase: claseMotivoBaja(r.motivo_id, r.descripcion),
+  }));
+
+  for (const r of conClase) {
     lineas += r.lineas;
     operaciones += r.operaciones;
     if (r.alta_baja === 'A') {
       costo.positivo += r.valor_costo;
       pvp.positivo += r.valor_pvp;
-    } else {
-      costo.negativo += r.valor_costo;
-      pvp.negativo += r.valor_pvp;
+      continue;
     }
+    costo.negativo += r.valor_costo;
+    pvp.negativo += r.valor_pvp;
+    // Las altas no son pérdida ni devolución: la apertura por clase es solo de las bajas.
+    pvpPorClase[r.clase] += r.valor_pvp;
+    costoPorClase[r.clase] += r.valor_costo;
   }
+
   return {
     estado: 'ok',
     costo: cerrarSigno(costo),
     pvp: cerrarSigno(pvp),
     lineas,
     operaciones,
-    por_motivo: rows,
+    por_motivo: conClase,
+    pvp_por_clase: pvpPorClase,
+    costo_por_clase: costoPorClase,
   };
 }
 
@@ -441,7 +491,8 @@ export async function cargarKpisMensualesSucursal(
 
   const noAplica = 'La sucursal droguería opera con Quantio; estos datos salen de onze_center.';
 
-  const [diferencias, stock, bajasRes, factRes, valesRes, avanceInventario] = await Promise.all([
+  const [diferencias, stock, bajasRes, factRes, valesRes, avanceInventario, valorizacion] =
+    await Promise.all([
     cargarDiferencias(admin, params.sucursalId, year, month),
     params.esDrogueria
       ? Promise.resolve<StockValorizadoKpi>({
@@ -471,7 +522,17 @@ export async function cargarKpisMensualesSucursal(
       esDrogueria: params.esDrogueria,
       esMesActual,
     }),
+    (async () => {
+      const { desdeIso, hastaIso } = rangoFechasArgentinaIso(fecha_inicio, fecha_fin);
+      return sumarValorizacionPorSucursal(admin, desdeIso, hastaIso, [params.sucursalId]);
+    })(),
   ]);
+
+  const controlado = {
+    ...(valorizacion?.get(params.sucursalId) ?? valorizacionVacia()),
+    // Sin la migración 033 (o con controles sin valorizar) no hay denominador confiable.
+    disponible: valorizacion !== null,
+  };
 
   const bajas: BajasKpi =
     bajasRes == null
@@ -510,6 +571,7 @@ export async function cargarKpisMensualesSucursal(
         ? { ...valesRes.data, estado: 'ok' }
         : { ...valesVacios, estado: 'unavailable', error: valesRes.error };
 
+  const controladoOk = controlado.disponible ? controlado.stock_controlado_costo : 0;
   const stockOk = stock.estado === 'ok' ? stock.valor_costo : 0;
   const factOk = facturacion.estado === 'ok' ? facturacion.neta : 0;
 
@@ -522,12 +584,17 @@ export async function cargarKpisMensualesSucursal(
     facturacion,
     vales,
     avance_inventario: avanceInventario,
+    controlado,
     ratios: {
+      faltantes_sobre_controlado_pct: pct(diferencias.negativo, controladoOk),
+      neto_sobre_controlado_pct: pct(Math.abs(diferencias.neto), controladoOk),
       diferencias_neto_sobre_stock_pct: pct(Math.abs(diferencias.neto), stockOk),
       diferencias_bruto_sobre_stock_pct: pct(diferencias.positivo + diferencias.negativo, stockOk),
       bajas_neto_sobre_facturacion_pct:
         bajas.estado === 'ok' ? pct(Math.abs(bajas.pvp.neto), factOk) : null,
       bajas_sobre_facturacion_pct: bajas.estado === 'ok' ? pct(bajas.pvp.negativo, factOk) : null,
+      perdidas_sobre_facturacion_pct:
+        bajas.estado === 'ok' ? pct(bajas.pvp_por_clase.perdida, factOk) : null,
     },
   };
 }
